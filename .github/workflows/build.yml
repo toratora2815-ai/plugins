@@ -9,27 +9,53 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: [WoolFuzz, Nebula, PorchDrive, BalanceScope]
+        plugin: [WoolFuzz, Nebula, PorchDrive, BalanceScope, Reference]
     runs-on: macos-latest
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # push のときは、そのプラグインのフォルダが変わったときだけビルドする
+      # （「Run workflow」ボタンから手動で動かしたときは全部ビルド）
+      - name: Check changes
+        id: changes
+        shell: bash
+        run: |
+          BEFORE="${{ github.event.before }}"
+          if [ "${{ github.event_name }}" != "push" ] || [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}"); then
+            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if echo "$CHANGED" | grep -q "^MyPlugins/${{ matrix.plugin }}/"; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "${{ matrix.plugin }} is unchanged - skipping build"
+          fi
 
       - name: Configure
+        if: steps.changes.outputs.build == 'true'
         working-directory: MyPlugins/${{ matrix.plugin }}
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOPY_AFTER_BUILD=OFF -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
 
       - name: Build AU
+        if: steps.changes.outputs.build == 'true'
         working-directory: MyPlugins/${{ matrix.plugin }}
         run: cmake --build build --config Release --target ${{ matrix.plugin }}_AU --parallel 4
 
       - name: Collect
+        if: steps.changes.outputs.build == 'true'
         run: |
           mkdir -p out
           cp -R "MyPlugins/${{ matrix.plugin }}/build/${{ matrix.plugin }}_artefacts/Release/AU/"*.component out/
           codesign --force --deep --sign - out/*.component
 
       - uses: actions/upload-artifact@v4
+        if: steps.changes.outputs.build == 'true'
         with:
           name: ${{ matrix.plugin }}-macOS
           path: out
