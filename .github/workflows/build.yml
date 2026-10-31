@@ -3,6 +3,11 @@ name: Build plugins
 on:
   push:
   workflow_dispatch:
+    inputs:
+      only:
+        description: "この名前のものだけビルド（空なら全部）"
+        required: false
+        default: ""
 
 jobs:
   build:
@@ -24,7 +29,12 @@ jobs:
         shell: bash
         run: |
           BEFORE="${{ github.event.before }}"
-          if [ "${{ github.event_name }}" != "push" ] || [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ONLY="${{ github.event.inputs.only }}"
+            if [ -z "$ONLY" ] || [ "$ONLY" = "${{ matrix.plugin }}" ]; then echo "build=true" >> "$GITHUB_OUTPUT"; else echo "build=false" >> "$GITHUB_OUTPUT"; fi
+            exit 0
+          fi
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
             echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if ! CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}"); then
@@ -78,7 +88,12 @@ jobs:
         shell: bash
         run: |
           BEFORE="${{ github.event.before }}"
-          if [ "${{ github.event_name }}" != "push" ] || [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ONLY="${{ github.event.inputs.only }}"
+            if [ -z "$ONLY" ] || [ "$ONLY" = "${{ matrix.app }}" ]; then echo "build=true" >> "$GITHUB_OUTPUT"; else echo "build=false" >> "$GITHUB_OUTPUT"; fi
+            exit 0
+          fi
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
             echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if ! CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}"); then
