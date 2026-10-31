@@ -9,6 +9,10 @@ on:
         required: false
         default: ""
 
+# Releases にビルド結果を置くための権限
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -60,15 +64,27 @@ jobs:
       - name: Collect
         if: steps.changes.outputs.build == 'true'
         run: |
-          mkdir -p out
+          mkdir -p out rel
           cp -R "MyPlugins/${{ matrix.plugin }}/build/${{ matrix.plugin }}_artefacts/Release/AU/"*.component out/
           codesign --force --deep --sign - out/*.component
+          # Releases 用の zip（Mac の付加情報は入れない）
+          ditto -c -k --norsrc --noextattr --noacl --keepParent out/*.component "rel/${{ matrix.plugin }}.zip"
 
       - uses: actions/upload-artifact@v4
         if: steps.changes.outputs.build == 'true'
         with:
           name: ${{ matrix.plugin }}-macOS
           path: out
+
+      - name: Publish to Releases
+        if: steps.changes.outputs.build == 'true' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view latest > /dev/null 2>&1 || gh release create latest --title "Latest builds" --notes "最新のビルド（push のたびに自動で更新されます）" || true
+          gh release upload latest "rel/${{ matrix.plugin }}.zip" --clobber
 
   # 単体アプリ（.app）のビルド
   build-app:
@@ -132,11 +148,23 @@ jobs:
           echo "App: $APP"
           codesign --force --deep --sign - "$APP"
           plutil -p "$APP/Contents/Info.plist" | grep -E "NSAudioCapture|NSAppleEvents|LSMinimum|CFBundleIdentifier"
-          # 実行権限を保つため、ここで zip にしてから Artifacts に入れる
-          ditto -c -k --keepParent "$APP" "out/${{ matrix.app }}.zip"
+          # 実行権限を保つため、ここで zip にしてから Artifacts に入れる（Mac の付加情報は入れない）
+          mkdir -p rel
+          ditto -c -k --norsrc --noextattr --noacl --keepParent "$APP" "out/${{ matrix.app }}.zip"
+          cp "out/${{ matrix.app }}.zip" rel/
 
       - uses: actions/upload-artifact@v4
         if: steps.changes.outputs.build == 'true'
         with:
           name: ${{ matrix.app }}-macOS
           path: out
+
+      - name: Publish to Releases
+        if: steps.changes.outputs.build == 'true' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view latest > /dev/null 2>&1 || gh release create latest --title "Latest builds" --notes "最新のビルド（push のたびに自動で更新されます）" || true
+          gh release upload latest "rel/${{ matrix.app }}.zip" --clobber
