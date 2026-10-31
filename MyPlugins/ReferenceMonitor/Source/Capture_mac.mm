@@ -1,7 +1,5 @@
 // Mac 専用: プロセスタップ + 集約デバイスで、Logic とミュージックの音を受け取り出力に鳴らす
-#include "Capture.h"
-
-#if JUCE_MAC
+// Apple のヘッダーを JUCE より先に読む（Point / Component の名前がぶつかるため）
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <CoreAudio/CoreAudio.h>
@@ -9,6 +7,10 @@
 #import <CoreAudio/CATapDescription.h>
 #include <objc/message.h>
 #include <unistd.h>
+
+#include "Capture.h"
+
+#if JUCE_MAC
 
 #ifndef kAudioAggregateDeviceTapListKey
  #define kAudioAggregateDeviceTapListKey "taps"

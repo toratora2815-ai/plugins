@@ -47,6 +47,7 @@ else()
 endif()
 
 target_compile_definitions(ReferenceMonitor PRIVATE
+    DONT_SET_USING_JUCE_NAMESPACE=1
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:ReferenceMonitor,JUCE_PRODUCT_NAME>"

@@ -1,7 +1,7 @@
+#import <Foundation/Foundation.h>
 #include "MusicControl.h"
 
 #if JUCE_MAC
-#import <Foundation/Foundation.h>
 
 namespace
 {
