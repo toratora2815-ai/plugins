@@ -1,1 +1,47 @@
+name: Build plugins
 
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        plugin: [WoolFuzz, Nebula, PorchDrive, BalanceScope]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        working-directory: MyPlugins/${{ matrix.plugin }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOPY_AFTER_BUILD=OFF -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          else
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOPY_AFTER_BUILD=OFF
+          fi
+
+      - name: Build
+        working-directory: MyPlugins/${{ matrix.plugin }}
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Collect
+        shell: bash
+        run: |
+          mkdir -p out
+          ART="MyPlugins/${{ matrix.plugin }}/build/${{ matrix.plugin }}_artefacts/Release"
+          cp -R "$ART/VST3/"*.vst3 out/
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp -R "$ART/AU/"*.component out/
+            codesign --force --deep --sign - out/*.vst3 out/*.component
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.plugin }}-${{ runner.os }}
+          path: out
