@@ -81,7 +81,7 @@ MainComponent::MainComponent()
 
     for (auto* c : std::initializer_list<juce::Component*> {
              &refList, &addButton, &removeButton, &liveAppBox, &abSeg, &levelSeg, &bandSeg, &stereoSeg, &outSeg,
-             &playButton, &loopButton, &restartButton, &addCueButton, &resetButton, &dimButton, &muteButton,
+             &playButton, &loopButton, &restartButton, &addCueButton, &setMixButton, &resetButton, &dimButton, &muteButton,
              &pinButton, &bypassButton, &trimSlider, &volumeSlider, &outABox, &outBBox })
     {
         addAndMakeVisible (c);
@@ -91,6 +91,7 @@ MainComponent::MainComponent()
         for (auto* b : s->buttons) noFocus (*b);
 
     styleToggle (loopButton, selCol);
+    setMixButton.setColour (juce::TextButton::textColourOffId, mixCol.brighter (0.4f));
     styleToggle (restartButton, selCol);
     styleToggle (dimButton, warn);
     styleToggle (muteButton, bad);
@@ -123,6 +124,7 @@ MainComponent::MainComponent()
     loopButton.onClick = [this] { loopOn = ! loopOn; updateLoop(); saveSettings(); };
     restartButton.onClick = [this] { restartOnSwitch = ! restartOnSwitch; saveSettings(); };
     addCueButton.onClick = [this] { addCue(); };
+    setMixButton.onClick = [this] { setMixPosition (activeCue, false); };
     resetButton.onClick = [this] { engine.resetMeters(); };
     dimButton.onClick = [this] { engine.dim = ! engine.dim.load(); };
     muteButton.onClick = [this] { engine.mute = ! engine.mute.load(); };
@@ -470,8 +472,39 @@ double MainComponent::currentLength() const
     return isLive() ? musicState.duration : engine.player.lengthSec.load();
 }
 
+void MainComponent::refPlay()
+{
+    if (isLive()) { music.play(); musicState.playing = true; }
+    else engine.player.playing = true;
+}
+
+void MainComponent::refPause()
+{
+    if (isLive()) { music.pause(); musicState.playing = false; }
+    else engine.player.playing = false;
+}
+
+bool MainComponent::refIsPlaying() const
+{
+    return isLive() ? musicState.playing : engine.player.playing.load();
+}
+
+void MainComponent::flash (const juce::String& msg)
+{
+    flashMessage = msg;
+    flashUntil = juce::Time::getMillisecondCounterHiRes() * 0.001 + 6.0;
+}
+
+// いま聴いている側を再生／停止する（MY MIX = Logic、REFERENCE = 参照曲）
 void MainComponent::togglePlay()
 {
+    if (! engine.ab.load())
+    {
+        if (! logic.hasTimecode())
+            flash ("To play/stop Logic from here, turn on sync in Logic (see README: Logic setup).");
+        if (logic.isPlaying()) logic.stop(); else logic.play();
+        return;
+    }
     if (isLive())
     {
         music.playPause();
@@ -481,20 +514,49 @@ void MainComponent::togglePlay()
         engine.player.playing = ! engine.player.playing.load();
 }
 
+// キューに「自分の曲（Logic）の位置」を登録する
+void MainComponent::setMixPosition (int idx, bool clear)
+{
+    auto* cues = currentCues();
+    if (cues == nullptr || idx < 0 || idx >= (int) cues->size())
+    {
+        flash ("Select a cue first (or add one with + CUE), then press SET MIX.");
+        return;
+    }
+    if (clear) (*cues)[(size_t) idx].mixT = -1.0;
+    else
+    {
+        if (! logic.hasTimecode())
+        {
+            flash ("Logic isn't sending its position yet. Turn on sync in Logic (see README: Logic setup).");
+            return;
+        }
+        (*cues)[(size_t) idx].mixT = logic.getPosition();
+        flash ("MY MIX position for \"" + (*cues)[(size_t) idx].name + "\" set to " + LogicLink::format ((*cues)[(size_t) idx].mixT));
+    }
+    library.save();
+    cueSignature.clear();
+    rebuildCueButtons();
+}
+
 void MainComponent::setAB (bool ref)
 {
     engine.ab = ref;
     abSeg.setIndex (ref ? 1 : 0);
+    if (restartOnSwitch && activeCue >= 0)
+    {
+        jumpToCue (activeCue, true);   // 聴く側をキューの頭から、もう片方は止めて待機
+        return;
+    }
     if (ref)
     {
-        if (restartOnSwitch && activeCue >= 0) jumpToCue (activeCue, true);
-        else if (isLive()) { music.play(); musicState.playing = true; }
-        else engine.player.playing = true;
+        refPlay();
+        if (restartOnSwitch) logic.stop();
     }
     else if (restartOnSwitch)
     {
-        if (isLive()) { music.pause(); musicState.playing = false; }
-        else engine.player.playing = false;
+        refPause();
+        logic.play();
     }
 }
 
@@ -510,11 +572,30 @@ void MainComponent::jumpToCue (int idx, bool play)
     auto* cues = currentCues();
     if (cues == nullptr || idx < 0 || idx >= (int) cues->size()) return;
     activeCue = idx;
-    seekTo ((*cues)[(size_t) idx].t);
+    const auto cue = (*cues)[(size_t) idx];
+    seekTo (cue.t);
+    const bool hasMix = cue.mixT >= 0.0;
+    if (hasMix) { engine.mixMeter.requestReset(); engine.mixSpec.requestReset(); }
+
     if (play)
     {
-        if (isLive()) { music.play(); musicState.playing = true; }
-        else engine.player.playing = true;
+        if (engine.ab.load())
+        {
+            // 参照曲を聴いている: 参照曲をキューから再生。Logic は位置だけ合わせる
+            refPlay();
+            if (hasMix)
+            {
+                if (restartOnSwitch) { logic.stop(); logic.locate (cue.mixT); }
+                else logic.locateAndPlay (cue.mixT);
+            }
+        }
+        else
+        {
+            // 自分の曲を聴いている: Logic をキューの位置から再生。参照曲は位置だけ合わせる
+            if (hasMix) logic.locateAndPlay (cue.mixT);
+            else flash ("This cue has no MY MIX position yet: move Logic to that part and press SET MIX.");
+            if (restartOnSwitch) refPause(); else refPlay();
+        }
     }
     updateLoop();
 }
@@ -587,7 +668,10 @@ void MainComponent::cueMenu (int idx)
     juce::PopupMenu m;
     m.addSectionHeader ((*cues)[(size_t) idx].name + "  " + mmss ((*cues)[(size_t) idx].t));
     m.addItem (1, "Rename...");
-    m.addItem (2, "Move to current position");
+    m.addItem (2, "Move to current reference position");
+    m.addItem (4, "Set MY MIX position (Logic now)");
+    m.addItem (5, "Clear MY MIX position", (*cues)[(size_t) idx].mixT >= 0.0);
+    m.addSeparator();
     m.addItem (3, "Delete");
     m.showMenuAsync (juce::PopupMenu::Options(), [this, idx] (int r)
     {
@@ -603,6 +687,8 @@ void MainComponent::cueMenu (int idx)
             rebuildCueButtons();
             updateLoop();
         }
+        else if (r == 4) setMixPosition (idx, false);
+        else if (r == 5) setMixPosition (idx, true);
         else if (r == 3)
         {
             cs->erase (cs->begin() + idx);
@@ -618,7 +704,7 @@ void MainComponent::rebuildCueButtons()
 {
     auto* cues = currentCues();
     juce::String sig = juce::String (selectedRow) + ":" + juce::String (activeCue) + ":";
-    if (cues != nullptr) for (auto& c : *cues) sig += c.name + "@" + juce::String (c.t, 2) + ";";
+    if (cues != nullptr) for (auto& c : *cues) sig += c.name + "@" + juce::String (c.t, 2) + "/" + juce::String (c.mixT, 2) + ";";
     if (sig == cueSignature) return;
     cueSignature = sig;
 
@@ -627,7 +713,7 @@ void MainComponent::rebuildCueButtons()
         for (int i = 0; i < (int) cues->size(); ++i)
         {
             auto* b = cueButtons.add (new CueButton());
-            b->setButtonText (juce::String (i + 1) + ". " + (*cues)[(size_t) i].name);
+            b->setButtonText (juce::String (i + 1) + ". " + (*cues)[(size_t) i].name + ((*cues)[(size_t) i].mixT >= 0.0 ? "  +MIX" : ""));
             styleToggle (*b, refCol);
             b->setToggleState (i == activeCue, juce::dontSendNotification);
             b->onClick = [this, i] { jumpToCue (i, true); rebuildCueButtons(); };
@@ -650,8 +736,8 @@ void MainComponent::timerCallback()
     if (tick % 125 == 0) { refreshOutputs(); refreshLiveApps(); }
 
     // ボタンの状態
-    const bool running = isLive() ? musicState.playing : engine.player.playing.load();
-    playButton.setButtonText (running ? "PAUSE" : "PLAY");
+    if (engine.ab.load()) playButton.setButtonText (refIsPlaying() ? "PAUSE  (Ref)" : "PLAY  (Ref)");
+    else                  playButton.setButtonText (logic.isPlaying() ? "STOP  (Logic)" : "PLAY  (Logic)");
     dimButton.setToggleState (engine.dim.load(), juce::dontSendNotification);
     muteButton.setToggleState (engine.mute.load(), juce::dontSendNotification);
     bypassButton.setToggleState (bypass, juce::dontSendNotification);
@@ -715,6 +801,7 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
     if (c == 'l' || c == 'L') { loopOn = ! loopOn; updateLoop(); saveSettings(); return true; }
     if (c == 'p' || c == 'P') { togglePlay(); return true; }
     if (c == 'c' || c == 'C') { addCue(); return true; }
+    if (c == 's' || c == 'S') { setMixPosition (activeCue, false); return true; }
     if (c == 'm' || c == 'M') { stereoSeg.setIndex (engine.stereo == 1 ? 0 : 1); engine.stereo = stereoSeg.getIndex(); return true; }
     if (c == 'd' || c == 'D') { engine.dim = ! engine.dim.load(); return true; }
     return false;
@@ -846,6 +933,9 @@ void MainComponent::updateSpectra()
             statusMixColour = good;
         }
     }
+    if (! bypass && capture.numMixProcesses() > 0)
+        statusMix += logic.hasTimecode() ? ("   |   Logic " + LogicLink::format (logic.getPosition()) + (logic.isPlaying() ? "  playing" : "  stopped"))
+                                         : juce::String ("   |   sync off (Logic can't be controlled yet)");
 
     if (isLive())
     {
@@ -913,9 +1003,9 @@ void MainComponent::paint (juce::Graphics& g)
     {
         g.setColour (text.withAlpha (0.5f));
         g.setFont (juce::FontOptions (12.0f));
-        g.drawText ("No cues yet: press + CUE (or C) at the start of a section, e.g. Verse / Chorus",
-                    addCueButton.getRight() + 12, addCueButton.getY(), getWidth() - addCueButton.getRight() - 24, addCueButton.getHeight(),
-                    juce::Justification::centredLeft);
+        g.drawText ("No cues yet: press + CUE (or C) at the start of a section, e.g. Verse / Chorus. "
+                    "Then move Logic to the same part of your song and press SET MIX (or S).",
+                    cueRow, juce::Justification::centredLeft);
     }
     drawTimeline (g, timelineArea.toFloat());
     drawSpectrum (g, specArea.toFloat());
@@ -940,7 +1030,7 @@ void MainComponent::paint (juce::Graphics& g)
     g.drawText ("VOLUME",    volLabel,    juce::Justification::centredLeft);
 
     g.setColour (text.withAlpha (0.4f));
-    g.drawText ("Keys: SPACE = A/B   1-9 = cue   P = play   C = add cue   L = loop   M = mono   D = dim",
+    g.drawText ("Keys: SPACE = A/B   1-9 = cue   P = play   C = add cue   S = set MIX position   L = loop   M = mono   D = dim",
                 specArea.getX(), meterArea.getBottom() + 2, 700, 14, juce::Justification::centredLeft);
 }
 
@@ -1198,16 +1288,23 @@ void MainComponent::resized()
     area.removeFromTop (8);
 
     auto transport = area.removeFromTop (30);
-    playButton.setBounds (transport.removeFromLeft (90));    transport.removeFromLeft (6);
+    playButton.setBounds (transport.removeFromLeft (120));   transport.removeFromLeft (6);
     loopButton.setBounds (transport.removeFromLeft (70));    transport.removeFromLeft (6);
     restartButton.setBounds (transport.removeFromLeft (130)); transport.removeFromLeft (6);
-    addCueButton.setBounds (transport.removeFromLeft (70));  transport.removeFromLeft (10);
-    for (auto* b : cueButtons)
+    addCueButton.setBounds (transport.removeFromLeft (70));  transport.removeFromLeft (6);
+    setMixButton.setBounds (transport.removeFromLeft (80));  transport.removeFromLeft (10);
+    area.removeFromTop (6);
+    cueRow = area.removeFromTop (30);
     {
-        const int w = juce::jmin (130, juce::jmax (70, transport.getWidth() / juce::jmax (1, cueButtons.size()) - 4));
-        if (transport.getWidth() < 40) { b->setBounds ({}); continue; }
-        b->setBounds (transport.removeFromLeft (w));
-        transport.removeFromLeft (4);
+        auto cr = cueRow;
+        const int n = juce::jmax (1, cueButtons.size());
+        const int w = juce::jlimit (60, 170, cr.getWidth() / n - 6);
+        for (auto* b : cueButtons)
+        {
+            if (cr.getWidth() < 40) { b->setBounds ({}); continue; }
+            b->setBounds (cr.removeFromLeft (juce::jmin (w, cr.getWidth())));
+            cr.removeFromLeft (6);
+        }
     }
     area.removeFromTop (8);
     timelineArea = area.removeFromTop (60);

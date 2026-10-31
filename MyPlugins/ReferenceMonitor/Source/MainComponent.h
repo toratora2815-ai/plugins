@@ -4,6 +4,7 @@
 #include "Capture.h"
 #include "MusicControl.h"
 #include "Library.h"
+#include "LogicLink.h"
 
 // 横並びの切替ボタン
 class Seg : public juce::Component
@@ -81,6 +82,11 @@ private:
     void updateLoop();
     void rebuildCueButtons();
     void togglePlay();
+    void refPlay();
+    void refPause();
+    bool refIsPlaying() const;
+    void setMixPosition (int idx, bool clear);
+    void flash (const juce::String& msg);
     juce::String outputUID() const;
     void refreshOutputs();
     void refreshLiveApps();
@@ -98,6 +104,7 @@ private:
     Engine engine;
     CaptureEngine capture { engine };
     MusicControl music;
+    LogicLink logic;
     MusicControl::State musicState;
     Library library;
 
@@ -106,7 +113,7 @@ private:
     juce::TextButton addButton { "+ ADD" }, removeButton { "REMOVE" };
     juce::ComboBox liveAppBox;
     Seg abSeg, levelSeg, bandSeg, stereoSeg, outSeg;
-    juce::TextButton playButton { "PLAY" }, loopButton { "LOOP" }, restartButton { "CUE ON SWITCH" }, addCueButton { "+ CUE" };
+    juce::TextButton playButton { "PLAY" }, loopButton { "LOOP" }, restartButton { "CUE ON SWITCH" }, addCueButton { "+ CUE" }, setMixButton { "SET MIX" };
     juce::OwnedArray<CueButton> cueButtons;
     juce::String cueSignature;
     juce::TextButton resetButton { "RESET METERS" }, dimButton { "DIM" }, muteButton { "MUTE" },
@@ -141,7 +148,7 @@ private:
     bool mixHas = false, refHas = false;
     float displayTop = -20.0f;
     std::vector<double> snapBuf;
-    juce::Rectangle<int> headerArea, leftArea, hintArea, timelineArea, specArea, meterArea, labelsRow1, labelsRow2;
+    juce::Rectangle<int> cueRow, headerArea, leftArea, hintArea, timelineArea, specArea, meterArea, labelsRow1, labelsRow2;
     juce::Rectangle<int> levelLabel, bandLabel, stereoLabel, trimLabel, outLabel, volLabel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

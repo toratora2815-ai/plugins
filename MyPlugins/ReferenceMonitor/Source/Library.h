@@ -5,7 +5,8 @@
 struct Cue
 {
     juce::String name;
-    double t = 0.0;   // 秒
+    double t = 0.0;       // 参照曲の位置（秒）
+    double mixT = -1.0;   // 自分の曲（Logic）の位置（SMPTE の秒）。未登録は -1
 };
 
 struct FileItem
@@ -40,6 +41,7 @@ public:
             auto* o = new juce::DynamicObject();
             o->setProperty ("name", c.name);
             o->setProperty ("t", c.t);
+            o->setProperty ("m", c.mixT);
             arr.add (juce::var (o));
         }
         return arr;
@@ -50,7 +52,8 @@ public:
         std::vector<Cue> out;
         if (auto* arr = v.getArray())
             for (auto& e : *arr)
-                out.push_back ({ e.getProperty ("name", "Cue").toString(), (double) e.getProperty ("t", 0.0) });
+                out.push_back ({ e.getProperty ("name", "Cue").toString(), (double) e.getProperty ("t", 0.0),
+                                 (double) e.getProperty ("m", -1.0) });
         sortCues (out);
         return out;
     }
