@@ -10,7 +10,8 @@ namespace
     juce::String fmt (float v, int decimals = 1, bool plus = false)
     {
         if (! std::isfinite (v) || v <= -99.0f) return "--";
-        return (plus && v > 0.0f ? "+" : "") + juce::String (v, decimals);
+        const juce::String num = decimals <= 0 ? juce::String (juce::roundToInt (v)) : juce::String (v, decimals);
+        return (plus && v > 0.0f ? "+" : "") + num;
     }
 }
 

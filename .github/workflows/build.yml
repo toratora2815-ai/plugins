@@ -59,3 +59,62 @@ jobs:
         with:
           name: ${{ matrix.plugin }}-macOS
           path: out
+
+  # 単体アプリ（.app）のビルド
+  build-app:
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [ReferenceMonitor]
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check changes
+        id: changes
+        shell: bash
+        run: |
+          BEFORE="${{ github.event.before }}"
+          if [ "${{ github.event_name }}" != "push" ] || [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}"); then
+            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if echo "$CHANGED" | grep -q "^MyPlugins/${{ matrix.app }}/"; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "${{ matrix.app }} is unchanged - skipping build"
+          fi
+
+      - name: Configure
+        if: steps.changes.outputs.build == 'true'
+        working-directory: MyPlugins/${{ matrix.app }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build app
+        if: steps.changes.outputs.build == 'true'
+        working-directory: MyPlugins/${{ matrix.app }}
+        run: cmake --build build --config Release --target ${{ matrix.app }} --parallel 4
+
+      - name: Collect
+        if: steps.changes.outputs.build == 'true'
+        shell: bash
+        run: |
+          mkdir -p out
+          APP=$(find "MyPlugins/${{ matrix.app }}/build/${{ matrix.app }}_artefacts" -maxdepth 3 -name "*.app" | head -1)
+          echo "App: $APP"
+          codesign --force --deep --sign - "$APP"
+          plutil -p "$APP/Contents/Info.plist" | grep -E "NSAudioCapture|NSAppleEvents|LSMinimum|CFBundleIdentifier"
+          # 実行権限を保つため、ここで zip にしてから Artifacts に入れる
+          ditto -c -k --keepParent "$APP" "out/${{ matrix.app }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.changes.outputs.build == 'true'
+        with:
+          name: ${{ matrix.app }}-macOS
+          path: out
