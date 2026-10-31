@@ -21,4 +21,5 @@ MusicControl::State MusicControl::poll() { State s; s.error = "unsupported"; ret
 void MusicControl::setPosition (double) {}
 void MusicControl::play() {}
 void MusicControl::pause() {}
+void MusicControl::playPause() {}
 #endif

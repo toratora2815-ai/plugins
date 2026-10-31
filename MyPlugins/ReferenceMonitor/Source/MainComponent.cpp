@@ -474,8 +474,8 @@ void MainComponent::togglePlay()
 {
     if (isLive())
     {
-        if (musicState.playing) music.pause(); else music.play();
-        musicState.playing = ! musicState.playing;
+        music.playPause();
+        pollMusic();   // すぐに本当の状態を読み直す
     }
     else
         engine.player.playing = ! engine.player.playing.load();
@@ -488,12 +488,12 @@ void MainComponent::setAB (bool ref)
     if (ref)
     {
         if (restartOnSwitch && activeCue >= 0) jumpToCue (activeCue, true);
-        else if (isLive()) { if (! musicState.playing) { music.play(); musicState.playing = true; } }
+        else if (isLive()) { music.play(); musicState.playing = true; }
         else engine.player.playing = true;
     }
     else if (restartOnSwitch)
     {
-        if (isLive()) { if (musicState.playing) { music.pause(); musicState.playing = false; } }
+        if (isLive()) { music.pause(); musicState.playing = false; }
         else engine.player.playing = false;
     }
 }
@@ -513,7 +513,7 @@ void MainComponent::jumpToCue (int idx, bool play)
     seekTo ((*cues)[(size_t) idx].t);
     if (play)
     {
-        if (isLive()) { if (! musicState.playing) { music.play(); musicState.playing = true; } }
+        if (isLive()) { music.play(); musicState.playing = true; }
         else engine.player.playing = true;
     }
     updateLoop();
@@ -537,7 +537,13 @@ void MainComponent::updateLoop()
 void MainComponent::addCue()
 {
     auto* cues = currentCues();
-    if (cues == nullptr) return;
+    if (cues == nullptr)
+    {
+        flashMessage = isLive() ? "Play a song in Apple Music first, then press + CUE."
+                                : "Select a reference track first.";
+        flashUntil = juce::Time::getMillisecondCounterHiRes() * 0.001 + 4.0;
+        return;
+    }
     const double t = currentPosition();
     Cue c { "Cue " + juce::String ((int) cues->size() + 1), t };
     cues->push_back (c);
@@ -547,7 +553,30 @@ void MainComponent::addCue()
     library.save();
     rebuildCueButtons();
     updateLoop();
-    cueMenu (activeCue);   // すぐ名前を付けられるように
+    renameCue (activeCue);   // すぐ名前を付けられるように
+}
+
+void MainComponent::renameCue (int idx)
+{
+    auto* cues = currentCues();
+    if (cues == nullptr || idx < 0 || idx >= (int) cues->size()) return;
+    auto* w = new juce::AlertWindow ("Cue name", "Name this cue (e.g. Verse, Chorus). You can rename it later with right-click.",
+                                     juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor ("name", (*cues)[(size_t) idx].name);
+    w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w, idx] (int res)
+    {
+        auto* c2 = currentCues();
+        if (res == 1 && c2 != nullptr && idx < (int) c2->size())
+        {
+            const auto n = w->getTextEditorContents ("name").trim();
+            if (n.isNotEmpty()) (*c2)[(size_t) idx].name = n;
+            library.save();
+            rebuildCueButtons();
+        }
+        grabKeyboardFocus();
+    }), true);
 }
 
 void MainComponent::cueMenu (int idx)
@@ -565,24 +594,7 @@ void MainComponent::cueMenu (int idx)
         auto* cs = currentCues();
         if (cs == nullptr || idx >= (int) cs->size()) return;
         if (r == 1)
-        {
-            auto* w = new juce::AlertWindow ("Cue name", "Name for this cue (e.g. Verse, Chorus)", juce::MessageBoxIconType::NoIcon);
-            w->addTextEditor ("name", (*cs)[(size_t) idx].name);
-            w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
-            w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-            w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w, idx] (int res)
-            {
-                auto* c2 = currentCues();
-                if (res == 1 && c2 != nullptr && idx < (int) c2->size())
-                {
-                    const auto n = w->getTextEditorContents ("name").trim();
-                    if (n.isNotEmpty()) (*c2)[(size_t) idx].name = n;
-                    library.save();
-                    rebuildCueButtons();
-                }
-                grabKeyboardFocus();
-            }), true);
-        }
+            renameCue (idx);
         else if (r == 2)
         {
             (*cs)[(size_t) idx].t = currentPosition();
@@ -843,6 +855,11 @@ void MainComponent::updateSpectra()
             statusRefColour = bad;
             statusHint = "Allow Reference Monitor to control Music in System Settings > Privacy & Security > Automation.";
         }
+        else if (musicState.error.isNotEmpty() && musicState.error != "unsupported")
+        {
+            statusRef = "Apple Music: " + musicState.error;
+            statusRefColour = bad;
+        }
         else if (CaptureEngine::matches ("com.apple.Music", liveBundle) && ! musicState.running)
         {
             statusRef = "Apple Music: not running";
@@ -892,10 +909,20 @@ void MainComponent::paint (juce::Graphics& g)
     g.drawText ("REFERENCES", leftArea.getX(), leftArea.getY() - 16, 200, 14, juce::Justification::centredLeft);
     g.drawText ("LIVE APP", liveAppBox.getX(), liveAppBox.getY() - 16, 200, 14, juce::Justification::centredLeft);
 
+    if (cueButtons.isEmpty())
+    {
+        g.setColour (text.withAlpha (0.5f));
+        g.setFont (juce::FontOptions (12.0f));
+        g.drawText ("No cues yet: press + CUE (or C) at the start of a section, e.g. Verse / Chorus",
+                    addCueButton.getRight() + 12, addCueButton.getY(), getWidth() - addCueButton.getRight() - 24, addCueButton.getHeight(),
+                    juce::Justification::centredLeft);
+    }
     drawTimeline (g, timelineArea.toFloat());
     drawSpectrum (g, specArea.toFloat());
     drawMeters (g, meterArea.toFloat());
 
+    if (flashMessage.isNotEmpty() && juce::Time::getMillisecondCounterHiRes() * 0.001 < flashUntil)
+        statusHint = flashMessage;
     if (statusHint.isNotEmpty())
     {
         g.setColour (warn);

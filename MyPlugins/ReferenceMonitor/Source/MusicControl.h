@@ -18,4 +18,8 @@ public:
     void setPosition (double seconds);
     void play();
     void pause();
+    void playPause();
+
+private:
+    juce::String lastError, lastSummary;   // 動作記録に同じ内容を何度も書かないため
 };

@@ -77,6 +77,7 @@ private:
     void seekTo (double seconds);
     void addCue();
     void cueMenu (int idx);
+    void renameCue (int idx);
     void updateLoop();
     void rebuildCueButtons();
     void togglePlay();
@@ -126,7 +127,8 @@ private:
     juce::Colour statusMixColour, statusRefColour;
     double retryAt = 0.0, mixSilentSince = 0.0;
     int tick = 0;
-    juce::String loadingPath;
+    juce::String loadingPath, flashMessage;
+    double flashUntil = 0.0;
 
     juce::ThreadPool loader { 1 };
     juce::CriticalSection pendingLock;
