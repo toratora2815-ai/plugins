@@ -122,6 +122,19 @@ jobs:
             echo "${{ matrix.app }} is unchanged - skipping build"
           fi
 
+      - name: Check AppleScript
+        if: steps.changes.outputs.build == 'true' && hashFiles(format('MyPlugins/{0}/Source/MusicScript.h', matrix.app)) != ''
+        shell: bash
+        run: |
+          # アプリの中の AppleScript が Mac で正しく読めるか（文法エラーがないか）を確かめる
+          sed -n '/R"APPLESCRIPT(/,/)APPLESCRIPT"/p' "MyPlugins/${{ matrix.app }}/Source/MusicScript.h" | sed '1d;$d' > /tmp/poll.applescript
+          cat /tmp/poll.applescript
+          if ! osacompile -o /tmp/poll.scpt /tmp/poll.applescript 2> /tmp/osa.txt; then
+            echo "::error::AppleScript does not compile: $(cat /tmp/osa.txt)"
+            exit 1
+          fi
+          echo "AppleScript OK"
+
       - name: Configure
         if: steps.changes.outputs.build == 'true'
         working-directory: MyPlugins/${{ matrix.app }}

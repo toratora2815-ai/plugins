@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #include "MusicControl.h"
+#include "MusicScript.h"
 
 #if JUCE_MAC
 
@@ -56,45 +57,7 @@ MusicControl::State MusicControl::poll()
     @autoreleasepool
     {
         // 曲の情報は1つずつ try で取る（ストリーミングの曲は取れない項目があるため）
-        static NSAppleScript* script = [[NSAppleScript alloc] initWithSource:
-            @"if application \"Music\" is running then\n"
-             "  with timeout of 2 seconds\n"
-             "    tell application \"Music\"\n"
-             "      set st to (player state as string)\n"
-             "      set pos to \"0\"\n"
-             "      set nm to \"\"\n"
-             "      set ar to \"\"\n"
-             "      set du to \"0\"\n"
-             "      set pid to \"\"\n"
-             "      try\n"
-             "        set pos to (player position as string)\n"
-             "      end try\n"
-             "      try\n"
-             "        set t to current track\n"
-             "        try\n"
-             "          set nm to (name of t)\n"
-             "        end try\n"
-             "        try\n"
-             "          set ar to (artist of t)\n"
-             "        end try\n"
-             "        try\n"
-             "          set du to ((duration of t) as string)\n"
-             "        end try\n"
-             "        try\n"
-             "          set pid to (persistent ID of t)\n"
-             "        end try\n"
-             "      end try\n"
-             "      if nm is \"\" then\n"
-             "        try\n"
-             "          set nm to (current stream title)\n"
-             "        end try\n"
-             "      end if\n"
-             "      return {st, pos, nm, ar, du, pid}\n"
-             "    end tell\n"
-             "  end timeout\n"
-             "else\n"
-             "  return {\"notrunning\", \"0\", \"\", \"\", \"0\", \"\"}\n"
-             "end if"];
+        static NSAppleScript* script = [[NSAppleScript alloc] initWithSource:[NSString stringWithUTF8String:kMusicPollScript]];
 
         int err = 0; juce::String msg;
         NSAppleEventDescriptor* r = runScript (script, err, msg);
