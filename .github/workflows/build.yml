@@ -99,7 +99,14 @@ jobs:
       - name: Build app
         if: steps.changes.outputs.build == 'true'
         working-directory: MyPlugins/${{ matrix.app }}
-        run: cmake --build build --config Release --target ${{ matrix.app }} --parallel 4
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! cmake --build build --config Release --target ${{ matrix.app }} --parallel 4 2>&1 | tee build.log; then
+            # エラー行を注記として残す（ログが読めないときの手がかり）
+            grep -E "error:|error :|Undefined symbols|ld: " build.log | grep -v "^ *[0-9]* errors* generated" | sort -u | head -20 | while IFS= read -r l; do echo "::error::${l}"; done
+            exit 1
+          fi
 
       - name: Collect
         if: steps.changes.outputs.build == 'true'
