@@ -228,6 +228,7 @@ MainComponent::MainComponent()
     keepCopies = (bool) s.getWithDefault ("keep", true);
     volumeSlider.setValue ((double) s.getWithDefault ("volume", 0.0), juce::dontSendNotification);
     player.volumeDb = (float) volumeSlider.getValue();
+    regroupSongs();
     for (auto& v : library.versions)
         if (! v.an.ok && v.playPath().isNotEmpty()) queueAnalysis (v, false);   // 前回解析が終わらなかったもの
 
@@ -330,14 +331,13 @@ void MainComponent::flash (const juce::String& msg)
 void MainComponent::refreshBounceDirs()
 {
     bounceDirs.clear();
-    projects.clear();
     std::function<void (const juce::File&, int)> walk = [&] (const juce::File& dir, int depth)
     {
         for (auto& d : dir.findChildFiles (juce::File::findDirectories, false))
         {
             const auto name = d.getFileName();
             if (name.startsWith (".")) continue;
-            if (d.hasFileExtension ("logicx")) { projects.push_back (d.getFileNameWithoutExtension().toStdString()); continue; }
+            if (d.hasFileExtension ("logicx")) continue;
             if (name == "Bounces") { bounceDirs.add (d); continue; }
             if (name == "Audio Files" || name == "Mix Time Machine") continue;
             if (depth < 3) walk (d, depth + 1);
@@ -421,7 +421,7 @@ Version& MainComponent::addVersion (const juce::File& f, bool archive)
     {
         std::vector<std::string> known;
         for (auto& s : library.songs()) known.push_back (s.toStdString());
-        v.song = juce::String::fromUTF8 (mtm::songKey (v.name.toStdString(), projects, known).c_str());
+        v.song = juce::String::fromUTF8 (mtm::songKey (v.name.toStdString(), known).c_str());
     }
     if (v.song.isEmpty()) v.song = v.name;
     library.versions.push_back (v);
@@ -537,6 +537,23 @@ void MainComponent::pickUpResults()
         cache.erase (it);
     }
     trash.clear();
+}
+
+// 曲のまとめ方を、今のルールで決め直す（手で移したものはそのまま）
+void MainComponent::regroupSongs()
+{
+    std::vector<std::string> stems;
+    std::vector<Version*> targets;
+    for (auto& v : library.versions)
+        if (library.songOverrides.count (v.sourcePath) == 0) { stems.push_back (v.name.toStdString()); targets.push_back (&v); }
+    const auto keys = mtm::songKeys (stems);
+    bool changed = false;
+    for (size_t i = 0; i < targets.size(); ++i)
+    {
+        const auto song = juce::String::fromUTF8 (keys[i].c_str());
+        if (song.isNotEmpty() && song != targets[i]->song) { targets[i]->song = song; changed = true; }
+    }
+    if (changed) library.save();
 }
 
 void MainComponent::addRoot (const juce::File& dir)

@@ -39,11 +39,14 @@ inline std::string stripVersionSuffix (std::string s)
     static const std::regex logicCounter ("_\\d+$");
     static const std::regex versionWord ("[\\s_\\-]*\\(?\\b(demo|dem|mix|mixdown|master|mastered|ver|version|v|take|rev|bounce|final|test|draft)\\s*\\.?\\d*\\)?$",
                                          std::regex::icase);
+    // 日本語の飾り（"バウンス 3"・"ミックス2" など）。Mac のファイル名は濁点が分かれた形のこともあるので、両方の形を入れてある
+    static const std::regex versionWordJa ("[\\s_\\-]*(?:\\xE3\\x83\\x90\\xE3\\x82\\xA6\\xE3\\x83\\xB3\\xE3\\x82\\xB9|\\xE3\\x83\\x8F\\xE3\\x82\\x99\\xE3\\x82\\xA6\\xE3\\x83\\xB3\\xE3\\x82\\xB9|\\xE3\\x83\\x9F\\xE3\\x83\\x83\\xE3\\x82\\xAF\\xE3\\x82\\xB9|\\xE3\\x83\\x9E\\xE3\\x82\\xB9\\xE3\\x82\\xBF\\xE3\\x83\\xBC|\\xE3\\x83\\x87\\xE3\\x83\\xA2|\\xE3\\x83\\x86\\xE3\\x82\\x99\\xE3\\x83\\xA2|\\xE3\\x83\\x86\\xE3\\x82\\xB9\\xE3\\x83\\x88|\\xE6\\x9B\\xB8\\xE3\\x81\\x8D\\xE5\\x87\\xBA\\xE3\\x81\\x97)\\s*\\d*$");
     static const std::regex copyWord ("[\\s_\\-]*(copy|コピー)\\s*\\d*$|\\s*\\(\\d+\\)$", std::regex::icase);
     for (int guard = 0; guard < 6; ++guard)
     {
         std::string t = std::regex_replace (s, logicCounter, "");
         t = std::regex_replace (t, versionWord, "");
+        t = std::regex_replace (t, versionWordJa, "");
         t = std::regex_replace (t, copyWord, "");
         t = normaliseName (t);
         if (t == s || t.empty()) break;
@@ -52,33 +55,38 @@ inline std::string stripVersionSuffix (std::string s)
     return s;
 }
 
-inline bool isDigitAt (const std::string& s, size_t i) { return i < s.size() && s[i] >= '0' && s[i] <= '9'; }
+// "X 2" の X に、既にある曲 X をまとめてよいか。
+// X が英字で終わる（"DNA 3" の "DNA" など）ときは、数字まで含めて曲名かもしれないのでまとめない
+inline bool canAbsorbNumber (const std::string& song)
+{
+    if (song.empty()) return false;
+    const unsigned char c = (unsigned char) song.back();
+    return ! ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'));
+}
 
 // ファイル名（拡張子なし）→ 曲の名前。
-// projects に Logic のプロジェクト名があれば、ファイル名の頭がいちばん長く一致するプロジェクトにまとめる
-// （Logic のバウンスは、最初はプロジェクト名と同じ名前になるため）。
-// それ以外は版の飾りを取った名前。さらに「既にある曲名 + 数字」は、その曲にまとめる
-inline std::string songKey (const std::string& fileStem, const std::vector<std::string>& projects,
-                            const std::vector<std::string>& knownSongs = {})
+// 後ろの版の飾り（"_3"・"demo 7"・"mix2"・"v3"・"final" など）を取った名前。
+// "さらにいじる用 2" のような「既にある曲名 + 数字」は、その曲にまとめる（英字で終わる曲名は除く）
+inline std::string songKey (const std::string& fileStem, const std::vector<std::string>& knownSongs = {})
 {
     const std::string name = normaliseName (fileStem);
-    std::string best;
-    for (auto p : projects)
-    {
-        p = normaliseName (p);
-        if (p.empty() || p.size() <= best.size() || name.compare (0, p.size(), p) != 0) continue;
-        if (isDigitAt (name, p.size()) && isDigitAt (p, p.size() - 1)) continue;   // "DNA 2" と "DNA 20" は別
-        best = p;
-    }
-    if (! best.empty()) return best;
-
     std::string key = stripVersionSuffix (name);
     static const std::regex trailingNumber ("^(.*\\S)\\s+\\d+$");
     std::smatch m;
     if (std::regex_match (key, m, trailingNumber))
         for (auto& k : knownSongs)
-            if (k == m[1].str()) return k;
+            if (k == m[1].str() && canAbsorbNumber (k)) return k;
     return key.empty() ? name : key;
+}
+
+// まとめて決める（読み込み直したとき用）。先に飾りを取った名前を全部出してから、数字付きをまとめる
+inline std::vector<std::string> songKeys (const std::vector<std::string>& stems)
+{
+    std::vector<std::string> base;
+    for (auto& s : stems) base.push_back (songKey (s));
+    std::vector<std::string> out;
+    for (auto& s : stems) out.push_back (songKey (s, base));
+    return out;
 }
 
 // ---------------------------------------------------------------------------

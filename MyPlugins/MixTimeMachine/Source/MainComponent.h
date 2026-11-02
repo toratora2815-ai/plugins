@@ -46,6 +46,7 @@ private:
     void pickUpResults();
     void foldersMenu();
     void addRoot (const juce::File&);
+    void regroupSongs();
 
     // ---- 曲と版 ----
     void selectSong (const juce::String& song);
@@ -104,7 +105,6 @@ private:
     struct Pending { juce::int64 time = 0, size = 0; };
     std::map<juce::String, Pending> pending;
     juce::Array<juce::File> bounceDirs;
-    std::vector<std::string> projects;
     double nextDirScan = 0.0;
     int tick = 0, analysingCount = 0;
 
