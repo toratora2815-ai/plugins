@@ -1,5 +1,6 @@
 #pragma once
-#include <JuceHeader.h>
+#include "DspParts.h"
+#include "CreateEngine.h"
 
 // Horizon Spread の音の処理（パラメーターや画面とは切り離してあるので、単体でテストできる）
 //
@@ -7,72 +8,13 @@
 //   L/R を Mid（真ん中）と Side（左右の差）に分け、Mid は触らずに Side だけを加工する。
 //   こうするとモノラルにしたとき Side は打ち消し合って消え、元の音がそのまま残る。
 //
-// 流れ（第1段階＝整える側）：
-//   入力 → M/S → Side を4帯域に分ける（BASS MONO / LOW / MID / HIGH）→ 帯域ごとの幅
+// 流れ：
+//   入力 → CREATE（生み出す側、CreateEngine.h）→ M/S → Side を4帯域に分ける（BASS MONO / LOW / MID / HIGH）→ 帯域ごとの幅
 //        → AIR（Side の高域シェルフ）→ TRANSIENT（アタックで Side を増減）
 //        → SIDE DRIVE（Side の倍音、4倍オーバーサンプリング）→ GUARD → MIX → 出力
+//   MIX と GUARD の基準になる「元の音」は、CREATE を通す前の入力
 namespace hs
 {
-    inline float coefFor (double ms, double sr)
-    {
-        return ms <= 0.0 ? 0.0f : (float) std::exp (-1.0 / (ms * 0.001 * sr));
-    }
-
-    // RBJ 型のバイクアッド（ハイシェルフ用）。音声スレッドでメモリ確保しないよう自前で持つ
-    struct Biquad
-    {
-        float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
-
-        void reset() { z1 = z2 = 0; }
-
-        void setHighShelf (double sr, double freq, double gainDb)
-        {
-            freq = juce::jlimit (20.0, sr * 0.45, freq);
-            const double A = std::pow (10.0, gainDb / 40.0);
-            const double w0 = juce::MathConstants<double>::twoPi * freq / sr;
-            const double cs = std::cos (w0), sn = std::sin (w0);
-            const double alpha = sn / std::sqrt (2.0);
-            const double sA = 2.0 * std::sqrt (A) * alpha;
-            const double a0 = (A + 1) - (A - 1) * cs + sA;
-            b0 = (float) (A * ((A + 1) + (A - 1) * cs + sA) / a0);
-            b1 = (float) (-2 * A * ((A - 1) + (A + 1) * cs) / a0);
-            b2 = (float) (A * ((A + 1) + (A - 1) * cs - sA) / a0);
-            a1 = (float) (2 * ((A - 1) - (A + 1) * cs) / a0);
-            a2 = (float) (((A + 1) - (A - 1) * cs - sA) / a0);
-        }
-
-        float process (float x)
-        {
-            const float y = b0 * x + z1;
-            z1 = b1 * x - a1 * y + z2;
-            z2 = b2 * x - a2 * y;
-            return y;
-        }
-    };
-
-    struct OnePoleHP
-    {
-        float c = 0, xPrev = 0, yPrev = 0;
-        void setCutoff (double f, double sr) { c = (float) std::exp (-juce::MathConstants<double>::twoPi * f / sr); }
-        void reset() { xPrev = yPrev = 0; }
-        float process (float x) { const float y = c * (yPrev + x - xPrev); xPrev = x; yPrev = y; return y; }
-    };
-
-    struct SimpleDelay
-    {
-        std::vector<float> buf;
-        int pos = 0;
-        void setLength (int n) { buf.assign ((size_t) juce::jmax (1, n), 0.0f); pos = 0; }
-        void reset() { std::fill (buf.begin(), buf.end(), 0.0f); pos = 0; }
-        float push (float x)
-        {
-            const float y = buf[(size_t) pos];
-            buf[(size_t) pos] = x;
-            if (++pos >= (int) buf.size()) pos = 0;
-            return y;
-        }
-    };
-
     struct ShapeSettings
     {
         float spread = 1.0f;         // 0..1  全体の効き
@@ -95,6 +37,8 @@ namespace hs
         float bassMonoHz = 20.0f;    // 20 以下 = OFF
         bool  guard = true;
         bool  mono = false;
+
+        CreateSettings create;
     };
 
     class SpreadEngine
@@ -110,23 +54,25 @@ namespace hs
             blockMax = juce::jmax (16, maxBlock);
 
             juce::dsp::ProcessSpec spec { sr, (juce::uint32) blockMax, 1 };
-            for (auto* f : { &xoB, &xoL, &xoH, &apS0L, &apS0H, &apS1H, &apMB, &apML, &apMH, &anML, &anMH })
+            for (auto* f : { &xoB, &xoL, &xoH, &apS0L, &apS0H, &apS1H, &apMB, &apML, &apMH, &anML, &anMH,
+                             &apDMB, &apDML, &apDMH, &apDSB, &apDSL, &apDSH })
             {
                 f->prepare (spec);
                 f->setType (juce::dsp::LinkwitzRileyFilterType::lowpass);
             }
-            for (auto* f : { &apS0L, &apS0H, &apS1H, &apMB, &apML, &apMH })
+            for (auto* f : { &apS0L, &apS0H, &apS1H, &apMB, &apML, &apMH, &apDMB, &apDML, &apDMH, &apDSB, &apDSL, &apDSH })
                 f->setType (juce::dsp::LinkwitzRileyFilterType::allpass);
+            create.prepare (sr);
 
             oversampling = std::make_unique<juce::dsp::Oversampling<float>> (
                 1, 2, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true);
             oversampling->initProcessing ((size_t) blockMax);
             latency = (int) std::round (oversampling->getLatencyInSamples());
 
-            for (auto* d : { &dlM, &dlSd, &dlSw })
+            for (auto* d : { &dlM, &dlMd, &dlSd, &dlSw })
                 d->setLength (latency);
 
-            for (auto* b : { &bufM, &bufSd, &bufSw, &bufX, &bufE })
+            for (auto* b : { &bufM, &bufMd, &bufSd, &bufSw, &bufX, &bufE })
                 b->assign ((size_t) blockMax, 0.0f);
 
             driveHP.setCutoff (200.0, sr);
@@ -152,10 +98,12 @@ namespace hs
 
         void reset()
         {
-            for (auto* f : { &xoB, &xoL, &xoH, &apS0L, &apS0H, &apS1H, &apMB, &apML, &apMH, &anML, &anMH })
+            for (auto* f : { &xoB, &xoL, &xoH, &apS0L, &apS0H, &apS1H, &apMB, &apML, &apMH, &anML, &anMH,
+                             &apDMB, &apDML, &apDMH, &apDSB, &apDSL, &apDSH })
                 f->reset();
             if (oversampling) oversampling->reset();
-            for (auto* d : { &dlM, &dlSd, &dlSw }) d->reset();
+            for (auto* d : { &dlM, &dlMd, &dlSd, &dlSw }) d->reset();
+            create.reset();
             air.reset(); driveHP.reset(); residueDC.reset();
             envFast = envSlow = 0; gEnvM = gEnvS = gEnvSd = 0; gGuard = 1;
             mLR = mLL = mRR = 0; osEnv = 0; dEnvIn = dEnvOut = 0;
@@ -191,6 +139,7 @@ namespace hs
             set (sMix, juce::jlimit (0.0f, 1.0f, s.mix));
             set (sOut, juce::Decibels::decibelsToGain (s.outDb));
             set (sMono, s.mono ? 1.0f : 0.0f);
+            create.setSettings (s.create, sp);
             first = false;
         }
 
@@ -234,17 +183,17 @@ namespace hs
             fH = juce::jmin (fH, (float) sr * 0.4f);
             if (std::abs (fB - lastFB) > 1.0e-3f * fB)
             {
-                xoB.setCutoffFrequency (fB); apMB.setCutoffFrequency (fB);
+                for (auto* f : { &xoB, &apMB, &apDMB, &apDSB }) f->setCutoffFrequency (fB);
                 lastFB = fB;
             }
             if (std::abs (fL - lastFL) > 1.0e-3f * fL)
             {
-                for (auto* f : { &xoL, &apS0L, &apML, &anML }) f->setCutoffFrequency (fL);
+                for (auto* f : { &xoL, &apS0L, &apML, &anML, &apDML, &apDSL }) f->setCutoffFrequency (fL);
                 lastFL = fL;
             }
             if (std::abs (fH - lastFH) > 1.0e-3f * fH)
             {
-                for (auto* f : { &xoH, &apS0H, &apS1H, &apMH, &anMH }) f->setCutoffFrequency (fH);
+                for (auto* f : { &xoH, &apS0H, &apS1H, &apMH, &anMH, &apDMH, &apDSH }) f->setCutoffFrequency (fH);
                 lastFH = fH;
             }
         }
@@ -277,8 +226,15 @@ namespace hs
 
                 for (int i = i0; i < i0 + len; ++i)
                 {
-                    const float m = 0.5f * (L[i] + R[i]);
-                    const float s = 0.5f * (L[i] - R[i]);
+                    // 元の音（MIX と GUARD の基準）。下の帯域分けと同じ位相回転を通しておく
+                    const float mIn = 0.5f * (L[i] + R[i]);
+                    const float sIn = 0.5f * (L[i] - R[i]);
+                    const float mDry = apDMH.processSample (0, apDML.processSample (0, apDMB.processSample (0, mIn)));
+                    const float sDry = apDSH.processSample (0, apDSL.processSample (0, apDSB.processSample (0, sIn)));
+
+                    // CREATE：Mid から新しい広がりを作る
+                    float m, s;
+                    create.process (L[i], R[i], m, s);
 
                     // Side を4帯域に（LR4 クロスオーバー、足すと元の Side のオールパス版）
                     float s0, r1, s1, r2, s2, s3;
@@ -297,7 +253,6 @@ namespace hs
                     const float gH = 1.0f + w * (sWH.getNextValue() - 1.0f);
                     const float keepBass = 1.0f - sBass.getNextValue();
 
-                    const float sDry = keepBass * s0 + s1 + s2 + s3;
                     float sw = keepBass * gL * s0 + gL * s1 + gM * s2 + gH * s3;
 
                     sw = air.process (sw);
@@ -312,6 +267,7 @@ namespace hs
                     sw *= juce::jmax (0.0f, 1.0f + sTrans.getNextValue() * tr);
 
                     bufM[(size_t) i] = mAp;
+                    bufMd[(size_t) i] = mDry;
                     bufSd[(size_t) i] = sDry;
                     bufSw[(size_t) i] = sw;
                     bufX[(size_t) i] = driveHP.process (sw);
@@ -390,6 +346,7 @@ namespace hs
             for (int i = 0; i < n; ++i)
             {
                 const float m  = dlM.push (bufM[(size_t) i]);
+                const float md = dlMd.push (bufMd[(size_t) i]);
                 const float sd = dlSd.push (bufSd[(size_t) i]);
                 const float swd = dlSw.push (bufSw[(size_t) i]);
                 float s = swd + 0.8f * sDrive.getNextValue() * residueDC.process (bufE[(size_t) i]);
@@ -417,10 +374,11 @@ namespace hs
 
                 const float mix = sMix.getNextValue();
                 const float sOutV = mix * s + (1.0f - mix) * sd;
+                const float mOutV = mix * m + (1.0f - mix) * md;
 
                 const float g = sOut.getNextValue();
-                float l = (m + sOutV) * g;
-                float r = (m - sOutV) * g;
+                float l = (mOutV + sOutV) * g;
+                float r = (mOutV - sOutV) * g;
                 const float mono = sMono.getNextValue();
                 const float c = 0.5f * (l + r);
                 l += mono * (c - l);
@@ -455,12 +413,16 @@ namespace hs
         LR apS0L, apS0H, apS1H;           // 帯域の位相合わせ
         LR apMB, apML, apMH;              // Mid の位相合わせ
         LR anML, anMH;                    // AUTO 用の Mid 帯域分け
+        LR apDMB, apDML, apDMH;           // 元の音（Mid）の位相合わせ
+        LR apDSB, apDSL, apDSH;           // 元の音（Side）の位相合わせ
+
+        CreateEngine create;
 
         Biquad air;
         OnePoleHP driveHP, residueDC;
         std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
-        SimpleDelay dlM, dlSd, dlSw;
-        std::vector<float> bufM, bufSd, bufSw, bufX, bufE;
+        SimpleDelay dlM, dlMd, dlSd, dlSw;
+        std::vector<float> bufM, bufMd, bufSd, bufSw, bufX, bufE;
 
         juce::SmoothedValue<float> sW, sWL, sWM, sWH, sBass, sAirDb, sDrive, sTrans, sGuardOn, sMix, sOut, sMono;
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> sFB, sFL, sFH, sAirF;

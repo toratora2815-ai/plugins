@@ -33,6 +33,8 @@ private:
     void timerCallback() override;
     void setupKnob (Knob&, const char* id, const char* name, bool big = false);
     void setupToggle (Toggle&, const char* id, const juce::String& text);
+    void setupMode (Toggle&, const char* id, const juce::String& offText, const juce::String& onText);
+    void placeHeader (const Tile&, Toggle& on, Toggle* mode = nullptr);
     void showPage (bool shape);
     void placeKnob (Knob&, juce::Rectangle<int>);
     juce::Rectangle<int> tileContent (const Tile&) const;
@@ -46,13 +48,16 @@ private:
     Knob wLow, wMid, wHigh, xLow, xHigh;
     Knob air, airFreq, drive, transient, bassMono;
     Toggle widthOn, airOn, driveOn, transOn, guard, monoCheck;
+
+    Knob shiftTime, shiftAmt, dblAmt, detune, bandsAmt, bandsCount, hazeAmt, hazeSize, motionRate, motionDepth;
+    Toggle shiftOn, doubleOn, bandsOn, hazeOn, motionOn, shiftMode, bandsMode, hazeMode;
     juce::TextButton autoButton { "AUTO" };
     juce::TextButton shapeTab { "SHAPE" }, createTab { "CREATE" };
     bool shapePage = true;
 
     Tile tMaster { "MASTER" }, tMeter { "IMAGE" };
     Tile tWidth { "WIDTH" }, tAir { "AIR" }, tDrive { "SIDE DRIVE" }, tTrans { "TRANSIENT" }, tSafety { "SAFETY" };
-    Tile tCreate { "CREATE" };
+    Tile tShift { "SHIFT" }, tDouble { "DOUBLE" }, tBands { "BANDS" }, tHaze { "HAZE" }, tMotion { "MOTION" };
     juce::Rectangle<int> scopeArea, corrArea, statusArea;
 
     std::vector<float> scopeL, scopeR;

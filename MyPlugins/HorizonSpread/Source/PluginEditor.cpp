@@ -33,6 +33,26 @@ HorizonSpreadEditor::HorizonSpreadEditor (HorizonSpreadProcessor& p)
     setupToggle (guard, "guard", "GUARD");
     setupToggle (monoCheck, "monoCheck", "MONO CHECK");
 
+    setupKnob (shiftTime, "shiftTime", "TIME");
+    setupKnob (shiftAmt, "shiftAmount", "AMOUNT");
+    setupKnob (dblAmt, "doubleAmount", "AMOUNT");
+    setupKnob (detune, "detune", "DETUNE");
+    setupKnob (bandsAmt, "bandsAmount", "AMOUNT");
+    setupKnob (bandsCount, "bandsCount", "BANDS");
+    setupKnob (hazeAmt, "hazeAmount", "AMOUNT");
+    setupKnob (hazeSize, "hazeSize", "SIZE");
+    setupKnob (motionRate, "motionRate", "RATE");
+    setupKnob (motionDepth, "motionDepth", "DEPTH");
+
+    setupToggle (shiftOn, "shiftOn", "ON");
+    setupToggle (doubleOn, "doubleOn", "ON");
+    setupToggle (bandsOn, "bandsOn", "ON");
+    setupToggle (hazeOn, "hazeOn", "ON");
+    setupToggle (motionOn, "motionOn", "ON");
+    setupMode (shiftMode, "shiftMode", "SAFE", "CLASSIC");
+    setupMode (bandsMode, "bandsMode", "ALT", "TILT");
+    setupMode (hazeMode, "hazeMode", "CLOUD", "SMOOTH");
+
     autoButton.setColour (juce::TextButton::buttonColourId, edge);
     autoButton.setColour (juce::TextButton::textColourOffId, sky);
     autoButton.setTooltip ("Play the song for 6 seconds and WIDTH is set automatically");
@@ -93,6 +113,32 @@ void HorizonSpreadEditor::setupToggle (Toggle& t, const char* id, const juce::St
     t.attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id, t.button);
 }
 
+// 2択のモード切り替え（押すたびに文字が入れ替わる）
+void HorizonSpreadEditor::setupMode (Toggle& t, const char* id, const juce::String& offText, const juce::String& onText)
+{
+    setupToggle (t, id, offText);
+    t.button.setColour (juce::TextButton::textColourOffId, text.withAlpha (0.85f));
+    t.button.setColour (juce::TextButton::buttonOnColourId, dusk);
+    auto* b = &t.button;
+    b->onStateChange = [b, offText, onText]
+    {
+        const auto txt = b->getToggleState() ? onText : offText;
+        if (b->getButtonText() != txt) b->setButtonText (txt);
+    };
+    b->onStateChange();
+}
+
+void HorizonSpreadEditor::placeHeader (const Tile& tile, Toggle& on, Toggle* mode)
+{
+    auto hdr = tile.bounds.reduced (8).removeFromTop (22);
+    on.button.setBounds (hdr.removeFromRight (40));
+    if (mode != nullptr)
+    {
+        hdr.removeFromRight (6);
+        mode->button.setBounds (hdr.removeFromRight (66));
+    }
+}
+
 void HorizonSpreadEditor::showPage (bool shape)
 {
     shapePage = shape;
@@ -104,6 +150,14 @@ void HorizonSpreadEditor::showPage (bool shape)
     for (auto* t : { &widthOn, &airOn, &driveOn, &transOn })
         t->button.setVisible (shape);
     autoButton.setVisible (shape);
+
+    for (auto* k : { &shiftTime, &shiftAmt, &dblAmt, &detune, &bandsAmt, &bandsCount, &hazeAmt, &hazeSize, &motionRate, &motionDepth })
+    {
+        k->slider.setVisible (! shape);
+        k->label.setVisible (! shape);
+    }
+    for (auto* t : { &shiftOn, &doubleOn, &bandsOn, &hazeOn, &motionOn, &shiftMode, &bandsMode, &hazeMode })
+        t->button.setVisible (! shape);
     repaint();
 }
 
@@ -158,8 +212,37 @@ void HorizonSpreadEditor::resized()
         statusArea = c;
     }
 
+    // 中央：CREATE ページ（上段 SHIFT / DOUBLE / BANDS、下段 HAZE / MOTION）
+    {
+        auto c = area;
+        auto top = c.removeFromTop (c.getHeight() * 46 / 100);
+        c.removeFromTop (gap);
+        const int w3 = (top.getWidth() - 2 * gap) / 3;
+        tShift.bounds = top.removeFromLeft (w3);  top.removeFromLeft (gap);
+        tDouble.bounds = top.removeFromLeft (w3); top.removeFromLeft (gap);
+        tBands.bounds = top;
+        tHaze.bounds = c.removeFromLeft ((c.getWidth() - gap) / 2); c.removeFromLeft (gap);
+        tMotion.bounds = c;
+
+        auto pair = [this] (const Tile& tile, Knob& a, Knob& b)
+        {
+            auto r = tileContent (tile);
+            placeKnob (a, r.removeFromLeft (r.getWidth() / 2));
+            placeKnob (b, r);
+        };
+        pair (tShift, shiftTime, shiftAmt);
+        pair (tDouble, dblAmt, detune);
+        pair (tBands, bandsAmt, bandsCount);
+        pair (tHaze, hazeAmt, hazeSize);
+        pair (tMotion, motionRate, motionDepth);
+        placeHeader (tShift, shiftOn, &shiftMode);
+        placeHeader (tDouble, doubleOn);
+        placeHeader (tBands, bandsOn, &bandsMode);
+        placeHeader (tHaze, hazeOn, &hazeMode);
+        placeHeader (tMotion, motionOn);
+    }
+
     // 中央：SHAPE ページ
-    tCreate.bounds = area;
     auto rowTop = area.removeFromTop (area.getHeight() * 46 / 100);
     area.removeFromTop (gap);
     tWidth.bounds = rowTop;
@@ -245,7 +328,7 @@ void HorizonSpreadEditor::paint (juce::Graphics& g)
 
     std::vector<Tile*> tiles { &tMaster, &tMeter, &tSafety };
     if (shapePage) for (auto* t : { &tWidth, &tAir, &tDrive, &tTrans }) tiles.push_back (t);
-    else tiles.push_back (&tCreate);
+    else for (auto* t : { &tShift, &tDouble, &tBands, &tHaze, &tMotion }) tiles.push_back (t);
 
     for (auto* t : tiles)
     {
@@ -264,16 +347,6 @@ void HorizonSpreadEditor::paint (juce::Graphics& g)
         g.setFont (juce::FontOptions (12.0f));
         auto foot = tileContent (tWidth).removeFromBottom (20);
         g.drawText (autoStatus(), foot, juce::Justification::centredLeft);
-    }
-    else
-    {
-        auto c = tileContent (tCreate);
-        g.setColour (text.withAlpha (0.8f));
-        g.setFont (juce::FontOptions (16.0f, juce::Font::bold));
-        g.drawText ("SHIFT  /  DOUBLE  /  BANDS  /  HAZE  /  MOTION", c.withTrimmedBottom (30), juce::Justification::centred);
-        g.setColour (text.withAlpha (0.5f));
-        g.setFont (juce::FontOptions (13.0f));
-        g.drawText ("coming in the next update", c.withTrimmedTop (30), juce::Justification::centred);
     }
 
     drawScope (g, scopeArea.toFloat());

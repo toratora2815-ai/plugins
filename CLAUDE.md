@@ -58,7 +58,8 @@
 - Reference（Reference）… 自分の曲と参照曲の聴き比べプラグイン（ファイル／ライブ入力、音量自動合わせ）
 - Horizon Spread（HorizonSpread）… ステレオ感を出す手法の全部入り。Mid は触らず Side だけ加工（モノラル互換）。
   第1段階 SHAPE ページ: WIDTH 3帯域＋AUTO / AIR / SIDE DRIVE / TRANSIENT、SAFETY: BASS MONO / GUARD、MONO CHECK、ベクトルスコープ。
-  第2段階 CREATE ページ（SHIFT / DOUBLE / BANDS / HAZE / MOTION）は未実装。順番は「生み出す → 整える」で固定
+  CREATE ページ（v1.1.0）: SHIFT（SAFE/CLASSIC）/ DOUBLE / BANDS（ALT/TILT）/ HAZE（CLOUD/SMOOTH）/ MOTION。
+  順番は「生み出す → 整える」で固定。MIX と GUARD の基準は CREATE 前の入力
 - Reference Monitor（ReferenceMonitor）… 聴き比べ用の単体 Mac アプリ（macOS 14.2 以降、プロセスタップで Logic とミュージックの音を受け取る）
 
 ## Mac の Claude Code で作業するとき
