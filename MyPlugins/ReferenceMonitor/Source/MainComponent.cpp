@@ -541,22 +541,22 @@ void MainComponent::setMixPosition (int idx, bool clear)
 
 void MainComponent::setAB (bool ref)
 {
+    // 切り替えは「聴く方を変えるだけ」。もう片方は止めずに流し続ける。
+    // CUE ON SWITCH がオンでキューを選んでいるときは、切り替えた側だけキューの頭に戻す。
     engine.ab = ref;
     abSeg.setIndex (ref ? 1 : 0);
-    if (restartOnSwitch && activeCue >= 0)
-    {
-        jumpToCue (activeCue, true);   // 聴く側をキューの頭から、もう片方は止めて待機
-        return;
-    }
+    auto* cues = currentCues();
+    const bool cueReady = restartOnSwitch && cues != nullptr && activeCue >= 0 && activeCue < (int) cues->size();
     if (ref)
     {
+        if (cueReady) seekTo ((*cues)[(size_t) activeCue].t);
         refPlay();
-        if (restartOnSwitch) logic.stop();
     }
-    else if (restartOnSwitch)
+    else if (cueReady && (*cues)[(size_t) activeCue].mixT >= 0.0)
     {
-        refPause();
-        logic.play();
+        engine.mixMeter.requestReset();
+        engine.mixSpec.requestReset();
+        logic.locateAndPlay ((*cues)[(size_t) activeCue].mixT);
     }
 }
 
@@ -579,23 +579,11 @@ void MainComponent::jumpToCue (int idx, bool play)
 
     if (play)
     {
-        if (engine.ab.load())
-        {
-            // 参照曲を聴いている: 参照曲をキューから再生。Logic は位置だけ合わせる
-            refPlay();
-            if (hasMix)
-            {
-                if (restartOnSwitch) { logic.stop(); logic.locate (cue.mixT); }
-                else logic.locateAndPlay (cue.mixT);
-            }
-        }
-        else
-        {
-            // 自分の曲を聴いている: Logic をキューの位置から再生。参照曲は位置だけ合わせる
-            if (hasMix) logic.locateAndPlay (cue.mixT);
-            else flash ("This cue has no MY MIX position yet: move Logic to that part and press SET MIX.");
-            if (restartOnSwitch) refPause(); else refPlay();
-        }
+        // キューを押したら、両方の曲がそれぞれのキューの位置から再生する
+        refPlay();
+        if (hasMix) logic.locateAndPlay (cue.mixT);
+        else if (! engine.ab.load())
+            flash ("This cue has no MY MIX position yet: move Logic to that part and press SET MIX.");
     }
     updateLoop();
 }
