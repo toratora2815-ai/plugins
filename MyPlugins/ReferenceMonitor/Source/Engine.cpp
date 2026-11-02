@@ -35,6 +35,31 @@ void Engine::prepare (double sampleRate, int)
     xoLow.prepare (spec);  xoLow.setCutoffFrequency (200.0f);
     xoHigh.prepare (spec); xoHigh.setCutoffFrequency (3000.0f);
     zeroBuf.clear();
+    sim.prepare (sr);
+}
+
+// 配信サービスは「曲全体の音量」で上げ下げを決める。
+// ファイルは読み込んだときに曲全体を測ってある。Logic・ライブは、計り始めてからの平均（SECTION）を使う
+bool Engine::platformBasis (bool ref, float& lufs, float& peakDb) const noexcept
+{
+    if (ref && refSource.load() == sourceFile)
+    {
+        lufs = player.fileLufs.load();
+        peakDb = player.filePeakDb.load();
+        return lufs > -100.0f;
+    }
+    const auto& m = ref ? refMeter : mixMeter;
+    lufs = m.gatedSeconds.load() >= 3.0f ? m.integrated.load() : refdsp::comparisonLoudness (m);
+    peakDb = m.peakMax.load();
+    return lufs > -100.0f;
+}
+
+float Engine::platformGainDb (int platform, bool ref) const noexcept
+{
+    float lufs = 0.0f, peak = 0.0f;
+    if (! platformBasis (ref, lufs, peak)) return -200.0f;
+    const auto& p = refdsp::streamingPlatform (platform);
+    return refdsp::streamingGainDb (lufs, peak, p.targetLufs, p.allowUp);
 }
 
 void Engine::process (const float* mixL, const float* mixR, const float* liveL, const float* liveR,
@@ -123,10 +148,11 @@ void Engine::processChunk (const float* mixL, const float* mixR, const float* li
             heldMatchDb = juce::jlimit (-30.0f, 30.0f, mixLufs - refLufs);
         rDb = heldMatchDb;
     }
-    else if (lv == levelStream)
+    else if (lv >= levelStream)
     {
-        if (mixLufs > -100.0f) heldMixStreamDb = refdsp::streamingGainDb (mixLufs, mixMeter.peakMax.load());
-        if (refLufs > -100.0f) heldRefStreamDb = refdsp::streamingGainDb (refLufs, refMeter.peakMax.load());
+        const float gm = platformGainDb (lv - levelStream, false), gr = platformGainDb (lv - levelStream, true);
+        if (gm > -100.0f) heldMixStreamDb = gm;
+        if (gr > -100.0f) heldRefStreamDb = gr;
         mDb = heldMixStreamDb;
         rDb = heldRefStreamDb;
     }
@@ -155,6 +181,7 @@ void Engine::processChunk (const float* mixL, const float* mixR, const float* li
         const float x = abSmooth.getNextValue();
         float l = mixL[i] * gm * (1.0f - x) + refL[i] * gr * x;
         float r = mixR[i] * gm * (1.0f - x) + refR[i] * gr * x;
+        sim.process (l, r);
 
         const float s0 = wSt.getNextValue(), s1 = wMono.getNextValue(), s2 = wSide.getNextValue();
         const float mid = 0.5f * (l + r), side = 0.5f * (l - r);

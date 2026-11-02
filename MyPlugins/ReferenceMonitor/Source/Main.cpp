@@ -29,7 +29,7 @@ public:
             setUsingNativeTitleBar (true);
             setContentOwned (new MainComponent(), true);
             setResizable (true, true);
-            setResizeLimits (1000, 680, 2400, 1600);
+            setResizeLimits (1000, 740, 2400, 1600);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
             if (auto* mc = dynamic_cast<MainComponent*> (getContentComponent())) mc->grabKeyboardFocus();

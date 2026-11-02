@@ -5,11 +5,13 @@
 #include "LoudnessMeter.h"
 #include "Spectrum.h"
 #include "FilePlayer.h"
+#include "ListenSim.h"
 
 class Engine
 {
 public:
-    enum Level  { levelOff = 0, levelMatch = 1, levelStream = 2 };
+    // levelStream 以降は配信サービス（refdsp::streamingPlatform の順: Spotify / Apple Music / YouTube）
+    enum Level  { levelOff = 0, levelMatch = 1, levelStream = 2, numLevels = 5 };
     enum Source { sourceLive = 0, sourceFile = 1 };
 
     Engine();
@@ -41,6 +43,12 @@ public:
     std::atomic<float> mixPeakDb { -120.0f }, livePeakDb { -120.0f };
     double getSampleRate() const { return sr; }
 
+    // LISTEN AS（スマホ・車などの聞こえ方）。sim.target に番号を入れる
+    refdsp::ListenSim sim;
+
+    // 配信サービス platform（0 = Spotify ...）で、この曲が何 dB 上げ下げされるか。-200 = まだ測れていない
+    float platformGainDb (int platform, bool ref) const noexcept;
+
 private:
     void processChunk (const float* mixL, const float* mixR, const float* liveL, const float* liveR,
                        float* outL, float* outR, int n) noexcept;
@@ -53,6 +61,7 @@ private:
     juce::LinearSmoothedValue<float> abSmooth, wSt, wMono, wSide, wFull, wLow, wMid, wHigh;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> mixGain { 1.0f }, refGain { 1.0f }, outGain { 1.0f };
     juce::dsp::LinkwitzRileyFilter<float> xoLow, xoHigh;
+    bool platformBasis (bool ref, float& lufs, float& peakDb) const noexcept;
     float heldMatchDb = 0.0f, heldMixStreamDb = 0.0f, heldRefStreamDb = 0.0f;
     int mixSilent = 0, refSilent = 0;
     bool mixArmed = false, refArmed = false;

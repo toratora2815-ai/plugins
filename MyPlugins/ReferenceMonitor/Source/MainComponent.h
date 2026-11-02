@@ -99,6 +99,7 @@ private:
     void saveSettings();
     void loadSettings();
     void noFocus (juce::Component&);
+    void setListenAs (int idx);
 
     std::vector<float> toBands (const std::vector<double>& power, double sampleRate) const;
     void updateSpectra();
@@ -118,7 +119,7 @@ private:
     juce::ListBox refList { "refs", this };
     juce::TextButton addButton { "+ ADD" }, removeButton { "REMOVE" };
     juce::ComboBox liveAppBox;
-    Seg abSeg, levelSeg, bandSeg, stereoSeg, outSeg;
+    Seg abSeg, levelSeg, bandSeg, stereoSeg, outSeg, listenSeg;
     juce::TextButton playButton { "PLAY" }, loopButton { "LOOP" }, restartButton { "CUE ON SWITCH" }, addCueButton { "+ CUE" }, setMixButton { "SET MIX" };
     juce::OwnedArray<CueButton> cueButtons;
     juce::String cueSignature;
@@ -156,7 +157,7 @@ private:
     float displayTop = -20.0f;
     std::vector<double> snapBuf;
     juce::Rectangle<int> cueRow, headerArea, leftArea, hintArea, timelineArea, specArea, meterArea, labelsRow1, labelsRow2;
-    juce::Rectangle<int> levelLabel, bandLabel, stereoLabel, trimLabel, outLabel, volLabel;
+    juce::Rectangle<int> levelLabel, bandLabel, stereoLabel, trimLabel, outLabel, volLabel, listenLabel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

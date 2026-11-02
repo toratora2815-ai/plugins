@@ -67,10 +67,19 @@ void Seg::resized()
 // ============================================================================
 MainComponent::MainComponent()
     : abSeg ({ "MY MIX  (Logic)", "REFERENCE" }, { mixCol, refCol }, [this] (int i) { setAB (i == 1); }),
-      levelSeg ({ "OFF", "MATCH", "-14 LUFS" }, { good }, [this] (int i) { engine.level = i; saveSettings(); }),
+      levelSeg ({ "OFF", "MATCH", "SPOTIFY", "APPLE", "YOUTUBE" }, { good }, [this] (int i)
+                 {
+                     engine.level = i;
+                     saveSettings();
+                     if (i >= Engine::levelStream)
+                         flash (juce::String (refdsp::streamingPlatform (i - Engine::levelStream).name)
+                                + ": both songs are turned up/down the way the service does it (whole-song loudness). "
+                                  "If yours gets turned down more than the reference, the extra loudness is wasted.");
+                 }),
       bandSeg ({ "FULL", "LOW", "MID", "HIGH" }, { selCol }, [this] (int i) { engine.band = i; saveSettings(); }),
       stereoSeg ({ "STEREO", "MONO", "SIDE" }, { selCol }, [this] (int i) { engine.stereo = i; saveSettings(); }),
-      outSeg ({ "A", "B" }, { selCol }, [this] (int) { saveSettings(); captureError.clear(); retryAt = 0; })
+      outSeg ({ "A", "B" }, { selCol }, [this] (int) { saveSettings(); captureError.clear(); retryAt = 0; }),
+      listenSeg ({ "OFF", "PHONE", "LAPTOP", "EARBUDS", "BT SPEAKER", "CAR", "CLUB" }, { selCol, warn }, [this] (int i) { setListenAs (i); })
 {
     for (float f = fMin; f <= fMax; f *= std::pow (2.0f, 1.0f / 6.0f))
         centers.push_back (f);
@@ -80,14 +89,14 @@ MainComponent::MainComponent()
     refList.setOutlineThickness (0);
 
     for (auto* c : std::initializer_list<juce::Component*> {
-             &refList, &addButton, &removeButton, &liveAppBox, &abSeg, &levelSeg, &bandSeg, &stereoSeg, &outSeg,
+             &refList, &addButton, &removeButton, &liveAppBox, &abSeg, &levelSeg, &bandSeg, &stereoSeg, &outSeg, &listenSeg,
              &playButton, &loopButton, &restartButton, &addCueButton, &setMixButton, &resetButton, &dimButton, &muteButton,
              &pinButton, &bypassButton, &trimSlider, &volumeSlider, &outABox, &outBBox })
     {
         addAndMakeVisible (c);
         noFocus (*c);
     }
-    for (auto* s : { &abSeg, &levelSeg, &bandSeg, &stereoSeg, &outSeg })
+    for (auto* s : { &abSeg, &levelSeg, &bandSeg, &stereoSeg, &outSeg, &listenSeg })
         for (auto* b : s->buttons) noFocus (*b);
 
     styleToggle (loopButton, selCol);
@@ -169,7 +178,7 @@ MainComponent::MainComponent()
     selectItem (selectedRow);
 
     setWantsKeyboardFocus (true);
-    setSize (1180, 780);
+    setSize (1180, 840);
     startTimerHz (25);
 }
 
@@ -179,6 +188,17 @@ MainComponent::~MainComponent()
     saveSettings();
     capture.stop();
     loader.removeAllJobs (true, 5000);
+}
+
+// LISTEN AS: 鳴らし先の聞こえ方を切り替える（自分の曲にも参照曲にもかかる）
+void MainComponent::setListenAs (int idx)
+{
+    idx = juce::jlimit (0, refdsp::ListenSim::kNumPresets - 1, idx);
+    engine.sim.target = idx;
+    listenSeg.setIndex (idx);
+    saveSettings();
+    if (idx > 0) flash (refdsp::ListenSim::preset (idx).hint);
+    else         flashMessage.clear();
 }
 
 void MainComponent::noFocus (juce::Component& c)
@@ -193,7 +213,8 @@ void MainComponent::noFocus (juce::Component& c)
 void MainComponent::loadSettings()
 {
     auto& s = library.settings;
-    engine.level  = (int) s.getWithDefault ("level", 1);
+    engine.level  = juce::jlimit (0, Engine::numLevels - 1, (int) s.getWithDefault ("level", 1));
+    engine.sim.target = juce::jlimit (0, refdsp::ListenSim::kNumPresets - 1, (int) s.getWithDefault ("listen", 0));
     engine.band   = (int) s.getWithDefault ("band", 0);
     engine.stereo = (int) s.getWithDefault ("stereo", 0);
     engine.trimDb = (float) (double) s.getWithDefault ("trim", 0.0);
@@ -207,6 +228,7 @@ void MainComponent::loadSettings()
     pinButton.setToggleState ((bool) s.getWithDefault ("pin", false), juce::dontSendNotification);
 
     levelSeg.setIndex (engine.level);
+    listenSeg.setIndex (engine.sim.target.load());
     bandSeg.setIndex (engine.band);
     stereoSeg.setIndex (engine.stereo);
     outSeg.setIndex ((int) s.getWithDefault ("outSel", 0));
@@ -219,6 +241,7 @@ void MainComponent::saveSettings()
 {
     auto& s = library.settings;
     s.set ("level", engine.level.load());
+    s.set ("listen", engine.sim.target.load());
     s.set ("band", engine.band.load());
     s.set ("stereo", engine.stereo.load());
     s.set ("trim", (double) engine.trimDb.load());
@@ -417,6 +440,17 @@ void MainComponent::loadFileAsync (const juce::String& path)
                 maxV = juce::jmax (maxV, pk);
             }
             for (auto& v : a->overview) v /= maxV;
+
+            // 曲全体の音量（配信サービスの正規化に使う）
+            refdsp::LoudnessMeter lm;
+            lm.prepare (a->sampleRate);
+            for (int pos = 0; pos < len; pos += 4096)
+            {
+                const int k = juce::jmin (4096, len - pos);
+                lm.process (a->buffer.getReadPointer (0, pos), a->buffer.getReadPointer (1, pos), k);
+            }
+            a->integratedLufs = lm.gatedSeconds.load() > 0.0f ? lm.integrated.load() : -200.0f;
+            a->peakDb = lm.peakMax.load();
         }
         const juce::ScopedLock sl (pendingLock);
         pendingAudio = std::move (a);
@@ -823,6 +857,8 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
     if (c == 's' || c == 'S') { setMixPosition (activeCue, false); return true; }
     if (c == 'm' || c == 'M') { stereoSeg.setIndex (engine.stereo == 1 ? 0 : 1); engine.stereo = stereoSeg.getIndex(); return true; }
     if (c == 'd' || c == 'D') { engine.dim = ! engine.dim.load(); return true; }
+    if (c == 't' || c == 'T') { setListenAs ((engine.sim.target.load() + 1) % refdsp::ListenSim::kNumPresets); return true; }
+    if (c == '0')             { setListenAs (0); return true; }
     return false;
 }
 
@@ -1103,7 +1139,7 @@ void MainComponent::paint (juce::Graphics& g)
     {
         g.setColour (warn);
         g.setFont (juce::FontOptions (12.0f));
-        g.drawFittedText (statusHint, hintArea, juce::Justification::topLeft, 4);
+        g.drawFittedText (statusHint, hintArea, juce::Justification::topLeft, 6);
     }
 
     g.setColour (text.withAlpha (0.6f));
@@ -1114,10 +1150,11 @@ void MainComponent::paint (juce::Graphics& g)
     g.drawText ("REF TRIM",  trimLabel,   juce::Justification::centredLeft);
     g.drawText ("OUTPUT  (A / B)", outLabel, juce::Justification::centredLeft);
     g.drawText ("VOLUME",    volLabel,    juce::Justification::centredLeft);
+    g.drawText ("LISTEN AS  (T = next, 0 = off)  -  applies to both songs, loudness kept equal", listenLabel, juce::Justification::centredLeft);
 
     g.setColour (text.withAlpha (0.4f));
-    g.drawText ("Keys: SPACE = A/B   1-9 = cue   P = play   C = add cue   S = set MIX position   L = loop   M = mono   D = dim",
-                specArea.getX(), meterArea.getBottom() + 2, 700, 14, juce::Justification::centredLeft);
+    g.drawText ("Keys: SPACE = A/B   1-9 = cue   P = play   C = add cue   S = set MIX position   L = loop   M = mono   D = dim   T = listen as",
+                specArea.getX(), meterArea.getBottom() + 2, 760, 14, juce::Justification::centredLeft);
 }
 
 void MainComponent::drawTimeline (juce::Graphics& g, juce::Rectangle<float> r)
@@ -1291,7 +1328,7 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
 
     auto& m = engine.mixMeter;
     auto& f = engine.refMeter;
-    struct Row { const char* name; float a, b; int dec; bool diff; };
+    struct Row { const char* name; float a, b; int dec; bool diff; bool plus = false; };
     const bool mOk = m.signalPresent.load(), fOk = f.signalPresent.load();
     const float mixPsr = mOk ? m.peakShort.load() - m.shortTerm.load() : -100.0f;
     const float refPsr = fOk ? f.peakShort.load() - f.shortTerm.load() : -100.0f;
@@ -1308,10 +1345,14 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
         { "DYNAMICS (PSR)",  mixPsr, refPsr, 1, true },
         { "CORRELATION",     mOk ? m.correlation.load() : -100.0f, fOk ? f.correlation.load() : -100.0f, 2, false },
         { "SIDE %",          mOk ? m.sideRatio.load() * 100.0f : -100.0f, fOk ? f.sideRatio.load() * 100.0f : -100.0f, 0, true },
-        { "GAIN APPLIED dB", engine.mixGainDb.load(), engine.refGainDb.load(), 1, false },
+        { "GAIN APPLIED dB", engine.mixGainDb.load(), engine.refGainDb.load(), 1, false, true },
+        // 配信サービスで何 dB 上げ下げされるか（曲全体の音量で決まる）
+        { "SPOTIFY dB",      engine.platformGainDb (0, false), engine.platformGainDb (0, true), 1, false, true },
+        { "APPLE MUSIC dB",  engine.platformGainDb (1, false), engine.platformGainDb (1, true), 1, false, true },
+        { "YOUTUBE dB",      engine.platformGainDb (2, false), engine.platformGainDb (2, true), 1, false, true },
     };
 
-    const int rowH = juce::jmin (28, r.getHeight() / 13);
+    const int rowH = juce::jmin (26, r.getHeight() / 17);
     const int colW = 58;
     const int nameW = r.getWidth() - 3 * colW;
     auto header = r.removeFromTop (rowH);
@@ -1331,7 +1372,7 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
         g.setColour (row.name[0] == 'H' ? text : text.withAlpha (0.65f));
         g.drawText (row.name, line.removeFromLeft (nameW), juce::Justification::centredLeft);
         g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
-        const bool plus = row.name[0] == 'G';
+        const bool plus = row.plus;
         g.setColour (mixCol.brighter (0.3f));
         g.drawText (fmt (row.a, row.dec, plus), line.removeFromLeft (colW), juce::Justification::centredRight);
         g.setColour (refCol.brighter (0.2f));
@@ -1345,7 +1386,8 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
     g.setColour (text.withAlpha (0.5f));
     g.drawFittedText ("HEARD = what you actually hear after LEVEL (MATCH makes the two equal). "
                       "3s / 10s / SECTION = each song's own loudness before matching. "
-                      "SECTION restarts on cue jump or after 1.5 s of silence. PSR: lower = more compressed.",
+                      "SECTION restarts on cue jump or after 1.5 s of silence. PSR: lower = more compressed. "
+                      "SPOTIFY / APPLE / YOUTUBE = how much each service turns the song down (-) or up (+).",
                       r.withTrimmedTop (4), juce::Justification::topLeft, 4);
 }
 
@@ -1372,7 +1414,7 @@ void MainComponent::resized()
     liveAppBox.setBounds (liveRow);
     auto btnRow = left.removeFromBottom (30);
     left.removeFromBottom (6);
-    hintArea = left.removeFromBottom (60);   // 注意書き用
+    hintArea = left.removeFromBottom (84);   // 注意書き用
     left.removeFromBottom (6);
     addButton.setBounds (btnRow.removeFromLeft (btnRow.getWidth() / 2 - 3));
     btnRow.removeFromLeft (6);
@@ -1407,10 +1449,12 @@ void MainComponent::resized()
     timelineArea = area.removeFromTop (60);
     area.removeFromTop (8);
 
-    // 下の2段
+    // 下の3段
     auto row2 = area.removeFromBottom (48);
     area.removeFromBottom (6);
     auto row1 = area.removeFromBottom (48);
+    area.removeFromBottom (6);
+    auto row0 = area.removeFromBottom (48);
     area.removeFromBottom (22);
     auto col = [] (juce::Rectangle<int>& row, int w, juce::Rectangle<int>& label)
     {
@@ -1419,9 +1463,10 @@ void MainComponent::resized()
         label = c.removeFromTop (16);
         return c.reduced (0, 2);
     };
-    levelSeg.setBounds  (col (row1, 230, levelLabel));
+    stereoSeg.setBounds (col (row0, 200, stereoLabel));
+    listenSeg.setBounds (col (row0, row0.getWidth(), listenLabel));
+    levelSeg.setBounds  (col (row1, 380, levelLabel));
     bandSeg.setBounds   (col (row1, 230, bandLabel));
-    stereoSeg.setBounds (col (row1, 200, stereoLabel));
     trimSlider.setBounds (col (row1, juce::jmax (120, row1.getWidth()), trimLabel));
 
     {

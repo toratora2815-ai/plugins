@@ -260,12 +260,24 @@ private:
 };
 
 // ストリーミングの音量正規化をまねたゲイン（dB）
-// 目標より大きい曲は下げる。小さい曲はピークが -1dBFS を超えない範囲でだけ上げる
-inline float streamingGainDb (float lufs, float peakDb, float targetLufs = -14.0f) noexcept
+// 目標より大きい曲は下げる。小さい曲は allowUp のときだけ、ピークが -1dBFS を超えない範囲で上げる
+inline float streamingGainDb (float lufs, float peakDb, float targetLufs = -14.0f, bool allowUp = true) noexcept
 {
     float g = targetLufs - lufs;
-    if (g > 0.0f) g = std::min (g, std::max (0.0f, -1.0f - peakDb));
+    if (g > 0.0f) g = allowUp ? std::min (g, std::max (0.0f, -1.0f - peakDb)) : 0.0f;
     return g;
+}
+
+// 配信サービスごとの基準（公開されている標準設定の値）
+struct StreamingPlatform { const char* name; float targetLufs; bool allowUp; };
+inline const StreamingPlatform& streamingPlatform (int i) noexcept
+{
+    static const StreamingPlatform p[] = {
+        { "SPOTIFY", -14.0f, true },        // 標準の音量。小さい曲はピークの余裕の分だけ上げる
+        { "APPLE MUSIC", -16.0f, true },    // サウンドチェック
+        { "YOUTUBE", -14.0f, false },       // 下げるだけ
+    };
+    return p[std::clamp (i, 0, 2)];
 }
 
 // 音量合わせに使うラウドネス: 直近 10 秒のゲート付き平均（2 秒以上たまっていれば）。

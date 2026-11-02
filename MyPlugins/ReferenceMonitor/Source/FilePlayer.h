@@ -19,6 +19,8 @@ struct RefAudio
     double sampleRate = 44100.0;
     juce::String path, name;
     std::vector<float> overview;       // 波形の概形（0〜1）
+    float integratedLufs = -200.0f;    // 曲全体の音量（配信サービスの正規化に使う）。-200 = 不明
+    float peakDb = -120.0f;
     double lengthSeconds() const { return buffer.getNumSamples() / sampleRate; }
 };
 
@@ -33,6 +35,8 @@ public:
         posFrames = 0.0;
         positionSec = 0.0;
         lengthSec = audio != nullptr ? audio->lengthSeconds() : 0.0;
+        fileLufs = audio != nullptr ? audio->integratedLufs : -200.0f;
+        filePeakDb = audio != nullptr ? audio->peakDb : -120.0f;
         playing = false;
         return next;
     }
@@ -46,6 +50,7 @@ public:
 
     std::atomic<bool> playing { false };
     std::atomic<double> positionSec { 0.0 }, lengthSec { 0.0 };
+    std::atomic<float> fileLufs { -200.0f }, filePeakDb { -120.0f };
     std::atomic<int> jumpCounter { 0 };   // ループで頭に戻った回数（UI がメーターの区切りに使う）
 
     // ---- オーディオスレッド ----
