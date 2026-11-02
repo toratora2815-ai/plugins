@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: [WoolFuzz, Nebula, PorchDrive, BalanceScope, Reference]
+        plugin: [WoolFuzz, Nebula, PorchDrive, BalanceScope, Reference, HorizonSpread]
     runs-on: macos-latest
 
     steps:
