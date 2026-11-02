@@ -8,6 +8,10 @@ on:
         description: "この名前のものだけビルド（空なら全部）"
         required: false
         default: ""
+      runner:
+        description: "使う Mac（混んでいるときは macos-15-intel を試す）"
+        required: false
+        default: "macos-latest"
 
 # Releases にビルド結果を置くための権限
 permissions:
@@ -80,7 +84,7 @@ jobs:
       fail-fast: false
       matrix:
         plugin: ${{ fromJSON(needs.detect.outputs.plugins) }}
-    runs-on: macos-latest
+    runs-on: ${{ github.event.inputs.runner || 'macos-latest' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -131,7 +135,7 @@ jobs:
       fail-fast: false
       matrix:
         app: ${{ fromJSON(needs.detect.outputs.apps) }}
-    runs-on: macos-latest
+    runs-on: ${{ github.event.inputs.runner || 'macos-latest' }}
 
     steps:
       - uses: actions/checkout@v4

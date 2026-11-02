@@ -19,6 +19,7 @@
     - push 時は、変更があったフォルダのものだけビルドされる（build.yml や CLAUDE.md だけの変更では何もビルドしない）
     - 手動で動かすとき（Actions →「Run workflow」）は、`only` に名前を入れるとそれだけ、空なら全部ビルド
       - Claude から: `gh api -X POST repos/toratora2815-ai/plugins/actions/workflows/build.yml/dispatches -f ref=main -f "inputs[only]=<名前>"`
+      - GitHub の Mac（arm64）が混んでビルドが始まらないときは、`-f "inputs[runner]=macos-15-intel"` を付けると別の Mac で動く
     - ビルド結果は Artifacts と、Releases の `latest` に置かれる
   - `MyPlugins/<名前>/` … 各プラグイン（CMakeLists.txt, Source/, README.md）
 - 新しいプラグインを足しても build.yml を書き換える必要はない（自動で見つかる）
