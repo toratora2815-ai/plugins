@@ -121,7 +121,7 @@ MainComponent::MainComponent()
     };
 
     playButton.onClick = [this] { togglePlay(); };
-    loopButton.onClick = [this] { loopOn = ! loopOn; updateLoop(); saveSettings(); };
+    loopButton.onClick = [this] { loopOn = ! loopOn; updateLoop(); saveSettings(); explainLoop(); };
     restartButton.onClick = [this] { restartOnSwitch = ! restartOnSwitch; saveSettings(); };
     addCueButton.onClick = [this] { addCue(); };
     setMixButton.onClick = [this] { setMixPosition (activeCue, false); };
@@ -588,6 +588,18 @@ void MainComponent::jumpToCue (int idx, bool play)
     updateLoop();
 }
 
+void MainComponent::explainLoop()
+{
+    if (! loopOn) return;
+    auto* cues = currentCues();
+    if (cues == nullptr || activeCue < 0) { flash ("LOOP: pick a cue first. It loops from that cue to the next one."); return; }
+    if (activeCue + 1 >= (int) cues->size()) { flash ("LOOP: this is the last cue, so the reference loops to the end. Add a cue after it to set the loop end."); return; }
+    const bool mixOk = (*cues)[(size_t) activeCue].mixT >= 0.0 && (*cues)[(size_t) activeCue + 1].mixT >= 0.0;
+    flash (mixOk ? "LOOP: both songs loop between cue " + juce::String (activeCue + 1) + " and cue " + juce::String (activeCue + 2) + "."
+                 : "LOOP: only the reference loops. To loop Logic too, give both cue " + juce::String (activeCue + 1)
+                   + " and cue " + juce::String (activeCue + 2) + " a MY MIX position (SET MIX).");
+}
+
 void MainComponent::updateLoop()
 {
     loopButton.setToggleState (loopOn, juce::dontSendNotification);
@@ -715,10 +727,29 @@ void MainComponent::rebuildCueButtons()
 // ----------------------------------------------------------------------------
 // 定期処理
 
+// Logic 側のループ: 選んだキューの MIX 位置から、次のキューの MIX 位置までを繰り返す
+void MainComponent::checkLogicLoop()
+{
+    if (! loopOn || ! logic.hasTimecode() || ! logic.isPlaying()) return;
+    auto* cues = currentCues();
+    if (cues == nullptr || activeCue < 0 || activeCue + 1 >= (int) cues->size()) return;
+    const double s = (*cues)[(size_t) activeCue].mixT, e = (*cues)[(size_t) activeCue + 1].mixT;
+    if (s < 0.0 || e <= s + 0.5) return;
+    const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    if (now < logicLoopCooldown) return;
+    const double pos = logic.getPosition();
+    if (pos >= e - 0.05 && pos < e + 3.0)
+    {
+        logic.locateAndPlay (s);
+        logicLoopCooldown = now + 0.8;   // 戻した直後の古い位置情報で、もう一度戻さないように
+    }
+}
+
 void MainComponent::timerCallback()
 {
     ++tick;
     pickUpLoadedAudio();
+    checkLogicLoop();
     if (tick % 6 == 0) pollMusic();
     if (tick % 25 == 0) manageCapture();
     if (tick % 125 == 0) { refreshOutputs(); refreshLiveApps(); }
@@ -786,7 +817,7 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
     if (k == juce::KeyPress::spaceKey) { setAB (! engine.ab.load()); return true; }
     const auto c = k.getTextCharacter();
     if (c >= '1' && c <= '9') { jumpToCue (c - '1', true); return true; }
-    if (c == 'l' || c == 'L') { loopOn = ! loopOn; updateLoop(); saveSettings(); return true; }
+    if (c == 'l' || c == 'L') { loopOn = ! loopOn; updateLoop(); saveSettings(); explainLoop(); return true; }
     if (c == 'p' || c == 'P') { togglePlay(); return true; }
     if (c == 'c' || c == 'C') { addCue(); return true; }
     if (c == 's' || c == 'S') { setMixPosition (activeCue, false); return true; }
@@ -795,21 +826,87 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
     return false;
 }
 
+// 波形の上の x 座標 ⇔ 秒
+double MainComponent::timeAtX (int x) const
+{
+    const double len = currentLength();
+    const auto r = timelineArea.reduced (8, 0);
+    return juce::jlimit (0.0, juce::jmax (0.0, len), (double) (x - r.getX()) / juce::jmax (1, r.getWidth()) * len);
+}
+
+// x 座標の近く（6px 以内）にあるキューの番号。なければ -1
+int MainComponent::cueNearX (int x)
+{
+    auto* cues = currentCues();
+    const double len = currentLength();
+    if (cues == nullptr || len <= 0.0) return -1;
+    const auto r = timelineArea.reduced (8, 0);
+    int best = -1; float bestD = 7.0f;
+    for (int i = 0; i < (int) cues->size(); ++i)
+    {
+        const float cx = (float) r.getX() + (float) ((*cues)[(size_t) i].t / len) * (float) r.getWidth();
+        const float d = std::abs (cx - (float) x);
+        if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+}
+
+void MainComponent::mouseMove (const juce::MouseEvent& e)
+{
+    const bool overCue = timelineArea.contains (e.getPosition()) && cueNearX (e.x) >= 0;
+    setMouseCursor (overCue ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
+}
+
 void MainComponent::mouseDown (const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
-    mouseDrag (e);
+    draggingCue = -1;
+    if (! timelineArea.contains (e.getPosition()) || currentLength() <= 0.0) return;
+    draggingCue = cueNearX (e.x);
+    if (draggingCue >= 0)
+    {
+        activeCue = draggingCue;     // つかんだキューを選ぶ
+        cueSignature.clear();
+        return;
+    }
+    if (! isLive()) seekTo (timeAtX (e.x));
 }
 
 void MainComponent::mouseDrag (const juce::MouseEvent& e)
 {
-    if (! timelineArea.contains (e.getMouseDownPosition())) return;
-    const double len = currentLength();
-    if (len <= 0.0) return;
-    const auto r = timelineArea.reduced (8, 0);
-    const double t = juce::jlimit (0.0, len, (double) (e.x - r.getX()) / juce::jmax (1, r.getWidth()) * len);
-    if (isLive() && e.mouseWasDraggedSinceMouseDown()) return;   // ミュージックは離した位置だけ
-    seekTo (t);
+    if (! timelineArea.contains (e.getMouseDownPosition()) || currentLength() <= 0.0) return;
+    auto* cues = currentCues();
+    if (draggingCue >= 0 && cues != nullptr && draggingCue < (int) cues->size())
+    {
+        // キューの線をドラッグして位置を変える
+        (*cues)[(size_t) draggingCue].t = timeAtX (e.x);
+        updateLoop();
+        repaint();
+        return;
+    }
+    if (! isLive()) seekTo (timeAtX (e.x));   // ミュージックは離した位置だけ
+}
+
+void MainComponent::mouseUp (const juce::MouseEvent& e)
+{
+    auto* cues = currentCues();
+    if (draggingCue >= 0 && cues != nullptr && draggingCue < (int) cues->size())
+    {
+        // 並べ直して、動かしたキューを選んだままにする
+        const double t = (*cues)[(size_t) draggingCue].t;
+        const auto name = (*cues)[(size_t) draggingCue].name;
+        Library::sortCues (*cues);
+        for (int i = 0; i < (int) cues->size(); ++i)
+            if (std::abs ((*cues)[(size_t) i].t - t) < 1.0e-9 && (*cues)[(size_t) i].name == name) activeCue = i;
+        library.save();
+        cueSignature.clear();
+        rebuildCueButtons();
+        updateLoop();
+        flash ("Moved cue to " + mmss (t));
+    }
+    else if (isLive() && timelineArea.contains (e.getMouseDownPosition()) && currentLength() > 0.0)
+        seekTo (timeAtX (e.x));
+    draggingCue = -1;
 }
 
 // ----------------------------------------------------------------------------
@@ -1082,6 +1179,10 @@ void MainComponent::drawTimeline (juce::Graphics& g, juce::Rectangle<float> r)
             const float x = xOf ((*cues)[(size_t) i].t);
             g.setColour (i == activeCue ? text : text.withAlpha (0.6f));
             g.drawVerticalLine ((int) x, inner.getY(), inner.getBottom());
+            // つかめる印（三角）
+            juce::Path tri;
+            tri.addTriangle (x - 5.0f, r.getY(), x + 5.0f, r.getY(), x, r.getY() + 7.0f);
+            g.fillPath (tri);
             g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
             g.drawText (juce::String (i + 1), (int) x + 2, (int) inner.getY(), 20, 12, juce::Justification::centredLeft);
         }

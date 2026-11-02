@@ -47,6 +47,8 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
 
     bool isInterestedInFileDrag (const juce::StringArray&) override;
     void filesDropped (const juce::StringArray&, int, int) override;
@@ -80,6 +82,10 @@ private:
     void cueMenu (int idx);
     void renameCue (int idx);
     void updateLoop();
+    void explainLoop();
+    void checkLogicLoop();
+    double timeAtX (int x) const;
+    int cueNearX (int x);
     void rebuildCueButtons();
     void togglePlay();
     void refPlay();
@@ -135,7 +141,8 @@ private:
     double retryAt = 0.0, mixSilentSince = 0.0;
     int tick = 0;
     juce::String loadingPath, flashMessage;
-    double flashUntil = 0.0;
+    double flashUntil = 0.0, logicLoopCooldown = 0.0;
+    int draggingCue = -1;
 
     juce::ThreadPool loader { 1 };
     juce::CriticalSection pendingLock;
