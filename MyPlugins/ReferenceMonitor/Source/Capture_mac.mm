@@ -21,6 +21,9 @@
 #ifndef kAudioSubTapUIDKey
  #define kAudioSubTapUIDKey "uid"
 #endif
+#ifndef kAudioProcessPropertyDevices
+ #define kAudioProcessPropertyDevices 'pdv#'
+#endif
 #ifndef kAudioSubTapDriftCompensationKey
  #define kAudioSubTapDriftCompensationKey "drift"
 #endif
@@ -112,7 +115,19 @@ struct CaptureEngine::Impl
         f.appendText (line + "\n");
     }
 
-    AudioObjectID createTap (const std::vector<AudioObjectID>& procs, const char* name, juce::String& uidOut)
+    // アプリが音を出している出力機器（最初の1台）
+    static AudioObjectID outputDeviceOf (const std::vector<AudioObjectID>& procs)
+    {
+        for (auto p : procs)
+            for (auto d : getIDs (p, kAudioProcessPropertyDevices, kAudioObjectPropertyScopeOutput))
+                if (d != kAudioObjectUnknown && countChannels (d, kAudioObjectPropertyScopeOutput) > 0)
+                    return d;
+        return kAudioObjectUnknown;
+    }
+
+    // タップを作る。できれば「その機器の出力をチャンネルそのまま」受け取る（混ぜ直すと音量が下がるため）。
+    // できなければ、全部を2チャンネルに混ぜ直すやり方にする。
+    AudioObjectID createTap (const std::vector<AudioObjectID>& procs, const char* name, juce::String& uidOut, juce::String& infoOut)
     {
         @autoreleasepool
         {
@@ -122,15 +137,33 @@ struct CaptureEngine::Impl
             Class cls = NSClassFromString (@"CATapDescription");
             if (cls == nil) { log ("CATapDescription not available (needs macOS 14.2+)"); return kAudioObjectUnknown; }
 
-            id d = [cls alloc];
-            SEL initSel = NSSelectorFromString (@"initStereoMixdownOfProcesses:");
-            if ([d respondsToSelector:initSel])
-                d = ((id (*) (id, SEL, id)) objc_msgSend) (d, initSel, arr);
-            else
+            const AudioObjectID dev = outputDeviceOf (procs);
+            const juce::String devName = dev != kAudioObjectUnknown ? getString (dev, kAudioObjectPropertyName) : juce::String();
+            const juce::String devUID  = dev != kAudioObjectUnknown ? getString (dev, kAudioDevicePropertyDeviceUID) : juce::String();
+            const int devCh = dev != kAudioObjectUnknown ? countChannels (dev, kAudioObjectPropertyScopeOutput) : 0;
+
+            id d = nil;
+            bool direct = false;
+            SEL devSel = NSSelectorFromString (@"initWithProcesses:andDeviceUID:withStream:");
+            if (devUID.isNotEmpty() && [cls instancesRespondToSelector:devSel])
             {
-                d = [d init];
-                if ([d respondsToSelector:@selector (setProcesses:)])
-                    ((void (*) (id, SEL, id)) objc_msgSend) (d, @selector (setProcesses:), arr);
+                NSString* u = (NSString*) devUID.toCFString();
+                d = ((id (*) (id, SEL, id, id, NSInteger)) objc_msgSend) ([cls alloc], devSel, arr, u, (NSInteger) 0);
+                CFRelease ((CFStringRef) u);
+                direct = d != nil;
+            }
+            if (d == nil)
+            {
+                SEL initSel = NSSelectorFromString (@"initStereoMixdownOfProcesses:");
+                d = [cls alloc];
+                if ([d respondsToSelector:initSel])
+                    d = ((id (*) (id, SEL, id)) objc_msgSend) (d, initSel, arr);
+                else
+                {
+                    d = [d init];
+                    if ([d respondsToSelector:@selector (setProcesses:)])
+                        ((void (*) (id, SEL, id)) objc_msgSend) (d, @selector (setProcesses:), arr);
+                }
             }
 
             if ([d respondsToSelector:@selector (setName:)])
@@ -145,16 +178,39 @@ struct CaptureEngine::Impl
                 ((void (*) (id, SEL, BOOL)) objc_msgSend) (d, NSSelectorFromString (@"setPrivateTap:"), YES);
 
             AudioObjectID tapID = kAudioObjectUnknown;
-            const OSStatus st = AudioHardwareCreateProcessTap (d, &tapID);
+            OSStatus st = AudioHardwareCreateProcessTap (d, &tapID);
             [d release];
+
+            if ((st != noErr || tapID == kAudioObjectUnknown) && direct)
+            {
+                // 機器指定のタップが作れなかったときは、混ぜ直すやり方でもう一度
+                log ("device tap failed (" + juce::String ((int) st) + "), falling back to stereo mixdown");
+                direct = false;
+                id d2 = [cls alloc];
+                SEL initSel = NSSelectorFromString (@"initStereoMixdownOfProcesses:");
+                d2 = ((id (*) (id, SEL, id)) objc_msgSend) (d2, initSel, arr);
+                ((void (*) (id, SEL, NSInteger)) objc_msgSend) (d2, @selector (setMuteBehavior:), (NSInteger) 2);
+                if ([d2 respondsToSelector:NSSelectorFromString (@"setPrivate:")])
+                    ((void (*) (id, SEL, BOOL)) objc_msgSend) (d2, NSSelectorFromString (@"setPrivate:"), YES);
+                tapID = kAudioObjectUnknown;
+                st = AudioHardwareCreateProcessTap (d2, &tapID);
+                [d2 release];
+            }
             if (st != noErr || tapID == kAudioObjectUnknown)
             {
                 log (juce::String ("AudioHardwareCreateProcessTap failed: ") + juce::String ((int) st));
                 return kAudioObjectUnknown;
             }
+
+            AudioStreamBasicDescription fmt {};
+            getValue (tapID, kAudioTapPropertyFormat, fmt);
             uidOut = getString (tapID, kAudioTapPropertyUID);
+            infoOut = (devName.isNotEmpty() ? devName : juce::String ("?")) + ", "
+                    + (direct ? juce::String ((int) fmt.mChannelsPerFrame) + "ch direct" : juce::String ("stereo mix"))
+                    + (devCh > 0 ? " (device " + juce::String (devCh) + "ch)" : juce::String());
             log (juce::String ("tap created: ") + name + " id=" + juce::String ((int) tapID) + " uid=" + uidOut
-                 + " processes=" + juce::String ((int) procs.size()));
+                 + " processes=" + juce::String ((int) procs.size()) + " " + infoOut
+                 + " rate=" + juce::String (fmt.mSampleRate) + " flags=" + juce::String ((int) fmt.mFormatFlags));
             return tapID;
         }
     }
@@ -170,16 +226,17 @@ struct CaptureEngine::Impl
 
             juce::StringArray tapUIDs;
             mixSlot = refSlot = -1;
+            mixInfo.clear(); refInfo.clear();
             if (! mixProcs.empty())
             {
                 juce::String uid;
-                const auto t = createTap (mixProcs, "Reference Monitor - Mix", uid);
+                const auto t = createTap (mixProcs, "Reference Monitor - Mix", uid, mixInfo);
                 if (t != kAudioObjectUnknown && uid.isNotEmpty()) { taps.push_back (t); mixSlot = tapUIDs.size(); tapUIDs.add (uid); }
             }
             if (! refProcs.empty())
             {
                 juce::String uid;
-                const auto t = createTap (refProcs, "Reference Monitor - Reference", uid);
+                const auto t = createTap (refProcs, "Reference Monitor - Reference", uid, refInfo);
                 if (t != kAudioObjectUnknown && uid.isNotEmpty()) { taps.push_back (t); refSlot = tapUIDs.size(); tapUIDs.add (uid); }
             }
             numTaps = tapUIDs.size();
@@ -350,6 +407,7 @@ struct CaptureEngine::Impl
     bool firstRenderReported = false;
     double sampleRate = 48000.0;
     juce::StringArray logLines;
+    juce::String mixInfo, refInfo;
 };
 
 // ============================================================================
@@ -455,6 +513,8 @@ void CaptureEngine::stop()
 }
 
 bool CaptureEngine::isRunning() const { return impl->running.load(); }
+juce::String CaptureEngine::getMixInfo() const { return impl->mixInfo; }
+juce::String CaptureEngine::getRefInfo() const { return impl->refInfo; }
 double CaptureEngine::getSampleRate() const { return impl->sampleRate; }
 
 juce::String CaptureEngine::getLog() const

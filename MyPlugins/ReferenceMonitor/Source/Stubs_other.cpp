@@ -16,6 +16,8 @@ void CaptureEngine::stop() {}
 bool CaptureEngine::isRunning() const { return false; }
 double CaptureEngine::getSampleRate() const { return 48000.0; }
 juce::String CaptureEngine::getLog() const { return {}; }
+juce::String CaptureEngine::getMixInfo() const { return {}; }
+juce::String CaptureEngine::getRefInfo() const { return {}; }
 
 MusicControl::State MusicControl::poll() { State s; s.error = "unsupported"; return s; }
 void MusicControl::setPosition (double) {}

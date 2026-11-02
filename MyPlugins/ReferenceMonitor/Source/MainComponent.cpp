@@ -1014,7 +1014,7 @@ void MainComponent::updateSpectra()
         }
         else
         {
-            statusMix = "Logic Pro: receiving";
+            statusMix = "Logic Pro: receiving" + (capture.getMixInfo().isNotEmpty() ? " (" + capture.getMixInfo() + ")" : juce::String());
             statusMixColour = good;
         }
     }
@@ -1042,7 +1042,8 @@ void MainComponent::updateSpectra()
         }
         else if (musicState.title.isNotEmpty())
         {
-            statusRef = musicState.title + "  -  " + musicState.artist;
+            statusRef = musicState.title + "  -  " + musicState.artist
+                      + (capture.getRefInfo().isNotEmpty() ? "   (" + capture.getRefInfo() + ")" : juce::String());
             statusRefColour = refCol;
         }
         else

@@ -42,6 +42,8 @@ public:
     int numRefProcesses() const { return refCount; }
     double getSampleRate() const;
     juce::String getLog() const;
+    juce::String getMixInfo() const;   // 例: "Universal Audio Thunderbolt, 2ch direct"
+    juce::String getRefInfo() const;
 
     // 開始すべき構成を表す文字列（変わったらつなぎ直す）
     static juce::String makeSignature (const juce::String& outputUID, const juce::String& mixBundle, const juce::String& refBundle,
