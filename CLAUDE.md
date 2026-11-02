@@ -63,7 +63,8 @@
   v1.2.0: AUTO GAIN（標準 ON）、SIDE SOLO、内蔵プリセット11個、帯域ごとの広さメーター、MOTION のテンポ同期、
   SHIFT CLASSIC の L/R 選択、DYNAMIC（DYNAMICS タイル）。量のつまみはどのタイルでも右側に置く
 - Velvet Tamer（VelvetTamer）… レゾナンス抑制（耳に痛い響きを鳴った瞬間だけ自動で下げる）。STFT で「まわりより飛び出た所」を検出。
-  DEPTH / SHARPNESS / SELECTIVITY / ATTACK / RELEASE / FOCUS LOW・HIGH / MIX / OUTPUT / DELTA / LINK。遅延 2048 サンプル（48k）
+  DEPTH / SHARPNESS / SELECTIVITY / ATTACK / RELEASE / FOCUS LOW・HIGH / MIX / OUTPUT / DELTA / LINK。遅延 2048 サンプル（48k）。
+  v1.1.0: グラフ上で FOCUS をドラッグ、WEIGHT（7 点固定周波数の効きの強弱カーブ、ID weight0〜6）、プリセットメニュー
 - Reference Monitor（ReferenceMonitor）… 聴き比べ用の単体 Mac アプリ（macOS 14.2 以降、プロセスタップで Logic とミュージックの音を受け取る）
 
 ## Mac の Claude Code で作業するとき

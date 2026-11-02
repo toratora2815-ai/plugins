@@ -3,7 +3,7 @@
 namespace
 {
     const juce::Colour bg (0xff120f16), panel (0xff1b1621), edge (0xff2c2433),
-                       rose (0xffe58fb4), plum (0xffb59cff), text (0xffefe9f3);
+                       rose (0xffe58fb4), plum (0xffb59cff), gold (0xffffd27a), text (0xffefe9f3);
 
     constexpr int points = vt::TamerEngine::displayPoints;
     constexpr float specTop = 0.0f, specBottom = -90.0f;   // 入力スペクトルの表示範囲
@@ -27,6 +27,18 @@ VelvetTamerEditor::VelvetTamerEditor (VelvetTamerProcessor& p)
     setupToggle (link, "link", "LINK");
     delta.button.setTooltip ("Listen only to what is being removed");
     link.button.setTooltip ("Reduce both channels by the same amount");
+
+    presetBox.addItemList (VelvetTamerProcessor::presetNames(), 1);
+    presetBox.setTextWhenNothingSelected ("PRESET");
+    presetBox.setColour (juce::ComboBox::backgroundColourId, edge);
+    presetBox.setColour (juce::ComboBox::outlineColourId, edge);
+    presetBox.setColour (juce::ComboBox::textColourId, text);
+    presetBox.setColour (juce::ComboBox::arrowColourId, rose);
+    presetBox.onChange = [this]
+    {
+        if (presetBox.getSelectedId() > 0) processor.applyPreset (presetBox.getSelectedId() - 1);
+    };
+    addAndMakeVisible (presetBox);
 
     for (int i = 0; i < points; ++i) { shownSpec[i] = specBottom; shownGr[i] = 0.0f; }
 
@@ -84,6 +96,8 @@ void VelvetTamerEditor::resized()
     link.button.setBounds (header.removeFromRight (90).reduced (2, 8));
     header.removeFromRight (6);
     delta.button.setBounds (header.removeFromRight (90).reduced (2, 8));
+    header.removeFromRight (6);
+    presetBox.setBounds (header.removeFromRight (200).reduced (2, 8));
     area.removeFromTop (8);
 
     const int gap = 12;
@@ -124,6 +138,134 @@ void VelvetTamerEditor::timerCallback()
     }
     const float m = processor.engine.getMaxReductionDb();
     shownMax = m < shownMax ? m : shownMax + (m - shownMax) * 0.1f;
+    repaint (tDisplay.bounds);
+}
+
+float VelvetTamerEditor::xToFreq (float x, juce::Rectangle<float> r) const
+{
+    const float lo = vt::TamerEngine::displayLowHz, hi = vt::TamerEngine::displayHighHz;
+    return lo * std::pow (hi / lo, (x - r.getX()) / r.getWidth());
+}
+
+// WEIGHT：0 が真ん中、+100% が上、-100% が下（上下に 15% ずつ余白）
+float VelvetTamerEditor::weightToY (float w, juce::Rectangle<float> r) const
+{
+    return r.getCentreY() - w * r.getHeight() * 0.35f;
+}
+
+float VelvetTamerEditor::yToWeight (float y, juce::Rectangle<float> r) const
+{
+    return juce::jlimit (-1.0f, 1.0f, (r.getCentreY() - y) / (r.getHeight() * 0.35f));
+}
+
+juce::Rectangle<float> VelvetTamerEditor::plotArea() const
+{
+    return displayArea.toFloat().reduced (4.0f).withTrimmedBottom (16.0f);
+}
+
+int VelvetTamerEditor::findGrab (juce::Point<float> p) const
+{
+    const auto plot = plotArea();
+    if (! plot.expanded (6.0f).contains (p)) return grabNone;
+
+    for (int i = 0; i < vt::numWeights; ++i)
+    {
+        const juce::Point<float> node (freqToX (vt::weightHz[i], plot),
+                                       weightToY (param (VelvetTamerProcessor::weightId (i)) * 0.01f, plot));
+        if (node.getDistanceFrom (p) < 10.0f) return i;
+    }
+
+    const float lo = param ("low"), hi = param ("high");
+    const float x0 = freqToX (juce::jmin (lo, hi), plot), x1 = freqToX (juce::jmax (lo, hi), plot);
+    if (std::abs (p.x - x0) < 6.0f) return lo <= hi ? grabLow : grabHigh;
+    if (std::abs (p.x - x1) < 6.0f) return lo <= hi ? grabHigh : grabLow;
+    if (p.x > x0 && p.x < x1) return grabBand;
+    return grabNone;
+}
+
+std::vector<juce::RangedAudioParameter*> VelvetTamerEditor::paramsFor (int g) const
+{
+    auto& s = processor.apvts;
+    if (g >= 0 && g < vt::numWeights) return { s.getParameter (VelvetTamerProcessor::weightId (g)) };
+    if (g == grabLow)  return { s.getParameter ("low") };
+    if (g == grabHigh) return { s.getParameter ("high") };
+    if (g == grabBand) return { s.getParameter ("low"), s.getParameter ("high") };
+    return {};
+}
+
+void VelvetTamerEditor::setParam (const juce::String& id, float value)
+{
+    if (auto* p = processor.apvts.getParameter (id))
+        p->setValueNotifyingHost (p->convertTo0to1 (value));
+}
+
+void VelvetTamerEditor::mouseMove (const juce::MouseEvent& e)
+{
+    const int h = findGrab (e.position);
+    if (h != hover) { hover = h; repaint (tDisplay.bounds); }
+    setMouseCursor (h == grabNone ? juce::MouseCursor::NormalCursor
+                  : (h < vt::numWeights ? juce::MouseCursor::UpDownResizeCursor
+                  : (h == grabBand ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::LeftRightResizeCursor)));
+}
+
+void VelvetTamerEditor::mouseExit (const juce::MouseEvent&)
+{
+    if (hover != grabNone) { hover = grabNone; repaint (tDisplay.bounds); }
+    setMouseCursor (juce::MouseCursor::NormalCursor);
+}
+
+void VelvetTamerEditor::mouseDown (const juce::MouseEvent& e)
+{
+    grab = findGrab (e.position);
+    if (grab == grabNone) return;
+    for (auto* p : paramsFor (grab)) p->beginChangeGesture();
+    grabLowHz = param ("low");
+    grabHighHz = param ("high");
+    grabFreq = xToFreq (e.position.x, plotArea());
+}
+
+void VelvetTamerEditor::mouseDrag (const juce::MouseEvent& e)
+{
+    if (grab == grabNone) return;
+    const auto plot = plotArea();
+    const float f = xToFreq (e.position.x, plot);
+
+    if (grab < vt::numWeights)
+        setParam (VelvetTamerProcessor::weightId (grab), yToWeight (e.position.y, plot) * 100.0f);
+    else if (grab == grabLow)
+        setParam ("low", f);
+    else if (grab == grabHigh)
+        setParam ("high", f);
+    else
+    {
+        // 幅はそのまま、帯域ごと横に動かす（端に当たったら止める）
+        auto* lowP = processor.apvts.getParameter ("low");
+        auto* highP = processor.apvts.getParameter ("high");
+        const auto& lr = lowP->getNormalisableRange();
+        const auto& hr = highP->getNormalisableRange();
+        const float ratio = juce::jlimit (lr.start / grabLowHz, lr.end / grabLowHz, f / grabFreq);
+        const float r2 = juce::jlimit (hr.start / grabHighHz, hr.end / grabHighHz, ratio);
+        setParam ("low", grabLowHz * r2);
+        setParam ("high", grabHighHz * r2);
+    }
+    repaint (tDisplay.bounds);
+}
+
+void VelvetTamerEditor::mouseUp (const juce::MouseEvent&)
+{
+    for (auto* p : paramsFor (grab)) p->endChangeGesture();
+    grab = grabNone;
+}
+
+// ダブルクリックで初期値に戻す
+void VelvetTamerEditor::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    for (auto* p : paramsFor (findGrab (e.position)))
+    {
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (p->getDefaultValue());
+        p->endChangeGesture();
+    }
     repaint (tDisplay.bounds);
 }
 
@@ -168,7 +310,8 @@ void VelvetTamerEditor::drawDisplay (juce::Graphics& g, juce::Rectangle<float> r
 {
     g.setColour (bg);
     g.fillRoundedRectangle (r, 6.0f);
-    auto plot = r.reduced (4.0f).withTrimmedBottom (16.0f);
+    juce::ignoreUnused (r);
+    auto plot = plotArea();
 
     // 周波数の目盛り
     g.setFont (juce::FontOptions (10.0f));
@@ -194,16 +337,23 @@ void VelvetTamerEditor::drawDisplay (juce::Graphics& g, juce::Rectangle<float> r
 
     // FOCUS の外を暗くする
     {
-        const float lo = processor.apvts.getRawParameterValue ("low")->load();
-        const float hi = processor.apvts.getRawParameterValue ("high")->load();
+        const float lo = param ("low"), hi = param ("high");
         const float x0 = juce::jlimit (plot.getX(), plot.getRight(), freqToX (juce::jmin (lo, hi), plot));
         const float x1 = juce::jlimit (plot.getX(), plot.getRight(), freqToX (juce::jmax (lo, hi), plot));
         g.setColour (juce::Colours::black.withAlpha (0.35f));
         g.fillRect (plot.withRight (x0));
         g.fillRect (plot.withLeft (x1));
-        g.setColour (plum.withAlpha (0.5f));
-        g.drawVerticalLine ((int) x0, plot.getY(), plot.getBottom());
-        g.drawVerticalLine ((int) x1, plot.getY(), plot.getBottom());
+        const bool loFirst = lo <= hi;
+        auto edgeLine = [&] (float x, int which)
+        {
+            const bool hot = hover == which || grab == which || hover == grabBand || grab == grabBand;
+            g.setColour (plum.withAlpha (hot ? 1.0f : 0.5f));
+            g.fillRect (x - (hot ? 1.0f : 0.5f), plot.getY(), hot ? 2.0f : 1.0f, plot.getHeight());
+            // つまみ（つかめる目印）
+            g.fillRoundedRectangle (x - 4.0f, plot.getCentreY() - 14.0f, 8.0f, 28.0f, 3.0f);
+        };
+        edgeLine (x0, loFirst ? grabLow : grabHigh);
+        edgeLine (x1, loFirst ? grabHigh : grabLow);
     }
 
     auto xAt = [&] (int i) { return plot.getX() + plot.getWidth() * ((float) i + 0.5f) / (float) points; };
@@ -237,4 +387,52 @@ void VelvetTamerEditor::drawDisplay (juce::Graphics& g, juce::Rectangle<float> r
     g.fillPath (grPath);
     g.setColour (rose);
     g.strokePath (grPath, juce::PathStrokeType (1.6f));
+
+    // WEIGHT のカーブと点
+    {
+        float w[vt::numWeights];
+        for (int i = 0; i < vt::numWeights; ++i) w[i] = param (VelvetTamerProcessor::weightId (i)) * 0.01f;
+
+        g.setColour (gold.withAlpha (0.25f));
+        g.drawHorizontalLine ((int) plot.getCentreY(), plot.getX(), plot.getRight());
+
+        juce::Path curve;
+        for (int px = 0; px <= (int) plot.getWidth(); px += 2)
+        {
+            const float x = plot.getX() + (float) px;
+            const float f = xToFreq (x, plot);
+            float v;
+            if (f <= vt::weightHz[0]) v = w[0];
+            else if (f >= vt::weightHz[vt::numWeights - 1]) v = w[vt::numWeights - 1];
+            else
+            {
+                int i = 0;
+                while (f > vt::weightHz[i + 1]) ++i;
+                const float t = std::log (f / vt::weightHz[i]) / std::log (vt::weightHz[i + 1] / vt::weightHz[i]);
+                v = w[i] + (w[i + 1] - w[i]) * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::pi * t));
+            }
+            const float y = weightToY (v, plot);
+            if (px == 0) curve.startNewSubPath (x, y); else curve.lineTo (x, y);
+        }
+        g.setColour (gold.withAlpha (0.8f));
+        g.strokePath (curve, juce::PathStrokeType (1.4f));
+
+        g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+        for (int i = 0; i < vt::numWeights; ++i)
+        {
+            const juce::Point<float> c (freqToX (vt::weightHz[i], plot), weightToY (w[i], plot));
+            const bool hot = hover == i || grab == i;
+            const float rad = hot ? 6.5f : 5.0f;
+            g.setColour (bg);
+            g.fillEllipse (c.x - rad, c.y - rad, rad * 2, rad * 2);
+            g.setColour (gold);
+            g.drawEllipse (c.x - rad, c.y - rad, rad * 2, rad * 2, 1.6f);
+            if (hot)
+            {
+                const int pctVal = juce::roundToInt (w[i] * 100.0f);
+                g.drawText ((pctVal > 0 ? "+" : "") + juce::String (pctVal) + "%",
+                            juce::Rectangle<float> (c.x - 30, c.y - 24, 60, 14), juce::Justification::centred);
+            }
+        }
+    }
 }
