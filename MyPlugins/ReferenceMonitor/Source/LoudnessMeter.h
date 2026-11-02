@@ -88,6 +88,9 @@ public:
     std::atomic<float> peakShort { -120.0f }, peakMax { -120.0f };
     std::atomic<float> correlation { 1.0f }, sideRatio { 0.0f };
     std::atomic<float> gatedSeconds { 0.0f };
+    // 直近 10 秒の音量（ゲート付き）。音量合わせ（MATCH など）はこれを使う
+    std::atomic<float> recent { -100.0f };
+    std::atomic<float> recentSeconds { 0.0f };
     std::atomic<bool>  signalPresent { false };       // 直近3秒に音があるか
 
 private:
@@ -132,6 +135,8 @@ private:
         ringPos = 0;
         energies.fill (0.0); peaks.fill (0.0); ll.fill (0.0); rr.fill (0.0); lr.fill (0.0);
         histCount.fill (0); histEnergy.fill (0.0);
+        recentE.fill (0.0); recentPos = 0; recentCount = 0;
+        recent = -100.0f; recentSeconds = 0.0f;
         maxPeak = 0.0;
         momentary = shortTerm = integrated = -100.0f;
         peakShort = peakMax = -120.0f;
@@ -183,6 +188,15 @@ private:
             sideRatio = (float) (side / (mid + side + 1.0e-20));
         }
 
+        // 直近 10 秒（400ms ブロック × 100 個）のゲート付き音量
+        if (numBlocks >= 4)
+        {
+            recentE[(size_t) recentPos] = m;
+            recentPos = (recentPos + 1) % kRecentBlocks;
+            recentCount = std::min (recentCount + 1, kRecentBlocks);
+            updateRecent();
+        }
+
         // 積算ラウドネス（400msブロックを100msごとに、ゲーティング付き）
         if (numBlocks >= 4)
         {
@@ -194,6 +208,24 @@ private:
                 histEnergy[(size_t) bin] += m;
                 updateIntegrated();
             }
+        }
+    }
+
+    void updateRecent() noexcept
+    {
+        const double absGate = 1.0e-7 * 1.17;   // ≒ -70 LUFS
+        double e = 0.0; int n = 0;
+        for (int i = 0; i < recentCount; ++i)
+            if (recentE[(size_t) i] > absGate) { e += recentE[(size_t) i]; ++n; }
+        if (n == 0) { recentSeconds = 0.0f; return; }
+        const double relGate = (e / n) * 0.1;   // 平均より 10 LU 下
+        double e2 = 0.0; int n2 = 0;
+        for (int i = 0; i < recentCount; ++i)
+            if (recentE[(size_t) i] > absGate && recentE[(size_t) i] > relGate) { e2 += recentE[(size_t) i]; ++n2; }
+        if (n2 > 0)
+        {
+            recent = energyToLufs (e2 / n2);
+            recentSeconds = (float) n2 * 0.1f;
         }
     }
 
@@ -221,6 +253,9 @@ private:
     std::array<double, kShortBlocks> energies {}, peaks {}, ll {}, rr {}, lr {};
     std::array<long long, kHistBins> histCount {};
     std::array<double, kHistBins> histEnergy {};
+    static constexpr int kRecentBlocks = 100;   // 100ms × 100 = 10 秒
+    std::array<double, kRecentBlocks> recentE {};
+    int recentPos = 0, recentCount = 0;
     std::atomic<bool> resetFlag { false };
 };
 
@@ -233,11 +268,12 @@ inline float streamingGainDb (float lufs, float peakDb, float targetLufs = -14.0
     return g;
 }
 
-// 比較に使うラウドネス。十分たまっていれば積算値、なければ3秒値。不明なら -200
+// 音量合わせに使うラウドネス: 直近 10 秒のゲート付き平均（2 秒以上たまっていれば）。
+// 足りなければ 3 秒値。音がなければ -200（＝前の値を保つ）
 inline float comparisonLoudness (const LoudnessMeter& m) noexcept
 {
-    if (m.gatedSeconds.load() >= 3.0f) return m.integrated.load();
-    if (m.signalPresent.load())        return m.shortTerm.load();
+    if (m.recentSeconds.load() >= 2.0f && m.signalPresent.load()) return m.recent.load();
+    if (m.signalPresent.load())                                     return m.shortTerm.load();
     return -200.0f;
 }
 

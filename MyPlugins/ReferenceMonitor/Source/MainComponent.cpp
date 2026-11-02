@@ -1337,7 +1337,7 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
     g.setFont (juce::FontOptions (11.0f));
     g.setColour (text.withAlpha (0.5f));
     g.drawFittedText ("SECTION = loudness since the section started (resets on cue jump, or when playback restarts after 1.5 s of silence). "
-                      "PSR: lower = more compressed.",
+                      "PSR: lower = more compressed. MATCH follows the last 10 s of both songs.",
                       r.withTrimmedTop (4), juce::Justification::topLeft, 4);
 }
 
