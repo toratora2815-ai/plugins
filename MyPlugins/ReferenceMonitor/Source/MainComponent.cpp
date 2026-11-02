@@ -1294,9 +1294,14 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
     const bool mOk = m.signalPresent.load(), fOk = f.signalPresent.load();
     const float mixPsr = mOk ? m.peakShort.load() - m.shortTerm.load() : -100.0f;
     const float refPsr = fOk ? f.peakShort.load() - f.shortTerm.load() : -100.0f;
+    const bool mRec = mOk && m.recentSeconds.load() > 0.0f, fRec = fOk && f.recentSeconds.load() > 0.0f;
+    const float mixHeard = mRec ? m.recent.load() + engine.mixGainDb.load() : -100.0f;
+    const float refHeard = fRec ? f.recent.load() + engine.refGainDb.load() : -100.0f;
     const Row rows[] = {
-        { "SHORT-TERM LUFS", mOk ? m.shortTerm.load() : -100.0f, fOk ? f.shortTerm.load() : -100.0f, 1, true },
-        { "SECTION LUFS",    m.gatedSeconds > 0.0f ? m.integrated.load() : -100.0f, f.gatedSeconds > 0.0f ? f.integrated.load() : -100.0f, 1, true },
+        { "HEARD LUFS (10s)", mixHeard, refHeard, 1, true },
+        { "3s LUFS",          mOk ? m.shortTerm.load() : -100.0f, fOk ? f.shortTerm.load() : -100.0f, 1, true },
+        { "10s LUFS",         mRec ? m.recent.load() : -100.0f, fRec ? f.recent.load() : -100.0f, 1, true },
+        { "SECTION LUFS",     m.gatedSeconds > 0.0f ? m.integrated.load() : -100.0f, f.gatedSeconds > 0.0f ? f.integrated.load() : -100.0f, 1, true },
         { "PEAK (3s) dBFS",  mOk ? m.peakShort.load() : -100.0f, fOk ? f.peakShort.load() : -100.0f, 1, true },
         { "MAX PEAK dBFS",   m.peakMax.load() > -119.0f ? m.peakMax.load() : -100.0f, f.peakMax.load() > -119.0f ? f.peakMax.load() : -100.0f, 1, false },
         { "DYNAMICS (PSR)",  mixPsr, refPsr, 1, true },
@@ -1305,7 +1310,7 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
         { "GAIN APPLIED dB", engine.mixGainDb.load(), engine.refGainDb.load(), 1, false },
     };
 
-    const int rowH = juce::jmin (30, r.getHeight() / 10);
+    const int rowH = juce::jmin (28, r.getHeight() / 13);
     const int colW = 58;
     const int nameW = r.getWidth() - 3 * colW;
     auto header = r.removeFromTop (rowH);
@@ -1322,6 +1327,7 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
         g.drawHorizontalLine (line.getY(), (float) line.getX(), (float) line.getRight());
         g.setColour (text.withAlpha (0.65f));
         g.setFont (juce::FontOptions (11.0f));
+        g.setColour (row.name[0] == 'H' ? text : text.withAlpha (0.65f));
         g.drawText (row.name, line.removeFromLeft (nameW), juce::Justification::centredLeft);
         g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
         const bool plus = row.name[0] == 'G';
@@ -1336,8 +1342,9 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
 
     g.setFont (juce::FontOptions (11.0f));
     g.setColour (text.withAlpha (0.5f));
-    g.drawFittedText ("SECTION = loudness since the section started (resets on cue jump, or when playback restarts after 1.5 s of silence). "
-                      "PSR: lower = more compressed. MATCH follows the last 10 s of both songs.",
+    g.drawFittedText ("HEARD = what you actually hear after LEVEL (MATCH makes the two equal). "
+                      "3s / 10s / SECTION = each song's own loudness before matching. "
+                      "SECTION restarts on cue jump or after 1.5 s of silence. PSR: lower = more compressed.",
                       r.withTrimmedTop (4), juce::Justification::topLeft, 4);
 }
 
