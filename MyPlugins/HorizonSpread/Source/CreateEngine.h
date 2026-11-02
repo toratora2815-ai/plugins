@@ -5,7 +5,7 @@
 //
 // 基本の考え方は SHAPE と同じ：Mid から新しい Side を作って足すだけなので、
 // モノラルにすると足した分は消えて元の音に戻る。
-// 例外は SHIFT の CLASSIC モードだけ（右を本当に遅らせるので、モノラルでは少し音色が変わる）。
+// 例外は SHIFT の CLASSIC モードだけ（片側を本当に遅らせるので、モノラルでは少し音色が変わる）。
 //
 // 流れ：SHIFT → DOUBLE → BANDS → HAZE で Side を足す → MOTION で Side の広がりを揺らす
 //      → ここで出来た L/R を SHAPE 側が「最初からあった広がり」として整える
@@ -16,6 +16,7 @@ namespace hs
         bool  shiftOn = true;
         float shiftMs = 8.0f, shiftAmt = 0.0f;      // ms, 0..1
         bool  shiftClassic = false;
+        bool  shiftLeft = false;                    // CLASSIC で遅らせる側（false = 右）
 
         bool  doubleOn = true;
         float doubleAmt = 0.0f, detune = 8.0f;      // 0..1, セント
@@ -31,6 +32,7 @@ namespace hs
 
         bool  motionOn = true;
         float motionRate = 0.25f, motionDepth = 0.0f;   // Hz, 0..1
+        double motionPhase = -1.0;                  // 0..1 ならテンポに合わせて位相をそろえる（-1 = 自由）
     };
 
     class CreateEngine
@@ -43,7 +45,7 @@ namespace hs
         {
             sr = sampleRate;
             const int maxDelay = (int) std::ceil (0.064 * sr);
-            for (auto* d : { &dlMid, &dlR, &dlHaze })
+            for (auto* d : { &dlMid, &dlL, &dlR, &dlHaze })
                 d->setMaxSamples (maxDelay);
             for (auto& c : apL) c.setMaxSamples (maxDelay);
             for (auto& c : apR) c.setMaxSamples (maxDelay);
@@ -51,7 +53,7 @@ namespace hs
             hazeHP.setCutoff (120.0, sr);
             tiltLP.setCutoff (1000.0, sr);
 
-            for (auto* s : { &sShiftAmt, &sClassic, &sDoubleAmt, &sBandsAmt, &sTilt,
+            for (auto* s : { &sShiftAmt, &sClassic, &sLeft, &sDoubleAmt, &sBandsAmt, &sTilt,
                              &sHazeAmt, &sSmooth, &sMotionDepth })
                 s->reset (sr, 0.05);
             for (auto* s : { &sShiftMs, &sDetune, &sHazeSize, &sMotionRate })
@@ -65,7 +67,7 @@ namespace hs
 
         void reset()
         {
-            for (auto* d : { &dlMid, &dlR, &dlHaze }) d->reset();
+            for (auto* d : { &dlMid, &dlL, &dlR, &dlHaze }) d->reset();
             for (auto& c : apL) c.reset();
             for (auto& c : apR) c.reset();
             for (auto& b : bp) b.reset();
@@ -86,6 +88,7 @@ namespace hs
             set (sShiftAmt, c.shiftOn ? c.shiftAmt * sp : 0.0f);
             set (sShiftMs, c.shiftMs);
             set (sClassic, c.shiftClassic ? 1.0f : 0.0f);
+            set (sLeft, c.shiftLeft ? 1.0f : 0.0f);
             set (sDoubleAmt, c.doubleOn ? c.doubleAmt * sp : 0.0f);
             set (sDetune, c.detune);
             set (sBandsAmt, c.bandsOn ? c.bandsAmt * sp : 0.0f);
@@ -96,6 +99,9 @@ namespace hs
             set (sMotionDepth, c.motionOn ? c.motionDepth * sp : 0.0f);
             set (sMotionRate, c.motionRate);
 
+            if (c.motionPhase >= 0.0)
+                motionPhase = c.motionPhase - std::floor (c.motionPhase);
+
             if (c.bands != bandCount)
                 setupBands (juce::jlimit (4, maxBands, c.bands));
             first = false;
@@ -104,13 +110,15 @@ namespace hs
         // 1サンプル処理。入力 L/R から、作った後の Mid / Side を返す
         void process (float l, float r, float& mOut, float& sOut)
         {
-            // ---- SHIFT（CLASSIC）：右を本当に遅らせる ----
+            // ---- SHIFT（CLASSIC）：片側を本当に遅らせる ----
             const float shiftSamples = sShiftMs.getNextValue() * 0.001f * (float) sr;
             const float shiftAmt = sShiftAmt.getNextValue();
             const float classic = sClassic.getNextValue();
-            const float rDelayed = dlR.read (shiftSamples);
-            dlR.push (r);
-            r += classic * shiftAmt * (rDelayed - r);
+            const float left = sLeft.getNextValue();
+            const float lDelayed = dlL.read (shiftSamples), rDelayed = dlR.read (shiftSamples);
+            dlL.push (l); dlR.push (r);
+            l += classic * shiftAmt * left * (lDelayed - l);
+            r += classic * shiftAmt * (1.0f - left) * (rDelayed - r);
 
             const float m = 0.5f * (l + r);
             float s = 0.5f * (l - r);
@@ -276,7 +284,7 @@ namespace hs
         double sr = 48000.0;
         bool first = true;
 
-        FracDelay dlMid, dlR, dlHaze;
+        FracDelay dlMid, dlL, dlR, dlHaze;
         float shUp = 0.0f, shDown = 0.5f;
         double wobble1 = 0.0, wobble2 = 0.37, motionPhase = 0.0;
 
@@ -293,7 +301,7 @@ namespace hs
 
         float mz1 = 0.0f, mz2 = 0.0f;
 
-        juce::SmoothedValue<float> sShiftAmt, sClassic, sDoubleAmt, sBandsAmt, sTilt, sHazeAmt, sSmooth, sMotionDepth;
+        juce::SmoothedValue<float> sShiftAmt, sClassic, sLeft, sDoubleAmt, sBandsAmt, sTilt, sHazeAmt, sSmooth, sMotionDepth;
         juce::SmoothedValue<float> sShiftMs, sDetune, sHazeSize, sMotionRate;
     };
 }

@@ -106,7 +106,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout HorizonSpreadProcessor::crea
     addB2 ("shiftOn", "Shift On", true);
     addF2 ("shiftTime", "Shift Time", skewed (0.1f, 25.0f, 0.01f, 6.0f), 8.0f, ms);
     addF2 ("shiftAmount", "Shift Amount", { 0.0f, 100.0f, 0.1f }, 0.0f, pct);
-    addC2 ("shiftMode", "Shift Mode", { "SAFE", "CLASSIC" });
+    addC2 ("shiftMode", "Shift Mode", { "SAFE", "CLASSIC R", "CLASSIC L" });
 
     // DOUBLE（ダブル）
     addB2 ("doubleOn", "Double On", true);
@@ -129,6 +129,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout HorizonSpreadProcessor::crea
     addB2 ("motionOn", "Motion On", true);
     addF2 ("motionRate", "Motion Rate", skewed (0.05f, 2.0f, 0.01f, 0.3f), 0.25f, rate);
     addF2 ("motionDepth", "Motion Depth", { 0.0f, 100.0f, 0.1f }, 0.0f, pct);
+    addC2 ("motionSync", "Motion Sync", { "FREE", "1/4", "1/2", "1 BAR", "2 BARS", "4 BARS" });
+
+    // 確認用・使い勝手
+    addB2 ("autoGain", "Auto Gain", true);
+    addB2 ("sideSolo", "Side Solo", false);
+    addF2 ("dynamic", "Dynamic Width", { 0.0f, 100.0f, 0.1f }, 0.0f, pct);
 
     return { v.begin(), v.end() };
 }
@@ -171,12 +177,17 @@ hs::ShapeSettings HorizonSpreadProcessor::readSettings() const
     s.bassMonoHz = f ("bassMono");
     s.guard = b ("guard");
     s.mono = b ("monoCheck");
+    s.sideSolo = b ("sideSolo");
+    s.autoGain = b ("autoGain");
+    s.dynamic = f ("dynamic") * 0.01f;
 
     auto& c = s.create;
     c.shiftOn = b ("shiftOn");
     c.shiftMs = f ("shiftTime");
     c.shiftAmt = f ("shiftAmount") * 0.01f;
-    c.shiftClassic = b ("shiftMode");
+    const int shiftMode = juce::roundToInt (f ("shiftMode"));
+    c.shiftClassic = shiftMode > 0;
+    c.shiftLeft = shiftMode == 2;
     c.doubleOn = b ("doubleOn");
     c.doubleAmt = f ("doubleAmount") * 0.01f;
     c.detune = f ("detune");
@@ -203,8 +214,103 @@ void HorizonSpreadProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
         buffer.copyFrom (1, 0, buffer, 0, 0, buffer.getNumSamples());
     if (buffer.getNumChannels() < 2) return;
 
-    engine.setSettings (readSettings());
+    auto settings = readSettings();
+
+    // MOTION をテンポに合わせる（1/4 = 1拍で1周 … 4 BARS = 4小節で1周）
+    const int sync = juce::roundToInt (apvts.getRawParameterValue ("motionSync")->load());
+    if (sync > 0)
+    {
+        double bpm = 120.0, beats = 1.0;
+        int num = 4, den = 4;
+        juce::Optional<double> ppq;
+        bool playing = false;
+        if (auto* ph = getPlayHead())
+            if (auto pos = ph->getPosition())
+            {
+                if (auto b = pos->getBpm()) bpm = *b;
+                if (auto ts = pos->getTimeSignature()) { num = ts->numerator; den = ts->denominator; }
+                ppq = pos->getPpqPosition();
+                playing = pos->getIsPlaying();
+            }
+        const double barBeats = num * 4.0 / juce::jmax (1, den);
+        const double table[] { 1.0, 2.0, barBeats, 2.0 * barBeats, 4.0 * barBeats };
+        beats = table[juce::jlimit (1, 5, sync) - 1];
+        settings.create.motionRate = (float) (juce::jmax (20.0, bpm) / 60.0 / beats);
+        if (playing && ppq.hasValue())
+            settings.create.motionPhase = std::fmod (*ppq / beats, 1.0);
+    }
+
+    engine.setSettings (settings);
     engine.process (buffer.getWritePointer (0), buffer.getWritePointer (1), buffer.getNumSamples());
+}
+
+// ---- 内蔵プリセット ----
+// 書いていないつまみは初期値に戻る。値はつまみの表示と同じ単位（% / Hz / dB / ms / ct）、モードは番号
+namespace
+{
+    struct Preset
+    {
+        const char* name;
+        std::vector<std::pair<const char*, float>> values;
+    };
+
+    const std::vector<Preset>& presets()
+    {
+        static const std::vector<Preset> list {
+            { "Init", {} },
+            { "Master - Gentle", { { "widthLow", 95 }, { "widthMid", 110 }, { "widthHigh", 120 },
+                                   { "air", 1.5f }, { "airFreq", 12000 }, { "bassMono", 100 } } },
+            { "Stereo Piano", { { "widthLow", 80 }, { "widthMid", 120 }, { "widthHigh", 135 }, { "air", 2 }, { "airFreq", 10000 },
+                                { "drive", 15 }, { "transient", -40 }, { "bassMono", 150 } } },
+            { "Piano - Widen Mono", { { "widthLow", 80 }, { "hazeAmount", 30 }, { "hazeSize", 50 }, { "hazeMode", 1 },
+                                      { "doubleAmount", 15 }, { "detune", 5 }, { "bassMono", 150 } } },
+            { "Synth Pad", { { "widthMid", 150 }, { "widthHigh", 170 }, { "air", 3 }, { "airFreq", 8000 }, { "drive", 30 },
+                             { "bassMono", 120 }, { "hazeAmount", 50 }, { "hazeSize", 70 },
+                             { "motionDepth", 40 }, { "motionRate", 0.2f }, { "motionSync", 4 } } },
+            { "Drum Bus", { { "widthLow", 70 }, { "widthMid", 110 }, { "widthHigh", 130 }, { "air", 2 }, { "airFreq", 10000 },
+                            { "transient", -70 }, { "bassMono", 150 } } },
+            { "Backing Vocals", { { "widthMid", 140 }, { "widthHigh", 150 }, { "air", 2.5f }, { "airFreq", 9000 },
+                                  { "drive", 20 }, { "transient", -30 }, { "bassMono", 200 } } },
+            { "Lead Vocal - Subtle", { { "widthMid", 100 }, { "widthHigh", 115 }, { "doubleAmount", 25 }, { "detune", 6 },
+                                       { "hazeAmount", 20 }, { "hazeSize", 40 }, { "hazeMode", 1 }, { "bassMono", 150 } } },
+            { "Chorus Vocals - Wide", { { "doubleAmount", 60 }, { "detune", 12 }, { "shiftAmount", 40 }, { "shiftTime", 12 },
+                                        { "hazeAmount", 30 }, { "bassMono", 200 } } },
+            { "Mono Guitar", { { "shiftAmount", 50 }, { "shiftTime", 10 }, { "bandsAmount", 40 }, { "bandsCount", 8 },
+                               { "bassMono", 120 } } },
+            { "Wide & Moving", { { "widthHigh", 150 }, { "hazeAmount", 40 }, { "hazeSize", 60 }, { "doubleAmount", 30 },
+                                 { "motionDepth", 50 }, { "motionSync", 5 }, { "dynamic", 40 } } },
+        };
+        return list;
+    }
+}
+
+int HorizonSpreadProcessor::getNumPrograms() { return (int) presets().size(); }
+
+const juce::String HorizonSpreadProcessor::getProgramName (int index)
+{
+    return juce::isPositiveAndBelow (index, (int) presets().size()) ? juce::String (presets()[(size_t) index].name) : juce::String();
+}
+
+void HorizonSpreadProcessor::setCurrentProgram (int index)
+{
+    if (! juce::isPositiveAndBelow (index, (int) presets().size())) return;
+    currentProgram = index;
+    const auto& preset = presets()[(size_t) index];
+
+    // 確認用ボタンはプリセットで変えない
+    const juce::StringArray keep { "monoCheck", "sideSolo", "autoGain" };
+    for (auto* p : getParameters())
+    {
+        auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p);
+        if (rp == nullptr || keep.contains (rp->getParameterID())) continue;
+        float value = rp->getDefaultValue();
+        for (auto& [id, v] : preset.values)
+            if (rp->getParameterID() == id)
+                value = rp->convertTo0to1 (v);
+        rp->beginChangeGesture();
+        rp->setValueNotifyingHost (value);
+        rp->endChangeGesture();
+    }
 }
 
 // AUTO の結果を WIDTH のつまみに反映（メッセージスレッドで）

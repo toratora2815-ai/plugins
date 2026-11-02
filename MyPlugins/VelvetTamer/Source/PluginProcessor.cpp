@@ -11,6 +11,11 @@ namespace
     }
     juce::String db (float v, int)   { return (v > 0.05f ? "+" : "") + juce::String (v, 1) + " dB"; }
     juce::String ms (float v, int)   { return juce::String (v, v < 10.0f ? 1 : 0) + " ms"; }
+    juce::String signedPct (float v, int)
+    {
+        const int i = juce::roundToInt (v);
+        return (i > 0 ? "+" : "") + juce::String (i) + " %";
+    }
 
     juce::NormalisableRange<float> skewed (float lo, float hi, float step, float centre)
     {
@@ -26,6 +31,8 @@ VelvetTamerProcessor::VelvetTamerProcessor()
                         .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
+    for (int i = 0; i < vt::numWeights; ++i)
+        weightParams[i] = apvts.getRawParameterValue (weightId (i));
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout VelvetTamerProcessor::createLayout()
@@ -63,6 +70,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout VelvetTamerProcessor::create
     addB ("delta", "Delta", false);
     addB ("link",  "Stereo Link", true);
 
+    // WEIGHT（帯域ごとの効きの強弱。v1.1 で追加。バージョン 2）
+    for (int i = 0; i < vt::numWeights; ++i)
+    {
+        const float f = vt::weightHz[i];
+        const auto name = "Weight " + (f >= 1000.0f ? juce::String (f / 1000.0f, 1) + " kHz" : juce::String ((int) f) + " Hz");
+        v.push_back (std::make_unique<F> (juce::ParameterID { weightId (i), 2 }, name,
+                                          juce::NormalisableRange<float> (-100.0f, 100.0f, 1.0f), 0.0f,
+                                          A().withStringFromValueFunction (signedPct)));
+    }
+
     return { v.begin(), v.end() };
 }
 
@@ -96,6 +113,8 @@ vt::Settings VelvetTamerProcessor::readSettings() const
     s.outDb = f ("output");
     s.delta = f ("delta") > 0.5f;
     s.link = f ("link") > 0.5f;
+    for (int i = 0; i < vt::numWeights; ++i)
+        s.weight[i] = weightParams[i]->load() * 0.01f;
     return s;
 }
 
@@ -104,6 +123,58 @@ void VelvetTamerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     juce::ScopedNoDenormals noDenormals;
     engine.setSettings (readSettings());
     engine.process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), buffer.getNumSamples());
+}
+
+namespace
+{
+    struct Preset
+    {
+        const char* name;
+        float depth, sharpness, selectivity, attack, release, low, high;
+        float weight[vt::numWeights];   // %（100 / 250 / 600 / 1.5k / 3.5k / 7k / 14k）
+    };
+
+    const Preset presets[] =
+    {
+        { "Default",            50, 50, 40,  5,  80,  300, 16000, {   0,   0,   0,   0,   0,   0,   0 } },
+        { "Vocal Harshness",    40, 60, 40,  5,  80, 1500, 10000, {   0,   0,   0,  10,  50,  20, -30 } },
+        { "Sibilance",          60, 40, 30,  1,  40, 4000, 16000, {   0,   0,   0,   0, -20,  60,  20 } },
+        { "Distorted Guitar",   50, 50, 40,  5, 100, 1000, 12000, {   0,   0,   0,  20,  40,  20, -20 } },
+        { "Boxy Low-Mids",      40, 30, 50, 10, 150,  150,   800, {   0,  40,  40,   0,   0,   0,   0 } },
+        { "Mix Bus Polish",     20, 50, 60, 10, 150,  300, 16000, {   0, -20, -20,   0,  30,  20,   0 } },
+    };
+}
+
+juce::StringArray VelvetTamerProcessor::presetNames()
+{
+    juce::StringArray names;
+    for (auto& p : presets) names.add (p.name);
+    return names;
+}
+
+void VelvetTamerProcessor::applyPreset (int index)
+{
+    if (! juce::isPositiveAndBelow (index, (int) std::size (presets))) return;
+    const auto& p = presets[index];
+
+    auto set = [this] (const juce::String& id, float value)
+    {
+        if (auto* param = apvts.getParameter (id))
+        {
+            param->beginChangeGesture();
+            param->setValueNotifyingHost (param->convertTo0to1 (value));
+            param->endChangeGesture();
+        }
+    };
+    set ("depth", p.depth);
+    set ("sharpness", p.sharpness);
+    set ("selectivity", p.selectivity);
+    set ("attack", p.attack);
+    set ("release", p.release);
+    set ("low", p.low);
+    set ("high", p.high);
+    for (int i = 0; i < vt::numWeights; ++i)
+        set (weightId (i), p.weight[i]);
 }
 
 void VelvetTamerProcessor::getStateInformation (juce::MemoryBlock& destData)

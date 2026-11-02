@@ -23,7 +23,8 @@ HorizonSpreadEditor::HorizonSpreadEditor (HorizonSpreadProcessor& p)
     setupKnob (air, "air", "GAIN");
     setupKnob (airFreq, "airFreq", "FREQ");
     setupKnob (drive, "drive", "AMOUNT");
-    setupKnob (transient, "transient", "AMOUNT");
+    setupKnob (transient, "transient", "TRANSIENT");
+    setupKnob (dynamic, "dynamic", "DYNAMIC");
     setupKnob (bassMono, "bassMono", "BASS MONO");
 
     setupToggle (widthOn, "widthOn", "ON");
@@ -32,6 +33,11 @@ HorizonSpreadEditor::HorizonSpreadEditor (HorizonSpreadProcessor& p)
     setupToggle (transOn, "transOn", "ON");
     setupToggle (guard, "guard", "GUARD");
     setupToggle (monoCheck, "monoCheck", "MONO CHECK");
+    setupToggle (sideSolo, "sideSolo", "SIDE SOLO");
+    setupToggle (autoGain, "autoGain", "AUTO GAIN");
+    monoCheck.button.setTooltip ("Hold to listen in mono (turn off before bouncing)");
+    sideSolo.button.setTooltip ("Listen to the width (Side) only (turn off before bouncing)");
+    autoGain.button.setTooltip ("Keep the loudness the same as the original, so wider does not just mean louder");
 
     setupKnob (shiftTime, "shiftTime", "TIME");
     setupKnob (shiftAmt, "shiftAmount", "AMOUNT");
@@ -49,7 +55,8 @@ HorizonSpreadEditor::HorizonSpreadEditor (HorizonSpreadProcessor& p)
     setupToggle (bandsOn, "bandsOn", "ON");
     setupToggle (hazeOn, "hazeOn", "ON");
     setupToggle (motionOn, "motionOn", "ON");
-    setupMode (shiftMode, "shiftMode", "SAFE", "CLASSIC");
+    setupChoice (shiftMode, "shiftMode");
+    setupChoice (motionSync, "motionSync");
     setupMode (bandsMode, "bandsMode", "ALT", "TILT");
     setupMode (hazeMode, "hazeMode", "CLOUD", "SMOOTH");
 
@@ -73,10 +80,29 @@ HorizonSpreadEditor::HorizonSpreadEditor (HorizonSpreadProcessor& p)
     shapeTab.onClick  = [this] { showPage (true); };
     createTab.onClick = [this] { showPage (false); };
 
+    presetBox.setColour (juce::ComboBox::backgroundColourId, panel);
+    presetBox.setColour (juce::ComboBox::outlineColourId, edge);
+    presetBox.setColour (juce::ComboBox::textColourId, text);
+    presetBox.setColour (juce::ComboBox::arrowColourId, sky);
+    presetBox.setTextWhenNothingSelected ("PRESET");
+    for (int i = 0; i < processor.getNumPrograms(); ++i)
+        presetBox.addItem (processor.getProgramName (i), i + 1);
+    presetBox.onChange = [this]
+    {
+        const int idx = presetBox.getSelectedItemIndex();
+        if (idx >= 0 && idx != processor.getCurrentProgram())
+        {
+            processor.setCurrentProgram (idx);
+            shownProgram = idx;
+        }
+    };
+    addAndMakeVisible (presetBox);
+    refreshPresetBox();
+
     scopeL.resize (1024);
     scopeR.resize (1024);
 
-    setSize (1120, 600);
+    setSize (1180, 600);
     showPage (true);
     startTimerHz (30);
 }
@@ -128,21 +154,45 @@ void HorizonSpreadEditor::setupMode (Toggle& t, const char* id, const juce::Stri
     b->onStateChange();
 }
 
-void HorizonSpreadEditor::placeHeader (const Tile& tile, Toggle& on, Toggle* mode)
+void HorizonSpreadEditor::setupChoice (Choice& c, const char* id)
+{
+    c.box.setColour (juce::ComboBox::backgroundColourId, edge);
+    c.box.setColour (juce::ComboBox::outlineColourId, edge);
+    c.box.setColour (juce::ComboBox::textColourId, text.withAlpha (0.85f));
+    c.box.setColour (juce::ComboBox::arrowColourId, sky);
+    c.box.setJustificationType (juce::Justification::centred);
+    if (auto* p = dynamic_cast<juce::AudioParameterChoice*> (processor.apvts.getParameter (id)))
+        c.box.addItemList (p->choices, 1);
+    addAndMakeVisible (c.box);
+    c.attachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (processor.apvts, id, c.box);
+}
+
+void HorizonSpreadEditor::placeHeader (const Tile& tile, Toggle& on, juce::Component* mode, int modeWidth)
 {
     auto hdr = tile.bounds.reduced (8).removeFromTop (22);
     on.button.setBounds (hdr.removeFromRight (40));
     if (mode != nullptr)
     {
         hdr.removeFromRight (6);
-        mode->button.setBounds (hdr.removeFromRight (66));
+        mode->setBounds (hdr.removeFromRight (modeWidth));
+    }
+}
+
+// Logic のメニューからプリセットが変わったときも、画面のメニューを合わせる
+void HorizonSpreadEditor::refreshPresetBox()
+{
+    const int idx = processor.getCurrentProgram();
+    if (idx != shownProgram)
+    {
+        shownProgram = idx;
+        presetBox.setSelectedItemIndex (idx, juce::dontSendNotification);
     }
 }
 
 void HorizonSpreadEditor::showPage (bool shape)
 {
     shapePage = shape;
-    for (auto* k : { &wLow, &wMid, &wHigh, &xLow, &xHigh, &air, &airFreq, &drive, &transient })
+    for (auto* k : { &wLow, &wMid, &wHigh, &xLow, &xHigh, &air, &airFreq, &drive, &transient, &dynamic })
     {
         k->slider.setVisible (shape);
         k->label.setVisible (shape);
@@ -156,8 +206,10 @@ void HorizonSpreadEditor::showPage (bool shape)
         k->slider.setVisible (! shape);
         k->label.setVisible (! shape);
     }
-    for (auto* t : { &shiftOn, &doubleOn, &bandsOn, &hazeOn, &motionOn, &shiftMode, &bandsMode, &hazeMode })
+    for (auto* t : { &shiftOn, &doubleOn, &bandsOn, &hazeOn, &motionOn, &bandsMode, &hazeMode })
         t->button.setVisible (! shape);
+    shiftMode.box.setVisible (! shape);
+    motionSync.box.setVisible (! shape);
     repaint();
 }
 
@@ -177,10 +229,13 @@ void HorizonSpreadEditor::resized()
 {
     auto area = getLocalBounds().reduced (14);
     auto header = area.removeFromTop (44);
-    monoCheck.button.setBounds (header.removeFromRight (120).reduced (2, 8));
-    header.removeFromLeft (juce::jmax (0, header.getWidth() / 2 - 110));
-    shapeTab.setBounds (header.removeFromLeft (110).reduced (2, 8));
-    createTab.setBounds (header.removeFromLeft (110).reduced (2, 8));
+    monoCheck.button.setBounds (header.removeFromRight (110).reduced (2, 8));
+    sideSolo.button.setBounds (header.removeFromRight (100).reduced (2, 8));
+    header.removeFromRight (8);
+    presetBox.setBounds (header.removeFromRight (190).reduced (2, 8));
+    header.removeFromLeft (406);
+    shapeTab.setBounds (header.removeFromLeft (100).reduced (2, 8));
+    createTab.setBounds (header.removeFromLeft (100).reduced (2, 8));
     area.removeFromTop (8);
 
     const int gap = 12;
@@ -194,6 +249,7 @@ void HorizonSpreadEditor::resized()
 
     // 左：SPREAD / MIX / OUTPUT
     {
+        autoGain.button.setBounds (tMaster.bounds.reduced (8).removeFromTop (22).removeFromRight (84));
         auto c = tileContent (tMaster);
         auto bigArea = c.removeFromTop (c.getHeight() - 112);
         placeKnob (spread, bigArea.reduced (10, 0));
@@ -209,7 +265,9 @@ void HorizonSpreadEditor::resized()
         scopeArea = c.removeFromTop (c.getWidth());
         c.removeFromTop (10);
         corrArea = c.removeFromTop (44);
-        statusArea = c;
+        statusArea = c.removeFromTop (20);
+        c.removeFromTop (6);
+        bandArea = c;
     }
 
     // 中央：CREATE ページ（上段 SHIFT / DOUBLE / BANDS、下段 HAZE / MOTION）
@@ -230,16 +288,17 @@ void HorizonSpreadEditor::resized()
             placeKnob (a, r.removeFromLeft (r.getWidth() / 2));
             placeKnob (b, r);
         };
+        // 量（AMOUNT / DEPTH）のつまみは、どのタイルでも右側
         pair (tShift, shiftTime, shiftAmt);
-        pair (tDouble, dblAmt, detune);
-        pair (tBands, bandsAmt, bandsCount);
-        pair (tHaze, hazeAmt, hazeSize);
+        pair (tDouble, detune, dblAmt);
+        pair (tBands, bandsCount, bandsAmt);
+        pair (tHaze, hazeSize, hazeAmt);
         pair (tMotion, motionRate, motionDepth);
-        placeHeader (tShift, shiftOn, &shiftMode);
+        placeHeader (tShift, shiftOn, &shiftMode.box, 92);
         placeHeader (tDouble, doubleOn);
-        placeHeader (tBands, bandsOn, &bandsMode);
-        placeHeader (tHaze, hazeOn, &hazeMode);
-        placeHeader (tMotion, motionOn);
+        placeHeader (tBands, bandsOn, &bandsMode.button);
+        placeHeader (tHaze, hazeOn, &hazeMode.button);
+        placeHeader (tMotion, motionOn, &motionSync.box, 84);
     }
 
     // 中央：SHAPE ページ
@@ -262,20 +321,24 @@ void HorizonSpreadEditor::resized()
         autoButton.setBounds (hdr.removeFromRight (64));
     }
 
-    const float unit = (float) (area.getWidth() - 2 * gap) / 5.0f;   // AIR 2、DRIVE 1.5、TRANSIENT 1.5
-    tAir.bounds = area.removeFromLeft ((int) (unit * 2.0f));     area.removeFromLeft (gap);
-    tDrive.bounds = area.removeFromLeft ((int) (unit * 1.5f));   area.removeFromLeft (gap);
+    const float unit = (float) (area.getWidth() - 2 * gap) / 5.0f;   // AIR 1.8、DRIVE 1.3、DYNAMICS 1.9
+    tAir.bounds = area.removeFromLeft ((int) (unit * 1.8f));     area.removeFromLeft (gap);
+    tDrive.bounds = area.removeFromLeft ((int) (unit * 1.3f));   area.removeFromLeft (gap);
     tTrans.bounds = area;
 
     {
         auto c = tileContent (tAir);
-        placeKnob (air, c.removeFromLeft (c.getWidth() / 2));
-        placeKnob (airFreq, c);
+        placeKnob (airFreq, c.removeFromLeft (c.getWidth() / 2));
+        placeKnob (air, c);
         airOn.button.setBounds (tAir.bounds.reduced (8).removeFromTop (22).removeFromRight (40));
     }
     placeKnob (drive, tileContent (tDrive));
     driveOn.button.setBounds (tDrive.bounds.reduced (8).removeFromTop (22).removeFromRight (40));
-    placeKnob (transient, tileContent (tTrans));
+    {
+        auto c = tileContent (tTrans);
+        placeKnob (transient, c.removeFromLeft (c.getWidth() / 2));
+        placeKnob (dynamic, c);
+    }
     transOn.button.setBounds (tTrans.bounds.reduced (8).removeFromTop (22).removeFromRight (40));
     {
         auto c = tileContent (tSafety);
@@ -292,6 +355,10 @@ void HorizonSpreadEditor::timerCallback()
         pk = juce::jmax (pk, std::abs (scopeL[i]), std::abs (scopeR[i]));
     scopePeak = juce::jmax (0.05f, pk > scopePeak ? pk : scopePeak * 0.97f);
     repaint (tMeter.bounds);
+    refreshPresetBox();
+    const bool synced = motionSync.box.getSelectedItemIndex() > 0;
+    motionRate.slider.setEnabled (! synced);
+    motionRate.slider.setAlpha (synced ? 0.35f : 1.0f);
     repaint (tWidth.bounds.withTrimmedTop (tWidth.bounds.getHeight() - 30));
 }
 
@@ -356,7 +423,13 @@ void HorizonSpreadEditor::paint (juce::Graphics& g)
     g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
     g.setColour (gr < -0.1f ? dusk : text.withAlpha (0.4f));
     g.drawText (gr < -0.1f ? "GUARD  " + juce::String (gr, 1) + " dB" : "GUARD  idle",
-                statusArea.withHeight (20), juce::Justification::centredLeft);
+                statusArea, juce::Justification::centredLeft);
+    const float ag = processor.engine.getAutoGainDb();
+    const bool agOn = processor.apvts.getRawParameterValue ("autoGain")->load() > 0.5f;
+    g.setColour (agOn ? sky.withAlpha (0.8f) : text.withAlpha (0.4f));
+    g.drawText (agOn ? "AUTO GAIN  " + juce::String (ag, 1) + " dB" : "AUTO GAIN  off",
+                statusArea, juce::Justification::centredRight);
+    drawBandMeter (g, bandArea.toFloat());
 }
 
 void HorizonSpreadEditor::drawScope (juce::Graphics& g, juce::Rectangle<float> r)
@@ -414,4 +487,38 @@ void HorizonSpreadEditor::drawCorrelation (juce::Graphics& g, juce::Rectangle<fl
     g.setColour (text.withAlpha (0.4f));
     g.drawText ("-1", r.removeFromTop (14).withWidth (20), juce::Justification::centredLeft);
     g.drawText ("+1", juce::Rectangle<float> (bar.getRight() - 20, bar.getBottom(), 20, 14), juce::Justification::centredRight);
+}
+
+// 帯域ごとの広さ（Side が Mid より何 dB 小さいか）。白い線は AUTO の目安（市販曲によくある広さ）
+void HorizonSpreadEditor::drawBandMeter (juce::Graphics& g, juce::Rectangle<float> r)
+{
+    g.setFont (juce::FontOptions (11.0f));
+    g.setColour (text.withAlpha (0.6f));
+    g.drawText ("WIDTH BY BAND", r.removeFromTop (16), juce::Justification::centredLeft);
+
+    const char* names[] { "LOW", "MID", "HIGH" };
+    constexpr float lo = -30.0f, hi = 3.0f;
+    for (int b = 0; b < 3; ++b)
+    {
+        auto row = r.removeFromTop (22).reduced (0, 4);
+        g.setColour (text.withAlpha (0.6f));
+        g.drawText (names[b], row.removeFromLeft (36), juce::Justification::centredLeft);
+        auto value = row.removeFromRight (52);
+        g.setColour (bg);
+        g.fillRoundedRectangle (row, 3.0f);
+
+        const float db = processor.engine.getBandWidthDb (b);
+        const float x = juce::jlimit (0.0f, 1.0f, (db - lo) / (hi - lo));
+        g.setColour (db > -1.0f ? danger : sky.withAlpha (0.8f));
+        g.fillRoundedRectangle (row.withWidth (row.getWidth() * x), 3.0f);
+
+        const float tx = row.getX() + row.getWidth() * (hs::SpreadEngine::autoTargetDb[b] - lo) / (hi - lo);
+        g.setColour (text.withAlpha (0.8f));
+        g.drawVerticalLine ((int) tx, row.getY() - 2.0f, row.getBottom() + 2.0f);
+
+        g.setColour (text.withAlpha (0.6f));
+        g.drawText (db <= -59.0f ? juce::String ("-") : juce::String (db, 1) + " dB", value, juce::Justification::centredRight);
+    }
+    g.setColour (text.withAlpha (0.35f));
+    g.drawText ("narrow  <---  |  target  --->  wide", r.removeFromTop (16), juce::Justification::centredLeft);
 }

@@ -15,10 +15,14 @@
 // 流れ（フレームごと）：
 //   窓をかけて FFT → 各周波数の強さ（dB）→ 少しだけ時間方向にならす
 //   → まわりの平均（なだらかな「山なみ」）を求める → 山なみより THRESHOLD 以上飛び出た分を DEPTH の割合で下げる
-//   → FOCUS（LOW〜HIGH）の外は効かせない → 隣の周波数とならす → ATTACK / RELEASE で時間方向にならす
+//   → WEIGHT（帯域ごとの効きの強弱）を掛ける → FOCUS（LOW〜HIGH）の外は効かせない → 隣の周波数とならす → ATTACK / RELEASE で時間方向にならす
 //   → 逆 FFT して重ね合わせ → MIX / DELTA / OUTPUT
 namespace vt
 {
+    // WEIGHT の点（周波数は固定。上下だけ動かす）
+    static constexpr int numWeights = 7;
+    static constexpr float weightHz[numWeights] = { 100.0f, 250.0f, 600.0f, 1500.0f, 3500.0f, 7000.0f, 14000.0f };
+
     struct Settings
     {
         float depth = 0.5f;          // 0..1  下げる強さ
@@ -29,6 +33,7 @@ namespace vt
         float mix = 1.0f, outDb = 0.0f;
         bool delta = false;          // 削った音だけを聴く
         bool link = true;            // 左右で同じだけ下げる
+        float weight[numWeights] { 0, 0, 0, 0, 0, 0, 0 };   // -1..+1  -1 でその帯域は効かない、+1 で 2 倍効く
     };
 
     // 2 のべき乗サイズの複素 FFT（反復型）
@@ -133,6 +138,8 @@ namespace vt
             tmpB.assign ((size_t) bins, 0.0f);
             focus.assign ((size_t) bins, 0.0f);
             lastLow = lastHigh = -1.0f;
+            weightCurve.assign ((size_t) bins, 1.0f);
+            for (auto& w : lastWeight) w = -99.0f;
 
             // 画面用：表示の各点がどの周波数ビンの範囲か
             for (int p = 0; p <= displayPoints; ++p)
@@ -213,6 +220,30 @@ namespace vt
             }
         }
 
+        // 点と点の間は、周波数の対数でなめらかにつなぐ（両端の外は端の値のまま）
+        void updateWeights()
+        {
+            if (std::equal (std::begin (lastWeight), std::end (lastWeight), std::begin (settings.weight))) return;
+            std::copy (std::begin (settings.weight), std::end (settings.weight), std::begin (lastWeight));
+
+            for (int k = 0; k < bins; ++k)
+            {
+                const float f = std::max (1.0f, (float) (k * sr / n));
+                float w;
+                if (f <= weightHz[0]) w = lastWeight[0];
+                else if (f >= weightHz[numWeights - 1]) w = lastWeight[numWeights - 1];
+                else
+                {
+                    int i = 0;
+                    while (f > weightHz[i + 1]) ++i;
+                    const float t = std::log (f / weightHz[i]) / std::log (weightHz[i + 1] / weightHz[i]);
+                    const float s2 = 0.5f - 0.5f * std::cos ((float) M_PI * t);
+                    w = lastWeight[i] + (lastWeight[i + 1] - lastWeight[i]) * s2;
+                }
+                weightCurve[(size_t) k] = 1.0f + std::clamp (w, -1.0f, 1.0f);
+            }
+        }
+
         // 周波数の対数の幅でならした平均（prefix 和で一気に）
         void logSmooth (const std::vector<float>& src, std::vector<float>& dst, float octaves)
         {
@@ -252,7 +283,7 @@ namespace vt
                     // やわらかい膝：0 付近はゆるやかに効き始める
                     const float e = over <= -knee ? 0.0f
                                   : (over >= knee ? over : (over + knee) * (over + knee) / (4.0f * knee));
-                    t = -std::min (maxDepthDb, e * depth) * focus[(size_t) k];
+                    t = -std::min (maxDepthDb, e * depth * weightCurve[(size_t) k]) * focus[(size_t) k];
                 }
                 tmpB[(size_t) k] = t;
             }
@@ -276,6 +307,7 @@ namespace vt
         void processFrame (int numCh)
         {
             updateFocus();
+            updateWeights();
 
             for (int c = 0; c < numCh; ++c)
             {
@@ -373,7 +405,8 @@ namespace vt
         std::vector<float> inFifo[maxChannels], outFifo[maxChannels], outAcc[maxChannels], dryDelay[maxChannels];
         std::vector<std::complex<float>> spec[maxChannels];
         std::vector<float> detPow[maxChannels], grDb[maxChannels];
-        std::vector<float> levelDb, tmpA, tmpB, focus;
+        std::vector<float> levelDb, tmpA, tmpB, focus, weightCurve;
+        float lastWeight[numWeights] {};
         std::vector<double> prefix;
 
         int dispEdge[displayPoints + 1] {};

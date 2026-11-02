@@ -11,7 +11,8 @@
 // 流れ：
 //   入力 → CREATE（生み出す側、CreateEngine.h）→ M/S → Side を4帯域に分ける（BASS MONO / LOW / MID / HIGH）→ 帯域ごとの幅
 //        → AIR（Side の高域シェルフ）→ TRANSIENT（アタックで Side を増減）
-//        → SIDE DRIVE（Side の倍音、4倍オーバーサンプリング）→ GUARD → MIX → 出力
+//        → SIDE DRIVE（Side の倍音、4倍オーバーサンプリング）→ DYNAMIC → GUARD → MIX
+//        → AUTO GAIN（元の音と同じ音量に戻す）→ OUTPUT → SIDE SOLO / MONO CHECK → 出力
 //   MIX と GUARD の基準になる「元の音」は、CREATE を通す前の入力
 namespace hs
 {
@@ -33,10 +34,13 @@ namespace hs
 
         bool  transOn = true;
         float transient = 0.0f;      // -1..1
+        float dynamic = 0.0f;        // 0..1  静かなところは広く、大きいところは少し狭く
 
         float bassMonoHz = 20.0f;    // 20 以下 = OFF
         bool  guard = true;
         bool  mono = false;
+        bool  sideSolo = false;
+        bool  autoGain = true;
 
         CreateSettings create;
     };
@@ -55,7 +59,7 @@ namespace hs
 
             juce::dsp::ProcessSpec spec { sr, (juce::uint32) blockMax, 1 };
             for (auto* f : { &xoB, &xoL, &xoH, &apS0L, &apS0H, &apS1H, &apMB, &apML, &apMH, &anML, &anMH,
-                             &apDMB, &apDML, &apDMH, &apDSB, &apDSL, &apDSH })
+                             &apDMB, &apDML, &apDMH, &apDSB, &apDSL, &apDSH, &mtML, &mtMH, &mtSL, &mtSH })
             {
                 f->prepare (spec);
                 f->setType (juce::dsp::LinkwitzRileyFilterType::lowpass);
@@ -79,7 +83,8 @@ namespace hs
             residueDC.setCutoff (25.0, sr);
 
             // スムージング時間
-            for (auto* s : { &sW, &sWL, &sWM, &sWH, &sBass, &sAirDb, &sDrive, &sTrans, &sGuardOn, &sMix, &sOut, &sMono })
+            for (auto* s : { &sW, &sWL, &sWM, &sWH, &sBass, &sAirDb, &sDrive, &sTrans, &sGuardOn, &sMix, &sOut, &sMono,
+                             &sSolo, &sAutoGain, &sDyn })
                 s->reset (sr, 0.05);
             for (auto* s : { &sFB, &sFL, &sFH, &sAirF })
                 s->reset (sr, 0.08);
@@ -91,6 +96,8 @@ namespace hs
             cMeter = coefFor (300.0, sr);
             cDriveEnv = coefFor (80.0, sr);
             cOsEnvA = coefFor (2.0, sr * 4.0); cOsEnvR = coefFor (50.0, sr * 4.0);
+            cAgEnv = coefFor (400.0, sr); cAgGain = coefFor (300.0, sr);
+            cDynA = coefFor (20.0, sr); cDynR = coefFor (250.0, sr); cDynLong = coefFor (3000.0, sr);
 
             first = true;
             reset();
@@ -99,7 +106,7 @@ namespace hs
         void reset()
         {
             for (auto* f : { &xoB, &xoL, &xoH, &apS0L, &apS0H, &apS1H, &apMB, &apML, &apMH, &anML, &anMH,
-                             &apDMB, &apDML, &apDMH, &apDSB, &apDSL, &apDSH })
+                             &apDMB, &apDML, &apDMH, &apDSB, &apDSL, &apDSH, &mtML, &mtMH, &mtSL, &mtSH })
                 f->reset();
             if (oversampling) oversampling->reset();
             for (auto* d : { &dlM, &dlMd, &dlSd, &dlSw }) d->reset();
@@ -107,6 +114,8 @@ namespace hs
             air.reset(); driveHP.reset(); residueDC.reset();
             envFast = envSlow = 0; gEnvM = gEnvS = gEnvSd = 0; gGuard = 1;
             mLR = mLL = mRR = 0; osEnv = 0; dEnvIn = dEnvOut = 0;
+            agIn = agOut = 0; agGain = 1; dynShort = dynLong = 0;
+            for (int b = 0; b < 3; ++b) bandM[b] = bandS[b] = 0;
             lastFB = lastFL = lastFH = lastAirF = lastAirDb = -1.0f;
         }
 
@@ -139,6 +148,9 @@ namespace hs
             set (sMix, juce::jlimit (0.0f, 1.0f, s.mix));
             set (sOut, juce::Decibels::decibelsToGain (s.outDb));
             set (sMono, s.mono ? 1.0f : 0.0f);
+            set (sSolo, s.sideSolo ? 1.0f : 0.0f);
+            set (sAutoGain, s.autoGain ? 1.0f : 0.0f);
+            set (sDyn, s.transOn ? s.dynamic * sp : 0.0f);
             create.setSettings (s.create, sp);
             first = false;
         }
@@ -153,6 +165,9 @@ namespace hs
         // ---- メーター（画面から読む） ----
         float getCorrelation() const { return correlation.load(); }
         float getGuardReductionDb() const { return guardDb.load(); }
+        float getAutoGainDb() const { return autoGainDb.load(); }
+        // 帯域ごとの広さ（Side と Mid の音量差、dB）。0 = LOW, 1 = MID, 2 = HIGH
+        float getBandWidthDb (int band) const { return bandWidthDb[band].load(); }
         void copyScope (float* l, float* r, int n) const
         {
             const int w = scopeWrite.load();
@@ -188,12 +203,12 @@ namespace hs
             }
             if (std::abs (fL - lastFL) > 1.0e-3f * fL)
             {
-                for (auto* f : { &xoL, &apS0L, &apML, &anML, &apDML, &apDSL }) f->setCutoffFrequency (fL);
+                for (auto* f : { &xoL, &apS0L, &apML, &anML, &apDML, &apDSL, &mtML, &mtSL }) f->setCutoffFrequency (fL);
                 lastFL = fL;
             }
             if (std::abs (fH - lastFH) > 1.0e-3f * fH)
             {
-                for (auto* f : { &xoH, &apS0H, &apS1H, &apMH, &anMH, &apDMH, &apDSH }) f->setCutoffFrequency (fH);
+                for (auto* f : { &xoH, &apS0H, &apS1H, &apMH, &anMH, &apDMH, &apDSH, &mtMH, &mtSH }) f->setCutoffFrequency (fH);
                 lastFH = fH;
             }
         }
@@ -357,6 +372,21 @@ namespace hs
                 if (std::abs (dEnvIn - dEnvOut) > 0.0f)
                     s *= juce::jlimit (0.5f, 2.0f, std::sqrt ((dEnvIn + 1.0e-12f) / (dEnvOut + 1.0e-12f)));
 
+                // DYNAMIC：元の音が普段より静かなら Side を最大 +40%、大きければ最大 -50%
+                {
+                    const float e = md * md + sd * sd;
+                    dynShort = e + (e > dynShort ? cDynA : cDynR) * (dynShort - e);
+                    dynLong  = e + cDynLong * (dynLong - e);
+                    const float dyn = sDyn.getNextValue();
+                    if (dyn > 1.0e-6f && dynLong > 1.0e-9f)
+                    {
+                        const float diffDb = 10.0f * std::log10 ((dynShort + 1.0e-12f) / dynLong);
+                        const float k = diffDb < 0.0f ? 0.4f * juce::jmin (1.0f, -diffDb / 12.0f)
+                                                      : -0.5f * juce::jmin (1.0f, diffDb / 6.0f);
+                        s *= 1.0f + dyn * k;
+                    }
+                }
+
                 // GUARD：Side が Mid に迫りすぎたら（相関 0.1 付近）Side を抑える。元の広さよりは狭めない
                 gEnvM  = m * m   + cGuardEnv * (gEnvM - m * m);
                 gEnvS  = s * s   + cGuardEnv * (gEnvS - s * s);
@@ -376,9 +406,36 @@ namespace hs
                 const float sOutV = mix * s + (1.0f - mix) * sd;
                 const float mOutV = mix * m + (1.0f - mix) * md;
 
-                const float g = sOut.getNextValue();
+                // AUTO GAIN：広げて大きくなった分を、元の音と同じ音量に戻す（±6 dB まで、ゆっくり）
+                const float eIn = md * md + sd * sd, eOut = mOutV * mOutV + sOutV * sOutV;
+                agIn  = eIn  + cAgEnv * (agIn - eIn);
+                agOut = eOut + cAgEnv * (agOut - eOut);
+                if (agIn > 1.0e-8f && agOut > 1.0e-8f)
+                {
+                    const float target = juce::jlimit (0.5f, 2.0f, std::sqrt (agIn / agOut));
+                    agGain = target + cAgGain * (agGain - target);
+                }
+                const float ag = 1.0f + sAutoGain.getNextValue() * (agGain - 1.0f);
+
+                // 帯域ごとの広さメーター
+                {
+                    float m0, mr, m1, m2, s0, sr0, s1, s2;
+                    mtML.processSample (0, mOutV, m0, mr); mtMH.processSample (0, mr, m1, m2);
+                    mtSL.processSample (0, sOutV, s0, sr0); mtSH.processSample (0, sr0, s1, s2);
+                    const float mb[3] { m0, m1, m2 }, sb[3] { s0, s1, s2 };
+                    for (int b = 0; b < 3; ++b)
+                    {
+                        bandM[b] = mb[b] * mb[b] + cMeter * (bandM[b] - mb[b] * mb[b]);
+                        bandS[b] = sb[b] * sb[b] + cMeter * (bandS[b] - sb[b] * sb[b]);
+                    }
+                }
+
+                const float g = sOut.getNextValue() * ag;
                 float l = (mOutV + sOutV) * g;
                 float r = (mOutV - sOutV) * g;
+                const float solo = sSolo.getNextValue();
+                l += solo * (sOutV * g - l);
+                r += solo * (sOutV * g - r);
                 const float mono = sMono.getNextValue();
                 const float c = 0.5f * (l + r);
                 l += mono * (c - l);
@@ -397,6 +454,10 @@ namespace hs
             const float e = mLL + mRR;
             correlation = e > 1.0e-9f ? juce::jlimit (-1.0f, 1.0f, mLR / std::sqrt (mLL * mRR + 1.0e-20f)) : 1.0f;
             guardDb = juce::Decibels::gainToDecibels (guardMin, -60.0f);
+            autoGainDb = juce::Decibels::gainToDecibels (1.0f + sAutoGain.getCurrentValue() * (agGain - 1.0f));
+            for (int b = 0; b < 3; ++b)
+                bandWidthDb[b] = bandM[b] + bandS[b] > 1.0e-9f
+                                   ? 10.0f * std::log10 ((bandS[b] + 1.0e-12f) / (bandM[b] + 1.0e-12f)) : -60.0f;
         }
 
     public:
@@ -415,6 +476,7 @@ namespace hs
         LR anML, anMH;                    // AUTO 用の Mid 帯域分け
         LR apDMB, apDML, apDMH;           // 元の音（Mid）の位相合わせ
         LR apDSB, apDSL, apDSH;           // 元の音（Side）の位相合わせ
+        LR mtML, mtMH, mtSL, mtSH;        // 帯域ごとの広さメーター
 
         CreateEngine create;
 
@@ -424,7 +486,8 @@ namespace hs
         SimpleDelay dlM, dlMd, dlSd, dlSw;
         std::vector<float> bufM, bufMd, bufSd, bufSw, bufX, bufE;
 
-        juce::SmoothedValue<float> sW, sWL, sWM, sWH, sBass, sAirDb, sDrive, sTrans, sGuardOn, sMix, sOut, sMono;
+        juce::SmoothedValue<float> sW, sWL, sWM, sWH, sBass, sAirDb, sDrive, sTrans, sGuardOn, sMix, sOut, sMono,
+                                   sSolo, sAutoGain, sDyn;
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> sFB, sFL, sFH, sAirF;
         float lastFB = -1, lastFL = -1, lastFH = -1, lastAirF = -1, lastAirDb = -1;
 
@@ -433,8 +496,12 @@ namespace hs
         float osEnv = 0, cOsEnvA = 0, cOsEnvR = 0;
         float dEnvIn = 0, dEnvOut = 0, cDriveEnv = 0;
         float mLR = 0, mLL = 0, mRR = 0, cMeter = 0;
+        float agIn = 0, agOut = 0, agGain = 1, cAgEnv = 0, cAgGain = 0;
+        float dynShort = 0, dynLong = 0, cDynA = 0, cDynR = 0, cDynLong = 0;
+        float bandM[3] {}, bandS[3] {};
 
-        std::atomic<float> correlation { 1.0f }, guardDb { 0.0f };
+        std::atomic<float> correlation { 1.0f }, guardDb { 0.0f }, autoGainDb { 0.0f };
+        std::atomic<float> bandWidthDb[3] { -60.0f, -60.0f, -60.0f };
         std::array<float, scopeSize> scopeL {}, scopeR {};
         std::atomic<int> scopeWrite { 0 };
 

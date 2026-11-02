@@ -32,12 +32,19 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+    static juce::String weightId (int i) { return "weight" + juce::String (i); }
+
+    // プリセット（画面上のメニューから呼ぶ）
+    static juce::StringArray presetNames();
+    void applyPreset (int index);
 
     juce::AudioProcessorValueTreeState apvts;
     vt::TamerEngine engine;
 
 private:
     vt::Settings readSettings() const;
+
+    std::atomic<float>* weightParams[vt::numWeights] {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VelvetTamerProcessor)
 };
