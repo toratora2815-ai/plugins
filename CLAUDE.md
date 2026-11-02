@@ -13,13 +13,15 @@
 - 流れ: 編集 → commit → push → `gh run list` / `gh run watch` でビルド結果まで確認してから報告する
 - コミットの作者は Claude にする（`git config user.name Claude` / `git config user.email noreply@anthropic.com`）
 - 構成:
-  - `.github/workflows/build.yml` … 自動ビルド（macOS のみ）
-    - `build` ジョブ: AU プラグイン（matrix の `plugin` 一覧）
-    - アプリ用ジョブ: 単体アプリ（matrix の `app` 一覧。今は ReferenceMonitor）
-    - push 時は、変更があったフォルダのものだけビルドされる
+  - `.github/workflows/build.yml` … 自動ビルド
+    - まず `detect` ジョブ（Linux）が、何をビルドするか決める。Mac は実際にビルドするものの分だけ借りる
+    - プラグイン／アプリは `MyPlugins/` の下から自動で見つける（CMakeLists に `juce_add_plugin` ならプラグイン、`juce_add_gui_app` ならアプリ）
+    - push 時は、変更があったフォルダのものだけビルドされる（build.yml や CLAUDE.md だけの変更では何もビルドしない）
+    - 手動で動かすとき（Actions →「Run workflow」）は、`only` に名前を入れるとそれだけ、空なら全部ビルド
+      - Claude から: `gh api -X POST repos/toratora2815-ai/plugins/actions/workflows/build.yml/dispatches -f ref=main -f "inputs[only]=<名前>"`
     - ビルド結果は Artifacts と、Releases の `latest` に置かれる
   - `MyPlugins/<名前>/` … 各プラグイン（CMakeLists.txt, Source/, README.md）
-- 新しいプラグインを足したら build.yml の matrix の `plugin` 一覧に名前を追加する
+- 新しいプラグインを足しても build.yml を書き換える必要はない（自動で見つかる）
 - 既存プラグインを変えていないときは再ビルド不要（無駄なビルドは走らせない／走ったら止めてよい）
 - Claude 側のブラウザは GitHub にログインしていない。ログインが必要な作業は、本人のいつもの Safari / Chrome で開くよう案内する
 
@@ -45,7 +47,7 @@
    ```
 3. Logic を起動 → Audio Units → MyPlugins
    出ないときは「Logic Pro → 設定 → プラグインマネージャ」で再スキャン
-- Artifacts は90日で消える。消えたら Actions で「Re-run all jobs」
+- Artifacts は90日で消える。消えたら Actions →「Build plugins」→「Run workflow」で、`only` に名前を入れてビルドし直す
 
 ## 作ったもの
 - Wool Fuzz（WoolFuzz）… ビッグマフ系ファズ。SUSTAIN / TONE / VOLUME

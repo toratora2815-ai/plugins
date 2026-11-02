@@ -14,55 +14,93 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        plugin: [WoolFuzz, Nebula, PorchDrive, BalanceScope, Reference, HorizonSpread]
-    runs-on: macos-latest
-
+  # どれをビルドするかを、混んでいない Linux のマシンで先に決める。
+  # Mac は「本当にビルドするもの」の分だけ借りる。
+  # プラグイン／アプリは MyPlugins/ の下から自動で見つける（matrix に名前を足す必要はない）:
+  #   CMakeLists.txt に juce_add_plugin があればプラグイン、juce_add_gui_app があればアプリ
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.pick.outputs.plugins }}
+      apps: ${{ steps.pick.outputs.apps }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # push のときは、そのプラグインのフォルダが変わったときだけビルドする
-      # （「Run workflow」ボタンから手動で動かしたときは全部ビルド）
-      - name: Check changes
-        id: changes
+      - name: Pick targets
+        id: pick
         shell: bash
         run: |
-          BEFORE="${{ github.event.before }}"
+          ALL_PLUGINS=(); ALL_APPS=()
+          for d in MyPlugins/*/; do
+            n=$(basename "$d")
+            f="$d/CMakeLists.txt"
+            [ -f "$f" ] || continue
+            if grep -q "juce_add_plugin" "$f"; then ALL_PLUGINS+=("$n")
+            elif grep -q "juce_add_gui_app" "$f"; then ALL_APPS+=("$n"); fi
+          done
+          echo "plugins found: ${ALL_PLUGINS[*]}"
+          echo "apps found:    ${ALL_APPS[*]}"
+
+          # ビルドするかどうか（引数: 名前）
+          CHANGED=""; MODE="changed"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            ONLY="${{ github.event.inputs.only }}"
-            if [ -z "$ONLY" ] || [ "$ONLY" = "${{ matrix.plugin }}" ]; then echo "build=true" >> "$GITHUB_OUTPUT"; else echo "build=false" >> "$GITHUB_OUTPUT"; fi
-            exit 0
-          fi
-          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if ! CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}"); then
-            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if echo "$CHANGED" | grep -q "^MyPlugins/${{ matrix.plugin }}/"; then
-            echo "build=true" >> "$GITHUB_OUTPUT"
+            MODE="manual"
           else
-            echo "build=false" >> "$GITHUB_OUTPUT"
-            echo "${{ matrix.plugin }} is unchanged - skipping build"
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+               || ! CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}"); then
+              MODE="all"
+            fi
           fi
+          ONLY="${{ github.event.inputs.only }}"
+          want() {
+            case "$MODE" in
+              all)    return 0 ;;
+              manual) [ -z "$ONLY" ] || [ "$ONLY" = "$1" ] ;;
+              *)      echo "$CHANGED" | grep -q "^MyPlugins/$1/" ;;
+            esac
+          }
+          to_json() { local out="" x; for x in "$@"; do out="$out\"$x\","; done; echo "[${out%,}]"; }
+
+          P=(); A=()
+          for n in "${ALL_PLUGINS[@]}"; do want "$n" && P+=("$n"); done
+          for n in "${ALL_APPS[@]}";    do want "$n" && A+=("$n"); done
+          echo "plugins=$(to_json "${P[@]}")" >> "$GITHUB_OUTPUT"
+          echo "apps=$(to_json "${A[@]}")"    >> "$GITHUB_OUTPUT"
+          echo "will build plugins: ${P[*]:-(none)}"
+          echo "will build apps:    ${A[*]:-(none)}"
+
+  # AU プラグインのビルド
+  build:
+    needs: detect
+    if: needs.detect.outputs.plugins != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJSON(needs.detect.outputs.plugins) }}
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Configure
-        if: steps.changes.outputs.build == 'true'
         working-directory: MyPlugins/${{ matrix.plugin }}
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOPY_AFTER_BUILD=OFF -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
 
       - name: Build AU
-        if: steps.changes.outputs.build == 'true'
         working-directory: MyPlugins/${{ matrix.plugin }}
-        run: cmake --build build --config Release --target ${{ matrix.plugin }}_AU --parallel 4
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! cmake --build build --config Release --target ${{ matrix.plugin }}_AU --parallel 4 2>&1 | tee build.log; then
+            # エラー行を注記として残す（ログが読めないときの手がかり）
+            grep -E "error:|error :|Undefined symbols|ld: " build.log | grep -v "^ *[0-9]* errors* generated" | sort -u | head -20 | while IFS= read -r l; do echo "::error::${l}"; done
+            exit 1
+          fi
 
       - name: Collect
-        if: steps.changes.outputs.build == 'true'
         run: |
           mkdir -p out rel
           cp -R "MyPlugins/${{ matrix.plugin }}/build/${{ matrix.plugin }}_artefacts/Release/AU/"*.component out/
@@ -71,13 +109,12 @@ jobs:
           ditto -c -k --norsrc --noextattr --noacl --keepParent out/*.component "rel/${{ matrix.plugin }}.zip"
 
       - uses: actions/upload-artifact@v4
-        if: steps.changes.outputs.build == 'true'
         with:
           name: ${{ matrix.plugin }}-macOS
           path: out
 
       - name: Publish to Releases
-        if: steps.changes.outputs.build == 'true' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -88,42 +125,19 @@ jobs:
 
   # 単体アプリ（.app）のビルド
   build-app:
+    needs: detect
+    if: needs.detect.outputs.apps != '[]'
     strategy:
       fail-fast: false
       matrix:
-        app: [ReferenceMonitor]
+        app: ${{ fromJSON(needs.detect.outputs.apps) }}
     runs-on: macos-latest
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check changes
-        id: changes
-        shell: bash
-        run: |
-          BEFORE="${{ github.event.before }}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            ONLY="${{ github.event.inputs.only }}"
-            if [ -z "$ONLY" ] || [ "$ONLY" = "${{ matrix.app }}" ]; then echo "build=true" >> "$GITHUB_OUTPUT"; else echo "build=false" >> "$GITHUB_OUTPUT"; fi
-            exit 0
-          fi
-          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if ! CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}"); then
-            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if echo "$CHANGED" | grep -q "^MyPlugins/${{ matrix.app }}/"; then
-            echo "build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "build=false" >> "$GITHUB_OUTPUT"
-            echo "${{ matrix.app }} is unchanged - skipping build"
-          fi
 
       - name: Check AppleScript
-        if: steps.changes.outputs.build == 'true' && hashFiles(format('MyPlugins/{0}/Source/MusicScript.h', matrix.app)) != ''
+        if: hashFiles(format('MyPlugins/{0}/Source/MusicScript.h', matrix.app)) != ''
         shell: bash
         run: |
           # アプリの中の AppleScript が Mac で正しく読めるか（文法エラーがないか）を確かめる
@@ -136,44 +150,38 @@ jobs:
           echo "AppleScript OK"
 
       - name: Configure
-        if: steps.changes.outputs.build == 'true'
         working-directory: MyPlugins/${{ matrix.app }}
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
 
       - name: Build app
-        if: steps.changes.outputs.build == 'true'
         working-directory: MyPlugins/${{ matrix.app }}
         shell: bash
         run: |
           set -o pipefail
           if ! cmake --build build --config Release --target ${{ matrix.app }} --parallel 4 2>&1 | tee build.log; then
-            # エラー行を注記として残す（ログが読めないときの手がかり）
             grep -E "error:|error :|Undefined symbols|ld: " build.log | grep -v "^ *[0-9]* errors* generated" | sort -u | head -20 | while IFS= read -r l; do echo "::error::${l}"; done
             exit 1
           fi
 
       - name: Collect
-        if: steps.changes.outputs.build == 'true'
         shell: bash
         run: |
-          mkdir -p out
+          mkdir -p out rel
           APP=$(find "MyPlugins/${{ matrix.app }}/build/${{ matrix.app }}_artefacts" -maxdepth 3 -name "*.app" | head -1)
           echo "App: $APP"
           codesign --force --deep --sign - "$APP"
           plutil -p "$APP/Contents/Info.plist" | grep -E "NSAudioCapture|NSAppleEvents|LSMinimum|CFBundleIdentifier"
           # 実行権限を保つため、ここで zip にしてから Artifacts に入れる（Mac の付加情報は入れない）
-          mkdir -p rel
           ditto -c -k --norsrc --noextattr --noacl --keepParent "$APP" "out/${{ matrix.app }}.zip"
           cp "out/${{ matrix.app }}.zip" rel/
 
       - uses: actions/upload-artifact@v4
-        if: steps.changes.outputs.build == 'true'
         with:
           name: ${{ matrix.app }}-macOS
           path: out
 
       - name: Publish to Releases
-        if: steps.changes.outputs.build == 'true' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
