@@ -53,7 +53,7 @@ private:
 
     // 画面の状態
     bool permitted = false, tapRunning = false, logicRunning = false, logicFront = false;
-    std::array<float, Deck::kSlots> flash {};
+    std::array<float, numdeck::Deck::kSlots> flash {};
     int hoverTile = -1;
     int learnPage = -1, learnIndex = -1;
     float ignoredHint = 0.0f;
@@ -63,7 +63,7 @@ private:
 
     // クリックできる場所
     juce::Rectangle<int> headerArea, statusPill, modeTabs[numdeck::Deck::kModes], pageTabs[numdeck::Deck::kPages], prevPage, nextPage,
-                         gridArea, tiles[Deck::kSlots], footerArea, logicOnlyPill, onTopPill, sizePill, settingsPill,
+                         gridArea, tiles[numdeck::Deck::kSlots], footerArea, logicOnlyPill, onTopPill, sizePill, settingsPill,
                          bannerArea, bannerButton, learnCancel;
 
     std::unique_ptr<juce::AlertWindow> inputWindow;
