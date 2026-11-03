@@ -95,7 +95,8 @@ private:
     void setMixPosition (int idx, bool clear);
     void flash (const juce::String& msg);
     juce::String outputUID();
-    bool outputFallback = false;   // 選んだ出力先がつながっていないので、Mac の出力先で鳴らしている
+    bool outputFallback = false;
+    double syncCheckAt = 0.0;     // PLAY (Logic) を押したあと、Logic が答えたかを見る時刻   // 選んだ出力先がつながっていないので、Mac の出力先で鳴らしている
     void refreshOutputs();
     void refreshLiveApps();
     void saveSettings();

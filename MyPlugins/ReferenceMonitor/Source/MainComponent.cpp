@@ -565,9 +565,8 @@ void MainComponent::togglePlay()
 {
     if (! engine.ab.load())
     {
-        if (! logic.hasTimecode())
-            flash ("Logic doesn't answer: this Logic project isn't set up yet (once per project). In Logic: File > Project Settings > Sync > MIDI, "
-                   "set a row to Reference Monitor, check MTC and MMC, and turn on \"Auto-enable MMC input\" below. Then save.");
+        // Logic が答えるか 1.5 秒待ってから、答えなければ設定の案内を出す（timerCallback）
+        if (! logic.hasTimecode()) syncCheckAt = juce::Time::getMillisecondCounterHiRes() * 0.001 + 1.5;
         if (logic.isPlaying()) logic.stop(); else logic.play();
         return;
     }
@@ -816,6 +815,13 @@ void MainComponent::timerCallback()
     ++tick;
     pickUpLoadedAudio();
     checkLogicLoop();
+    if (syncCheckAt > 0.0 && juce::Time::getMillisecondCounterHiRes() * 0.001 >= syncCheckAt)
+    {
+        syncCheckAt = 0.0;
+        if (! logic.hasTimecode())
+            flash ("Logic doesn't answer: this Logic project isn't set up yet (once per project). In Logic: File > Project Settings > Sync > MIDI, "
+                   "set a row to Reference Monitor, check MTC and MMC, and turn on \"Auto-enable MMC input\" below. Then save.");
+    }
     if (tick % 6 == 0) pollMusic();
     if (tick % 25 == 0) manageCapture();
     if (tick % 125 == 0) { refreshOutputs(); refreshLiveApps(); }
