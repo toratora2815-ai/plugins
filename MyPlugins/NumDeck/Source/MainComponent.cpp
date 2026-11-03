@@ -17,6 +17,7 @@ namespace
     // テンキーの並び（上から 7 8 9 / 4 5 6 / 1 2 3）→ キー番号 - 1
     const int kGridOrder[9] = { 6, 7, 8, 3, 4, 5, 0, 1, 2 };
     // タイルの番号（添字 0〜8 = キー 1〜9、添字 9 = キー 0、添字 10 = キー .）
+    constexpr int kLearnModeKey = 100;  // learnIndex がこれなら、モード切替のキーを覚えさせている
     juce::String keyNumber (int index) { return index == 10 ? juce::String (".") : juce::String ((index + 1) % 10); }
 
     // コントローラーのボタン表示のような、キーキャップ
@@ -164,10 +165,15 @@ namespace
 MainComponent::MainComponent()
 {
     tap.onPadKey = [this] (int pad, bool down, bool repeat) { return deck.handlePadKey (pad, down, repeat); };
+    tap.onAnyKey = [this] (int code, bool down, bool repeat) { return deck.handleAnyKey (code, down, repeat); };
 
     tap.onLearnKey = [this] (int code, int mods)
     {
-        if (! (code == 53 && mods == 0)) // Esc だけならやめる
+        if (learnIndex == kLearnModeKey)
+        {
+            if (! (code == 53 && mods == 0)) { deck.modeKey = code; deck.save(); }
+        }
+        else if (! (code == 53 && mods == 0)) // Esc だけならやめる
         {
             Slot s;
             s.actionId = "custom";
@@ -177,6 +183,7 @@ MainComponent::MainComponent()
             flash[(size_t) learnIndex] = 1.0f;
         }
         tap.learning = false;
+        tap.learnAnyKey = false;
         learnPage = learnIndex = -1;
         repaint();
         return true;
@@ -194,6 +201,7 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     tap.onPadKey = nullptr;
+    tap.onAnyKey = nullptr;
     tap.onLearnKey = nullptr;
 }
 
@@ -808,11 +816,12 @@ void MainComponent::paintLearning (juce::Graphics& g)
         auto t = c.reduced (12.0f).toNearestInt().withBottom (learnCancel.getY() - 4);
         g.setColour (sub);
         g.setFont (font (11.0f));
-        g.drawText (deck.pageName (learnPage) + juce::String::fromUTF8 (" ・ テンキー ") + juce::String (learnIndex + 1),
+        g.drawText (learnIndex == kLearnModeKey ? juce::String::fromUTF8 ("モードの切り替え")
+                                                : deck.pageName (learnPage) + juce::String::fromUTF8 (" ・ テンキー ") + keyNumber (learnIndex),
                     t.removeFromTop (18), juce::Justification::centred);
         g.setColour (text);
         g.setFont (font (15.0f, true));
-        g.drawFittedText (juce::String::fromUTF8 ("入れたいショートカットを押す"), t.removeFromTop (30), juce::Justification::centred, 1, 0.7f);
+        g.drawFittedText (juce::String::fromUTF8 (learnIndex == kLearnModeKey ? "切り替えに使うキーを押す" : "入れたいショートカットを押す"), t.removeFromTop (30), juce::Justification::centred, 1, 0.7f);
         g.setColour (sub);
         g.setFont (font (11.0f));
         g.drawText (juce::String::fromUTF8 ("Esc でやめる"), t.removeFromTop (18), juce::Justification::centred);
@@ -828,14 +837,17 @@ void MainComponent::paintLearning (juce::Graphics& g)
     auto t = c.reduced (24.0f, 22.0f).toNearestInt();
     g.setColour (sub);
     g.setFont (font (13.0f));
-    g.drawText (deck.pageName (learnPage) + juce::String::fromUTF8 (" ページ ・ テンキー ") + juce::String (learnIndex + 1),
+    g.drawText (learnIndex == kLearnModeKey ? juce::String::fromUTF8 ("モード（Logic Pro / 業務）の切り替え")
+                                            : deck.pageName (learnPage) + juce::String::fromUTF8 (" ページ ・ テンキー ") + keyNumber (learnIndex),
                 t.removeFromTop (20), juce::Justification::centred);
     g.setColour (text);
     g.setFont (font (20.0f, true));
-    g.drawText (juce::String::fromUTF8 ("入れたいショートカットを押してください"), t.removeFromTop (40), juce::Justification::centred);
+    g.drawText (juce::String::fromUTF8 (learnIndex == kLearnModeKey ? "切り替えに使うキーを押してください" : "入れたいショートカットを押してください"),
+                t.removeFromTop (40), juce::Justification::centred);
     g.setColour (sub);
     g.setFont (font (13.0f));
-    g.drawText (juce::String::fromUTF8 ("例: \xe2\x8c\x98 + T 、 \xe2\x87\xa7 + R など（Logic のキーコマンドと同じものを押す）"),
+    g.drawText (learnIndex == kLearnModeKey ? juce::String::fromUTF8 ("例: テンキーのいちばん上の Home キーなど（そのキーは切り替え専用になります）")
+                                            : juce::String::fromUTF8 ("例: \xe2\x8c\x98 + T 、 \xe2\x87\xa7 + R など（Logic のキーコマンドと同じものを押す）"),
                 t.removeFromTop (24), juce::Justification::centred);
     g.drawText (juce::String::fromUTF8 ("Esc でやめる"), t.removeFromTop (22), juce::Justification::centred);
     }
@@ -879,7 +891,7 @@ void MainComponent::mouseDown (const juce::MouseEvent& e)
 
     if (learnIndex >= 0)
     {
-        if (learnCancel.contains (p)) { tap.learning = false; learnPage = learnIndex = -1; repaint(); }
+        if (learnCancel.contains (p)) { tap.learning = false; tap.learnAnyKey = false; learnPage = learnIndex = -1; repaint(); }
         return;
     }
 
@@ -1037,6 +1049,10 @@ void MainComponent::showSettingsMenu()
     m.addItem (1, juce::String::fromUTF8 ("Clear（NumLock）"), true, deck.toggleKey == Deck::ToggleClear);
     m.addItem (2, "=", true, deck.toggleKey == Deck::ToggleEquals);
     m.addItem (3, juce::String::fromUTF8 ("なし（画面のボタンだけ）"), true, deck.toggleKey == Deck::ToggleNone);
+    m.addSectionHeader (juce::String::fromUTF8 ("モード（Logic Pro / 業務）を切り替えるキー：")
+                        + (deck.modeKey >= 0 ? keyName (deck.modeKey) : juce::String::fromUTF8 ("なし")));
+    m.addItem (6, juce::String::fromUTF8 ("切り替えのキーを覚えさせる\xe2\x80\xa6"));
+    m.addItem (7, juce::String::fromUTF8 ("キーで切り替えない（画面のクリックだけ）"), true, deck.modeKey < 0);
     m.addSeparator();
     m.addItem (5, juce::String::fromUTF8 ("このページの名前を変える\xe2\x80\xa6"));
     m.addItem (10, juce::String::fromUTF8 ("このページを最初の割り当てに戻す"));
@@ -1068,6 +1084,8 @@ void MainComponent::showSettingsMenu()
                          if (safe == nullptr || r == 0) return;
                          auto& d = safe->deck;
                          if (r >= 1 && r <= 3) { d.toggleKey = r - 1; d.save(); }
+                         if (r == 6) safe->startLearning (0, kLearnModeKey);
+                         if (r == 7) { d.modeKey = -1; d.save(); }
                          if (r == 40) { d.chromeProfile.clear(); d.chromeProfileName.clear(); d.save(); }
                          if (r > 40 && r - 41 < (int) profiles.size())
                          {
@@ -1104,6 +1122,7 @@ void MainComponent::startLearning (int page, int index)
     }
     learnPage = page;
     learnIndex = index;
+    tap.learnAnyKey = index == kLearnModeKey;
     tap.learning = true;
     repaint();
 }

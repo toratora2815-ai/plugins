@@ -28,6 +28,11 @@ namespace numdeck
         std::function<bool (int padKey, bool down, bool repeat)> onPadKey;
         // learning 中だけ呼ばれる。テンキー以外のキーが押された（keyCode は Mac の仮想キーコード）
         std::function<bool (int keyCode, int mods)> onLearnKey;
+        // 修飾キーなしで押された全部のキー（テンキー以外も）。true = 握りつぶす。
+        // Home などの特殊キー（音量・メディア系）は keyCode = kSpecialKeyBase + 番号
+        std::function<bool (int keyCode, bool down, bool repeat)> onAnyKey;
+        static constexpr int kSpecialKeyBase = 1000;
+        bool learnAnyKey = false;  // 覚えさせるときにテンキーも受け付ける
         bool learning = false;
 
         bool start();            // 許可がないと false

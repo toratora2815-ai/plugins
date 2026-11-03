@@ -68,6 +68,26 @@ namespace numdeck
                 if (self.tap != nullptr) CGEventTapEnable (self.tap, true);
                 return e;
             }
+            // メディア系・特殊キー（NX_SYSDEFINED）。キーボードによっては Home などがこちらで来る
+            if (type == (CGEventType) 14)
+            {
+                if (! self.owner.learning && ! self.owner.onAnyKey) return e;
+                bool swallow = false;
+                @autoreleasepool
+                {
+                    NSEvent* ne = [NSEvent eventWithCGEvent: e];
+                    if (ne == nil || ne.subtype != 8) return e;
+                    const int code = KeyTap::kSpecialKeyBase + (int) ((ne.data1 & 0xFFFF0000) >> 16);
+                    const bool sdown = ((ne.data1 & 0xFF00) >> 8) == 0xA;
+                    const bool srepeat = (ne.data1 & 0x1) != 0;
+                    if (self.owner.learning && self.owner.learnAnyKey)
+                        swallow = ! sdown || (self.owner.onLearnKey && self.owner.onLearnKey (code, 0));
+                    else if (self.owner.onAnyKey)
+                        swallow = self.owner.onAnyKey (code, sdown, srepeat);
+                }
+                return swallow ? nullptr : e;
+            }
+
             if (type != kCGEventKeyDown && type != kCGEventKeyUp) return e;
             if (CGEventGetIntegerValueField (e, kCGEventSourceUserData) == kMagic) return e;
 
@@ -76,23 +96,25 @@ namespace numdeck
             const bool down = type == kCGEventKeyDown;
             const int pad  = padFromKeyCode (vk);
 
-            if (self.owner.learning && pad < 0)
+            if (self.owner.learning && (pad < 0 || self.owner.learnAnyKey))
             {
                 if (down && self.owner.onLearnKey && self.owner.onLearnKey (vk, mods)) return nullptr;
                 return down ? e : nullptr; // 覚えさせたキーを離した分も握りつぶす
             }
 
+            const bool repeat = CGEventGetIntegerValueField (e, kCGKeyboardEventAutorepeat) != 0;
+            if (mods == 0 && self.owner.onAnyKey && self.owner.onAnyKey (vk, down, repeat)) return nullptr;
+
             // 修飾キーと一緒のテンキーはそのまま通す（⌘+テンキーなど、他の使い道を残す）
             if (pad < 0 || mods != 0 || ! self.owner.onPadKey) return e;
 
-            const bool repeat = CGEventGetIntegerValueField (e, kCGKeyboardEventAutorepeat) != 0;
             return self.owner.onPadKey (pad, down, repeat) ? nullptr : e;
         }
 
         bool start()
         {
             if (tap != nullptr) return true;
-            const CGEventMask mask = CGEventMaskBit (kCGEventKeyDown) | CGEventMaskBit (kCGEventKeyUp);
+            const CGEventMask mask = CGEventMaskBit (kCGEventKeyDown) | CGEventMaskBit (kCGEventKeyUp) | CGEventMaskBit (14);
             tap = CGEventTapCreate (kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
                                     mask, &Impl::callback, this);
             if (tap == nullptr) return false;
@@ -258,15 +280,23 @@ namespace numdeck
         NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
         if (appBackPids == nil) appBackPids = [[NSMutableDictionary alloc] init];
 
-        // もう前面にいる → 隠して、開く前のアプリに戻す
+        // もう前面にいる → 開く前のアプリに戻して、隠す。
+        // 全画面のアプリは「隠す」が効かないので、戻り先のアプリを NSWorkspace で開き直してそちらの画面へ移る
+        // （activateWithOptions は、後ろにいる Num Deck からだと macOS に断られることがある）
         if (front != nil && front.bundleURL != nil && [[front.bundleURL.path stringByStandardizingPath] isEqualToString: p])
         {
-            NSNumber* back = appBackPids[p];
-            [front hide];
-            if (back != nil)
+            NSURL* backURL = nil;
+            if (NSNumber* back = appBackPids[p])
                 if (NSRunningApplication* b = [NSRunningApplication runningApplicationWithProcessIdentifier: (pid_t) back.intValue])
                     if (! b.terminated && b.processIdentifier != front.processIdentifier)
-                        [b activateWithOptions: 0];
+                        backURL = b.bundleURL;
+            if (backURL == nil)
+                backURL = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier: @"com.apple.finder"];
+            if (backURL != nil)
+                [[NSWorkspace sharedWorkspace] openApplicationAtURL: backURL
+                                                      configuration: [NSWorkspaceOpenConfiguration configuration]
+                                                  completionHandler: nil];
+            [front hide];
             return;
         }
 

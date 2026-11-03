@@ -183,9 +183,11 @@ namespace numdeck
             { 49, "Space" }, { 36, "Return" }, { 48, "Tab" }, { 51, "Delete" }, { 117, "Fwd Del" }, { 53, "Esc" },
             { 123, "\xe2\x86\x90" }, { 124, "\xe2\x86\x92" }, { 125, "\xe2\x86\x93" }, { 126, "\xe2\x86\x91" },
             { 115, "Home" }, { 119, "End" }, { 116, "PgUp" }, { 121, "PgDn" },
+            { 71, "Clear" }, { 81, "Pad =" }, { 75, "Pad /" }, { 67, "Pad *" }, { 76, "Enter" },
             { 122, "F1" }, { 120, "F2" }, { 99, "F3" }, { 118, "F4" }, { 96, "F5" }, { 97, "F6" }, { 98, "F7" },
             { 100, "F8" }, { 101, "F9" }, { 109, "F10" }, { 103, "F11" }, { 111, "F12" },
         };
+        if (code >= 1000) return jp ("特殊キー ") + juce::String (code - 1000);
         auto it = names.find (code);
         return it != names.end() ? jp (it->second) : "#" + juce::String (code);
     }

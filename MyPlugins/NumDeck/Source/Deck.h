@@ -90,6 +90,7 @@ namespace numdeck
         bool alwaysOnTop = false;
         int mode = ModeLogic;      // 画面のクリックでだけ切り替える（テンキーでは変わらない）
         int toggleKey = ToggleClear;
+        int modeKey = 115;  // モード（Logic Pro / 業務）を切り替えるキー。最初は Home。-1 = なし
         juce::String windowState;  // ウィンドウの位置と大きさ
         juce::String chromeProfile, chromeProfileName;  // リンクを開く Chrome のアカウント（空 = いつもの）
 
@@ -231,6 +232,14 @@ namespace numdeck
             return true;
         }
 
+        // テンキー以外も含む全部のキー。モード切替のキーなら切り替えて true（そのキーは他のアプリに渡さない）
+        bool handleAnyKey (int keyCode, bool down, bool repeat)
+        {
+            if (modeKey < 0 || keyCode != modeKey) return false;
+            if (down && ! repeat) { setMode (mode == ModeLogic ? ModeWork : ModeLogic); changed(); }
+            return true;
+        }
+
         void resetPage (int m, int p)
         {
             auto& page = slots[(size_t) m][(size_t) p];
@@ -278,6 +287,7 @@ namespace numdeck
             props->setValue ("alwaysOnTop", alwaysOnTop);
             props->setValue ("mode", mode);
             props->setValue ("toggleKey", toggleKey);
+            props->setValue ("modeKey", modeKey);
             props->setValue ("window", windowState);
             props->setValue ("chromeProfile", chromeProfile);
             props->setValue ("chromeProfileName", chromeProfileName);
@@ -314,6 +324,7 @@ namespace numdeck
             mode        = juce::jlimit (0, kModes - 1, props->getIntValue ("mode", ModeLogic));
             toggleKey   = juce::jlimit (0, (int) ToggleNone, props->getIntValue ("toggleKey", ToggleClear));
             windowState = props->getValue ("window");
+            modeKey     = props->getIntValue ("modeKey", 115);
             chromeProfile     = props->getValue ("chromeProfile");
             chromeProfileName = props->getValue ("chromeProfileName");
             for (int m = 0; m < kModes; ++m)
