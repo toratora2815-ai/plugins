@@ -1050,7 +1050,7 @@ void MainComponent::timerCallback()
     slotB.setColour (juce::TextButton::buttonOnColourId, blind ? blindCol : colB);
     slotA.setToggleState (uiWhich == 0, juce::dontSendNotification);
     slotB.setToggleState (uiWhich == 1, juce::dontSendNotification);
-    pickX.setButtonText ("I PREFER X  (" + juce::String (juce::jmin (blindRound + 1, kBlindRounds)) + "/" + juce::String (kBlindRounds) + ")");
+    pickX.setButtonText ("I PREFER X");
     pickY.setButtonText ("I PREFER Y");
 
     repaint (timelineArea);
@@ -1395,9 +1395,7 @@ void MainComponent::resized()
     loopButton.setBounds (tr.removeFromLeft (70));   tr.removeFromLeft (6);
     matchButton.setBounds (tr.removeFromLeft (120)); tr.removeFromLeft (6);
     alignButton.setBounds (tr.removeFromLeft (70));  tr.removeFromLeft (14);
-    blindButton.setBounds (tr.removeFromLeft (110)); tr.removeFromLeft (6);
-    pickX.setBounds (tr.removeFromLeft (150));       tr.removeFromLeft (6);
-    pickY.setBounds (tr.removeFromLeft (110));       tr.removeFromLeft (14);
+    blindButton.setBounds (tr.removeFromLeft (110)); tr.removeFromLeft (14);
     volLabel = tr.removeFromLeft (52);
     volumeSlider.setBounds (tr);
     area.removeFromTop (8);
@@ -1405,4 +1403,11 @@ void MainComponent::resized()
     timelineArea = area.removeFromTop (120);
     area.removeFromTop (8);
     compareArea = area;
+    {
+        // ブラインドテスト中だけ、下のパネルに大きく出す
+        auto pick = compareArea.reduced (14, 14).removeFromBottom (64);
+        pickX.setBounds (pick.removeFromLeft (pick.getWidth() / 2 - 6));
+        pick.removeFromLeft (12);
+        pickY.setBounds (pick);
+    }
 }
