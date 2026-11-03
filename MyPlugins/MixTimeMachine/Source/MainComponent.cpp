@@ -229,8 +229,6 @@ MainComponent::MainComponent()
     volumeSlider.setValue ((double) s.getWithDefault ("volume", 0.0), juce::dontSendNotification);
     player.volumeDb = (float) volumeSlider.getValue();
     regroupSongs();
-    for (auto& v : library.versions)
-        if (! v.an.ok && v.playPath().isNotEmpty()) queueAnalysis (v, false);   // 前回解析が終わらなかったもの
 
     deviceManager.initialiseWithDefaultDevices (0, 2);
     const auto savedOut = s.getWithDefault ("output", "").toString();
@@ -250,12 +248,7 @@ MainComponent::MainComponent()
         const auto logicDir = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Logic");
         if (logicDir.isDirectory()) library.roots.add (logicDir.getFullPathName());
     }
-    scanFolders();
-
-    const auto songs = library.songs();
-    const auto lastSong = s.getWithDefault ("song", "").toString();
-    if (songs.contains (lastSong)) selectSong (lastSong);
-    else if (! songs.isEmpty()) selectSong (songs[0]);
+    // フォルダを読むのは窓が出てから（初回は macOS が「ミュージックフォルダへのアクセス」を聞いてきて、答えるまで止まるため）
 
     setWantsKeyboardFocus (true);
     setSize (1240, 800);
@@ -1032,7 +1025,17 @@ void MainComponent::timerCallback()
 {
     ++tick;
     pickUpResults();
-    if (tick % 100 == 0) scanFolders();       // 4 秒ごと
+    if (tick == 5)
+    {
+        for (auto& v : library.versions)
+            if (! v.an.ok && ! v.analysing && v.playPath().isNotEmpty()) queueAnalysis (v, false);   // 前回解析が終わらなかったもの
+        scanFolders();
+        const auto songs = library.songs();
+        const auto lastSong = library.settings.getWithDefault ("song", "").toString();
+        if (songs.contains (lastSong)) selectSong (lastSong);
+        else if (! songs.isEmpty()) selectSong (songs[0]);
+    }
+    else if (tick % 100 == 0) scanFolders();  // 4 秒ごと
     if (tick % 125 == 0) refreshOutputs();
 
     const bool playing = player.playing.load();
