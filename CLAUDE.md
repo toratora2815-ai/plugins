@@ -91,6 +91,13 @@
   その番号を、このファイルの決まりどおりに作ってビルドまで確認する。終わったら提案ファイルのその項目に「→ GO 済み（日付）」と書き足す
 - 提案の段階ではコードを変えない
 
+## 単体アプリ（.app）を Mac に入れるとき
+- `tools/install-app.sh <名前>`（例: `tools/install-app.sh NumDeck`）で、Releases の latest から ~/Applications に入れる
+- この Mac には専用の署名「MyPlugins Local Signing」がある（キーチェーン ~/Library/Keychains/myplugins-signing.keychain-db、
+  パスワードは ~/.config/myplugins/signing-keychain-pass）。スクリプトがこれで署名し直すので、
+  アクセシビリティなどの許可が更新のたびに外れない（アドホック署名のままだと毎回外れる）
+- キーチェーン操作はサンドボックスの外で実行する必要がある
+
 ## Mac の Claude Code で作業するとき
 - このフォルダで作業していれば、ここで直接ビルドもできる（本人が頼んだときだけ）:
   ```
