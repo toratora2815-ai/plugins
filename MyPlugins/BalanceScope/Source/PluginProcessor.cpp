@@ -1,6 +1,5 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include "Targets.h"
 
 BalanceScopeProcessor::BalanceScopeProcessor()
     : AudioProcessor (BusesProperties()
@@ -21,8 +20,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout BalanceScopeProcessor::creat
 {
     juce::StringArray names;
     for (auto& t : kTargets) names.add (t.name);
+    names.add ("Custom");   // v1.1 で追加（最後に足したので、前の保存データの選択はそのまま）
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> v;
     v.push_back (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "target", 1 }, "Target", names, 0));
+
+    // CUSTOM の目標カーブ（v1.1 で追加、バージョン 2）
+    auto dbOct = [] (float x, int) { return juce::String (x, 1) + " dB/oct"; };
+    auto db = [] (float x, int) { return (x > 0.05f ? "+" : "") + juce::String (x, 1) + " dB"; };
+    v.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "customTilt", 2 }, "Custom Tilt",
+                    juce::NormalisableRange<float> (-3.5f, 0.0f, 0.1f), -1.5f,
+                    juce::AudioParameterFloatAttributes().withStringFromValueFunction (dbOct)));
+    v.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "customLow", 2 }, "Custom Low (below 120 Hz)",
+                    juce::NormalisableRange<float> (-4.0f, 6.0f, 0.1f), 0.0f,
+                    juce::AudioParameterFloatAttributes().withStringFromValueFunction (db)));
     return { v.begin(), v.end() };
 }
 
@@ -38,6 +48,7 @@ void BalanceScopeProcessor::prepareToPlay (double sampleRate, int)
 {
     juce::SpinLock::ScopedLockType sl (lock);
     sr = sampleRate;
+    loudness.prepare (sampleRate);
     std::fill (ring.begin(), ring.end(), 0.0f);
     ringPos = samplesSinceFFT = 0;
 }
@@ -56,6 +67,9 @@ void BalanceScopeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     const int numCh = juce::jmin (2, getTotalNumInputChannels());
     const int n = buffer.getNumSamples();
     if (numCh == 0) return;
+
+    if (loudResetRequested.exchange (false)) loudness.reset();
+    loudness.process (buffer.getArrayOfReadPointers(), numCh, n, playing);
 
     const float scale = 1.0f / (float) numCh;
     for (int i = 0; i < n; ++i)
@@ -133,6 +147,13 @@ void BalanceScopeProcessor::setStateInformation (const void* data, int sizeInByt
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
+}
+
+TargetCurve BalanceScopeProcessor::currentTarget() const
+{
+    return makeTarget ((int) apvts.getRawParameterValue ("target")->load(),
+                       apvts.getRawParameterValue ("customTilt")->load(),
+                       apvts.getRawParameterValue ("customLow")->load());
 }
 
 juce::AudioProcessorEditor* BalanceScopeProcessor::createEditor() { return new BalanceScopeEditor (*this); }

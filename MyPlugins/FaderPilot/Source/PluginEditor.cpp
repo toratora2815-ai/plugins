@@ -119,7 +119,7 @@ void FaderPilotEditor::resized()
     tGraph.bounds = area;
     graphArea = tileContent (tGraph);
     faderArea = tileContent (tFader);
-    fader.setBounds (faderArea.reduced (30, 0));
+    fader.setBounds (faderArea.reduced (30, 0).withTrimmedTop (20));   // 上の 20px は今の位置の数字
 
     // 下段：LEVEL 2、MOTION 2、MUSIC 1、OUTPUT 1
     const float unit = (float) (bottom.getWidth() - 3 * gap) / 6.0f;

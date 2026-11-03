@@ -137,7 +137,7 @@ namespace fp
                     }
                     gainDb = std::clamp (gainDb, -range, range);   // RANGE を狭めたとき
                 }
-                else gainDb = manualCur;
+                else gainDb += (manualCur - gainDb) * (float) paramCoef;   // AUTO を切ったときに段差が出ないように
 
                 outCur += (outTarget - outCur) * (float) paramCoef;
                 const float g = std::pow (10.0f, gainDb / 20.0f) * outCur;

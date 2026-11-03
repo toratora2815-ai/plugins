@@ -18,7 +18,15 @@ inline const TargetCurve kTargets[] = {
     { "Acoustic / Jazz",        -1.2f, -2.0f, 3.5f },
     { "Cinematic / Orchestral", -2.5f,  0.0f, 4.0f },
 };
-inline constexpr int kNumTargets = 4;
+inline constexpr int kNumTargets = 4;          // 決まったカーブの数
+inline constexpr int kCustomTarget = kNumTargets; // その次（5 番目）が CUSTOM
+
+// CUSTOM は傾きと低域の持ち上げを自分で決める（許容幅は ±3 dB）
+inline TargetCurve makeTarget (int index, float customTilt, float customLow)
+{
+    if (index >= 0 && index < kNumTargets) return kTargets[index];
+    return { "Custom", customTilt, customLow, 3.0f };
+}
 
 inline float targetDb (const TargetCurve& t, float f)
 {

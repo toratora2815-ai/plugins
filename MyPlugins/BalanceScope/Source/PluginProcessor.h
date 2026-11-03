@@ -1,5 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
+#include "LoudnessMeter.h"
+#include "Targets.h"
 
 class BalanceScopeProcessor : public juce::AudioProcessor
 {
@@ -44,7 +46,13 @@ public:
         bool playing = false;
     };
     void getSnapshot (Snapshot& s);
-    void requestReset() { resetRequested = true; }
+    void requestReset() { resetRequested = true; loudResetRequested = true; }
+
+    // 今の目標カーブ（CUSTOM のときはつまみの値から作る）
+    TargetCurve currentTarget() const;
+
+    // ラウドネス（INTEGRATED と PEAK は再生中だけ測る。RESET で 0 から）
+    const LoudnessMeter& getLoudness() const { return loudness; }
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -62,7 +70,8 @@ private:
     bool hostPlaying = true;
 
     juce::SpinLock lock;
-    std::atomic<bool> resetRequested { false };
+    std::atomic<bool> resetRequested { false }, loudResetRequested { false };
+    LoudnessMeter loudness;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BalanceScopeProcessor)
 };
