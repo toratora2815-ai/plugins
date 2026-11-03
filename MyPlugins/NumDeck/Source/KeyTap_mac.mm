@@ -310,6 +310,17 @@ namespace numdeck
                                           completionHandler: nil];
     }
 
+    void KeyTap::quitAllApps()
+    {
+        const pid_t self = [NSRunningApplication currentApplication].processIdentifier;
+        for (NSRunningApplication* a in [[NSWorkspace sharedWorkspace] runningApplications])
+        {
+            if (a.activationPolicy != NSApplicationActivationPolicyRegular || a.processIdentifier == self) continue;
+            if ([a.bundleIdentifier isEqualToString: @"com.apple.finder"]) continue;
+            [a terminate];
+        }
+    }
+
     void KeyTap::openURL (const std::string& url, const std::string& profileDir)
     {
         NSString* s = ns (url);
@@ -383,8 +394,9 @@ namespace numdeck
             return (AXUIElementRef) w;
         }
 
-        // before と違うウィンドウが前に出るまで待って（最大 6 秒）、r に置いてから then。before は最後に CFRelease する
-        void waitAndPlace (NSString* bundleId, AXUIElementRef before, CGRect r, int tries, void (^then) (void))
+        // before と違うウィンドウが前に出るまで待って（最大 6 秒）、r に置いてから then（置いたウィンドウ、なければ nullptr）。
+        // before は最後に CFRelease する
+        void waitAndPlace (NSString* bundleId, AXUIElementRef before, CGRect r, int tries, void (^then) (AXUIElementRef))
         {
             AXUIElementRef w = copyFrontWindow (bundleId);
             const bool ready = w != nullptr && (before == nullptr || ! CFEqual (w, before));
@@ -397,9 +409,106 @@ namespace numdeck
                 return;
             }
             if (ready) placeWindow (w, r);
-            if (w != nullptr) CFRelease (w);
             if (before != nullptr) CFRelease (before);
-            if (then != nil) then();
+            if (then != nil) then (ready ? w : nullptr);
+            if (w != nullptr) CFRelease (w);
+        }
+
+        CFStringRef axTitle (AXUIElementRef e)
+        {
+            CFTypeRef t = nullptr;
+            AXUIElementCopyAttributeValue (e, kAXTitleAttribute, &t);
+            return (CFStringRef) t;
+        }
+
+        // メニューの中から、titles のどれかの名前の項目（呼んだ側で CFRelease）
+        AXUIElementRef copyChildItem (AXUIElementRef parent, NSArray<NSString*>* titles)
+        {
+            CFTypeRef kids = nullptr;
+            AXUIElementCopyAttributeValue (parent, kAXChildrenAttribute, &kids);
+            if (kids == nullptr) return nullptr;
+            AXUIElementRef found = nullptr;
+            for (id k in (__bridge NSArray*) kids)
+            {
+                AXUIElementRef e = (__bridge AXUIElementRef) k;
+                CFStringRef t = axTitle (e);
+                const bool hit = t != nullptr && [titles containsObject: (__bridge NSString*) t];
+                if (t != nullptr) CFRelease (t);
+                if (hit) { found = (AXUIElementRef) CFRetain (e); break; }
+                // メニューバーの項目・サブメニューは、子の AXMenu を 1 段下りて探す
+                CFStringRef role = nullptr;
+                AXUIElementCopyAttributeValue (e, kAXRoleAttribute, (CFTypeRef*) &role);
+                const bool isMenu = role != nullptr && CFEqual (role, kAXMenuRole);
+                if (role != nullptr) CFRelease (role);
+                if (isMenu && (found = copyChildItem (e, titles)) != nullptr) break;
+            }
+            CFRelease (kids);
+            return found;
+        }
+
+        // アプリのメニュー「ウィンドウ」→「フルスクリーンのタイル表示」→「画面左側」を押す
+        bool pressTileLeft (pid_t pid)
+        {
+            AXUIElementRef app = AXUIElementCreateApplication (pid);
+            CFTypeRef bar = nullptr;
+            AXUIElementCopyAttributeValue (app, kAXMenuBarAttribute, &bar);
+            CFRelease (app);
+            if (bar == nullptr) return false;
+            bool ok = false;
+            if (AXUIElementRef win = copyChildItem ((AXUIElementRef) bar, @[ @"ウィンドウ", @"ウインドウ", @"Window" ]))
+            {
+                if (AXUIElementRef tile = copyChildItem (win, @[ @"フルスクリーンのタイル表示", @"Full Screen Tile" ]))
+                {
+                    if (AXUIElementRef left = copyChildItem (tile, @[ @"画面左側", @"Left of Screen" ]))
+                    {
+                        ok = AXUIElementPerformAction (left, kAXPressAction) == kAXErrorSuccess;
+                        CFRelease (left);
+                    }
+                    CFRelease (tile);
+                }
+                CFRelease (win);
+            }
+            CFRelease (bar);
+            return ok;
+        }
+
+        void clickAt (CGPoint p)
+        {
+            CGEventRef cur = CGEventCreate (nullptr);
+            const CGPoint back = CGEventGetLocation (cur);
+            CFRelease (cur);
+            for (CGEventType t : { kCGEventMouseMoved, kCGEventLeftMouseDown, kCGEventLeftMouseUp })
+            {
+                CGEventRef e = CGEventCreateMouseEvent (nullptr, t, p, kCGMouseButtonLeft);
+                CGEventPost (kCGHIDEventTap, e);
+                CFRelease (e);
+                usleep (60000);
+            }
+            CGEventRef mv = CGEventCreateMouseEvent (nullptr, kCGEventMouseMoved, back, kCGMouseButtonLeft);
+            CGEventPost (kCGHIDEventTap, mv);
+            CFRelease (mv);
+        }
+
+        // 左右に並べた 2 つを、macOS の全画面の左右分割にする。
+        // 左のウィンドウを「画面左側」にすると、右に置く相手を選ぶ画面が出る。
+        // そこでは各ウィンドウが元の位置を縮めた所に並ぶので、右半分に置いた相手の所（右半分の真ん中）をクリックする
+        void makeFullScreenSplit (pid_t leftPid, AXUIElementRef leftWin, CGRect area)
+        {
+            if (NSRunningApplication* a = [NSRunningApplication runningApplicationWithProcessIdentifier: leftPid])
+                if (a.bundleURL != nil)
+                    [[NSWorkspace sharedWorkspace] openApplicationAtURL: a.bundleURL
+                                                          configuration: [NSWorkspaceOpenConfiguration configuration]
+                                                      completionHandler: nil];
+            AXUIElementRef win = (AXUIElementRef) CFRetain (leftWin);
+            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                AXUIElementPerformAction (win, kAXRaiseAction);
+                CFRelease (win);
+                if (! pressTileLeft (leftPid)) return;
+                const CGPoint target = CGPointMake (area.origin.x + area.size.width * 0.875, area.origin.y + area.size.height * 0.5);
+                dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                    clickAt (target);
+                });
+            });
         }
 
         // Chrome を引数付きで開く（起動中なら、起動中の Chrome に渡される）
@@ -428,25 +537,30 @@ namespace numdeck
         const CGRect right = CGRectMake (area.origin.x + half, area.origin.y, area.size.width - half, area.size.height);
         const std::string rightSide = split;
 
-        // 1. ページを新しいウィンドウで開いて左半分へ
+        // 1. ページを新しいウィンドウで開いて左半分へ → 2. 右半分 → 3. 全画面の左右分割にする
         AXUIElementRef before = copyFrontWindow (chromeId);
         launchChrome (profileDir, @[ @"--new-window", ns (url) ]);
-        waitAndPlace (chromeId, before, left, 0, ^{
-            // 2. 右半分
+        waitAndPlace (chromeId, before, left, 0, ^(AXUIElementRef placedLeft) {
+            if (placedLeft == nullptr) return;
+            AXUIElementRef leftWin = (AXUIElementRef) CFRetain (placedLeft);
+            const pid_t chromePid = runningPid (chromeId);
+            auto finish = ^(AXUIElementRef placedRight) {
+                if (placedRight != nullptr) makeFullScreenSplit (chromePid, leftWin, area);
+                CFRelease (leftWin);
+            };
             if (rightSide == "chrome")
             {
-                AXUIElementRef leftWin = copyFrontWindow (chromeId);
                 launchChrome (profileDir, @[ @"--new-window" ]);
-                waitAndPlace (chromeId, leftWin, right, 0, nil);
+                waitAndPlace (chromeId, (AXUIElementRef) CFRetain (leftWin), right, 0, finish);
                 return;
             }
             NSString* path = ns (rightSide);
             NSString* bid = [NSBundle bundleWithPath: path].bundleIdentifier;
-            if (bid == nil) return;
+            if (bid == nil) { CFRelease (leftWin); return; }
             [[NSWorkspace sharedWorkspace] openApplicationAtURL: [NSURL fileURLWithPath: path]
                                                   configuration: [NSWorkspaceOpenConfiguration configuration]
                                               completionHandler: nil];
-            waitAndPlace (bid, nullptr, right, 0, nil);
+            waitAndPlace (bid, nullptr, right, 0, finish);
         });
     }
 

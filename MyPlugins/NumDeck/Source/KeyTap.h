@@ -56,6 +56,8 @@ namespace numdeck
         // 業務モード用: アプリやページを開く
         // アプリを開く。そのアプリがもう前面なら隠して、開く前のアプリに戻す（全画面でも同じ）
         static void openApp (const std::string& path);
+        // 開いているアプリを全部終了する（Finder と Num Deck 以外。保存していない書類はアプリが聞いてくる）
+        static void quitAllApps();
         // Chrome があれば Chrome で。profileDir（例: "Profile 2"）を指定すると、そのアカウントで開く
         static void openURL (const std::string& url, const std::string& profileDir = {});
         // 2 画面で開く: ページを Chrome の新しいウィンドウで左半分に、右半分に split

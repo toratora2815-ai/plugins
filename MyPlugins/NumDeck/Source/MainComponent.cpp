@@ -591,7 +591,7 @@ void MainComponent::paintTile (juce::Graphics& g, int index)
             return;
         }
 
-        const auto sc = res.kind == Resolved::Remote ? juce::String ("RefMon")
+        const auto sc = res.kind == Resolved::Remote ? (res.remote.startsWith ("!") ? juce::String() : juce::String ("RefMon"))
                       : res.kind == Resolved::Key ? shortcutText (res.keyCode, res.mods)
                       : res.kind == Resolved::App ? juce::String::fromUTF8 ("アプリ")
                                                   : juce::URL (res.url).getDomain().replace ("www.", "");
@@ -647,7 +647,7 @@ void MainComponent::paintTile (juce::Graphics& g, int index)
     if (res.valid)
     {
         // ショートカット（右上）。アプリ・ページは何を開くか
-        const auto sc = res.kind == Resolved::Remote ? juce::String ("RefMon")
+        const auto sc = res.kind == Resolved::Remote ? (res.remote.startsWith ("!") ? juce::String() : juce::String ("RefMon"))
                       : res.kind == Resolved::Key ? shortcutText (res.keyCode, res.mods)
                       : res.kind == Resolved::App ? juce::String::fromUTF8 ("アプリ")
                                                   : juce::URL (res.url).getDomain().replace ("www.", "");

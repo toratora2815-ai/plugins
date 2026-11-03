@@ -172,7 +172,7 @@ namespace numdeck
                 r.name = jp (a->name); r.glyph = a->glyph;
                 r.cat = a->cat; r.icon = a->icon;
                 r.keyCode = a->keyCode; r.mods = a->mods; r.repeat = a->repeat;
-                if (a->remote != nullptr) { r.kind = Resolved::Remote; r.remote = a->remote; }
+                if (a->remote != nullptr) { r.kind = Resolved::Remote; r.remote = a->remote; }   // "!" で始まるのは Num Deck 自身がやる操作
             }
             r.toLogic = mode == ModeLogic && r.kind == Resolved::Key;
             return r;
@@ -191,7 +191,10 @@ namespace numdeck
                     if (r.split.isNotEmpty()) KeyTap::openURLSplit (r.url.toStdString(), chromeProfile.toStdString(), r.split.toStdString());
                     else                      KeyTap::openURL (r.url.toStdString(), chromeProfile.toStdString());
                     break;
-                case Resolved::Remote: KeyTap::sendRemote ("referencemonitor", r.remote.toStdString()); break;
+                case Resolved::Remote:
+                    if (r.remote == "!quitAll") KeyTap::quitAllApps();
+                    else                        KeyTap::sendRemote ("referencemonitor", r.remote.toStdString());
+                    break;
             }
         }
 
@@ -261,7 +264,7 @@ namespace numdeck
             static const char* work[kPages][kSlots] = {
                 { "find",   "save",     "screenshot", "cut",    "copy",      "paste",   "undo",   "redo",   "selectAll", "", "" },
                 { "back",   "address",  "fwd",      "prevTab",  "reload",    "nextTab", "newTab", "closeTab", "reopenTab", "", "" },
-                { "", "", "", "", "", "", "", "", "", "", "" },
+                { "", "", "", "", "", "", "", "", "", "quitAll", "" },
                 { "", "", "", "", "", "", "", "", "", "", "" },
             };
             for (int i = 0; i < kSlots; ++i)

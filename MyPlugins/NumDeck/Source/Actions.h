@@ -107,6 +107,7 @@ namespace numdeck
             { "pastePlain","書式なしで貼り付け", Cat::General, vk::V, kCmd | kOpt | kShift, false, Icon::None, "PLAIN" },
             { "selectAll", "すべて選択",        Cat::General, vk::A, kCmd,          false, Icon::None, "ALL" },
             { "find",      "検索",              Cat::General, vk::F, kCmd,          false, Icon::None, "FIND" },
+            { "quitAll",   "アプリを全部終了",   Cat::General, -1, 0, false, Icon::None, "ALL", "!quitAll" },
             { "screenshot","範囲スクリーンショット", Cat::General, vk::Four, kCmd | kShift, false, Icon::None, "SHOT" },
             // ブラウザ（Chrome など）
             { "newTab",    "新しいタブ",        Cat::Browser, vk::T, kCmd,          false, Icon::None, "+TAB" },
