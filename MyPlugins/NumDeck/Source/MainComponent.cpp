@@ -239,9 +239,14 @@ void MainComponent::resized()
     headerArea = b.removeFromTop (60);
     {
         auto h = headerArea;
-        h.removeFromLeft (200);
-        statusPill = h.removeFromRight (230).withSizeKeepingCentre (230, 40);
-        auto tabs = h.reduced (16, 0).withSizeKeepingCentre (juce::jmin (h.getWidth() - 32, 420), 40);
+        auto title = h.removeFromLeft (200);
+        title.removeFromTop (30);
+        auto seg = title.removeFromTop (26).withWidth (190);
+        for (int m = 0; m < Deck::kModes; ++m)
+            modeTabs[m] = seg.removeFromLeft (95);
+        const int pw = juce::jlimit (150, 230, h.getWidth() / 3);
+        statusPill = h.removeFromRight (pw).withSizeKeepingCentre (pw, 40);
+        auto tabs = h.reduced (12, 0).withSizeKeepingCentre (juce::jmin (h.getWidth() - 24, 480), 40);
         prevPage = tabs.removeFromLeft (30).withSizeKeepingCentre (26, 24);
         nextPage = tabs.removeFromRight (30).withSizeKeepingCentre (26, 24);
         const int w = tabs.getWidth() / Deck::kPages;
@@ -327,11 +332,32 @@ void MainComponent::paintHeader (juce::Graphics& g)
     auto h = headerArea;
     auto title = h.removeFromLeft (200);
     g.setColour (text);
-    g.setFont (font (24.0f, true));
-    g.drawText ("NUM DECK", title.removeFromTop (34).withTrimmedTop (6), juce::Justification::centredLeft);
-    g.setColour (sub);
-    g.setFont (font (12.0f));
-    g.drawText (juce::String::fromUTF8 ("テンキー  \xe2\x86\x92  Logic Pro"), title.removeFromTop (18), juce::Justification::centredLeft);
+    g.setFont (font (20.0f, true));
+    g.drawText ("NUM DECK", title.removeFromTop (28), juce::Justification::centredLeft);
+
+    // モード（クリックでだけ切り替わる）
+    const auto mouse = getMouseXYRelative();
+    auto segAll = modeTabs[0].getUnion (modeTabs[Deck::kModes - 1]).toFloat();
+    g.setColour (juce::Colour (0xff0a0e13));
+    g.fillRoundedRectangle (segAll, segAll.getHeight() / 2);
+    for (int m = 0; m < Deck::kModes; ++m)
+    {
+        const bool sel = m == deck.mode;
+        auto r = modeTabs[m].toFloat().reduced (2.0f);
+        if (sel)
+        {
+            g.setColour (modeAccent());
+            g.fillRoundedRectangle (r, r.getHeight() / 2);
+        }
+        else if (modeTabs[m].contains (mouse))
+        {
+            g.setColour (card.brighter (0.2f));
+            g.fillRoundedRectangle (r, r.getHeight() / 2);
+        }
+        g.setColour (sel ? juce::Colour (0xff06121c) : sub);
+        g.setFont (font (12.0f, true));
+        g.drawText (Deck::modeName (m), modeTabs[m], juce::Justification::centred);
+    }
 
     // ページ（左右の − / + はテンキーの − / +）
     const bool hoverPrev = prevPage.contains (getMouseXYRelative()), hoverNext = nextPage.contains (getMouseXYRelative());
@@ -339,14 +365,14 @@ void MainComponent::paintHeader (juce::Graphics& g)
     drawKeycap (g, nextPage.getX(), nextPage.getCentreY(), "+", hoverNext ? 1.0f : 0.7f);
     for (int i = 0; i < Deck::kPages; ++i)
     {
-        const bool sel = i == deck.page;
+        const bool sel = i == deck.page();
         auto r = pageTabs[i];
         g.setColour (sel ? text : sub);
         g.setFont (font (14.0f, sel));
-        g.drawText (Deck::pageName (i), r, juce::Justification::centred);
+        g.drawFittedText (deck.pageName (i), r.reduced (2, 0), juce::Justification::centred, 1, 0.6f);
         if (sel)
         {
-            g.setColour (accent);
+            g.setColour (modeAccent());
             g.fillRoundedRectangle (r.withSizeKeepingCentre (r.getWidth() - 24, 3).withBottomY (r.getBottom()).toFloat(), 1.5f);
         }
     }
@@ -370,9 +396,10 @@ void MainComponent::paintHeader (juce::Graphics& g)
     g.setFont (font (16.0f, true));
     g.drawText (deck.enabled ? "ON" : "OFF", inner.removeFromLeft (40), juce::Justification::centredLeft);
     g.setFont (font (12.0f));
-    g.drawText (deck.enabled ? juce::String::fromUTF8 ("テンキーで Logic を操作")
-                             : juce::String::fromUTF8 ("普通の数字キー"),
-                inner, juce::Justification::centredLeft);
+    g.drawFittedText (! deck.enabled ? juce::String::fromUTF8 ("普通の数字キー")
+                      : deck.mode == Deck::ModeLogic ? juce::String::fromUTF8 ("テンキーで Logic を操作")
+                                                     : juce::String::fromUTF8 ("テンキーで操作"),
+                      inner, juce::Justification::centredLeft, 1, 0.7f);
 }
 
 void MainComponent::paintBanner (juce::Graphics& g)
@@ -406,7 +433,7 @@ void MainComponent::paintBanner (juce::Graphics& g)
 void MainComponent::paintTile (juce::Graphics& g, int index)
 {
     auto r = tiles[index].toFloat();
-    const auto res = deck.resolve (deck.page, index);
+    const auto res = deck.resolve (deck.page(), index);
     const juce::Colour ac = res.valid ? catColour (res.cat) : sub;
     const float f = flash[(size_t) index];
     const bool hover = hoverTile == index && learnIndex < 0;
@@ -447,15 +474,19 @@ void MainComponent::paintTile (juce::Graphics& g, int index)
 
     if (res.valid)
     {
-        // ショートカット（右上）
-        const auto sc = shortcutText (res.keyCode, res.mods);
+        // ショートカット（右上）。アプリ・ページは何を開くか
+        const auto sc = res.kind == Resolved::Key ? shortcutText (res.keyCode, res.mods)
+                      : res.kind == Resolved::App ? juce::String::fromUTF8 ("アプリ")
+                                                  : juce::URL (res.url).getDomain().replace ("www.", "");
+        const auto scShown = sc.isNotEmpty() ? sc : juce::String::fromUTF8 ("リンク");
         g.setFont (font (12.0f * scale));
-        const float sw = (float) juce::GlyphArrangement::getStringWidthInt (font (12.0f * scale), sc) + 14.0f;
+        const float sw = juce::jmin (top.getWidth() - 4.0f,
+                                     (float) juce::GlyphArrangement::getStringWidthInt (font (12.0f * scale), scShown) + 14.0f);
         auto scr = top.removeFromRight (sw).withSizeKeepingCentre (sw, 20.0f * scale);
         g.setColour (juce::Colour (0xff0a0e13).withAlpha (0.7f));
         g.fillRoundedRectangle (scr, 6.0f);
         g.setColour (sub);
-        g.drawText (sc, scr, juce::Justification::centred);
+        g.drawFittedText (scShown, scr.toNearestInt().reduced (4, 0), juce::Justification::centred, 1, 0.6f);
 
         // 名前（下）
         auto nameArea = in.removeFromBottom (26.0f * scale);
@@ -466,7 +497,10 @@ void MainComponent::paintTile (juce::Graphics& g, int index)
         // アイコン（真ん中）
         const float isz = juce::jmin (in.getHeight() * 0.92f, in.getWidth() * 0.5f);
         auto iconArea = in.withSizeKeepingCentre (isz, isz);
-        if (res.icon != Icon::None)
+        const auto img = res.kind == Resolved::App ? appIcon (res.path) : juce::Image();
+        if (img.isValid())
+            g.drawImage (img, iconArea.reduced (isz * 0.04f), juce::RectanglePlacement::centred);
+        else if (res.icon != Icon::None)
             drawIcon (g, res.icon, iconArea, ac);
         else
         {
@@ -499,18 +533,20 @@ void MainComponent::paintFooter (juce::Graphics& g)
     const int cy = f.getCentreY();
     int x = f.getX();
 
-    // Logic の状態
-    juce::Colour dot = logicFront ? onCol : (logicRunning ? warn : offCol.brighter (0.3f));
+    // Logic の状態（業務モードでは、どのアプリでも動く）
+    const bool logicMode = deck.mode == Deck::ModeLogic;
+    juce::Colour dot = ! logicMode ? modeAccent() : logicFront ? onCol : (logicRunning ? warn : offCol.brighter (0.3f));
     g.setColour (dot);
     g.fillEllipse ((float) x, (float) cy - 4.0f, 8.0f, 8.0f);
     x += 14;
     g.setColour (sub);
     g.setFont (font (12.0f));
-    const auto ls = logicFront ? juce::String::fromUTF8 ("Logic 前面")
+    const auto ls = ! logicMode ? juce::String::fromUTF8 ("どのアプリでも")
+                  : logicFront ? juce::String::fromUTF8 ("Logic 前面")
                   : logicRunning ? juce::String::fromUTF8 ("Logic 背面")
                                  : juce::String::fromUTF8 ("Logic 未起動");
-    g.drawText (ls, x, cy - 10, 80, 20, juce::Justification::centredLeft);
-    x += 86;
+    g.drawText (ls, x, cy - 10, 90, 20, juce::Justification::centredLeft);
+    x += 96;
 
     // 操作のヒント
     if (deck.toggleKey != Deck::ToggleNone)
@@ -523,11 +559,12 @@ void MainComponent::paintFooter (juce::Graphics& g)
     x += drawKeycap (g, x, cy, juce::String::fromUTF8 ("\xe2\x88\x92")) + 4;
     x += drawKeycap (g, x, cy, "+") + 6;
     g.setColour (sub);
-    if (x + 60 < logicOnlyPill.getX())
+    if (x + 60 < (logicMode ? logicOnlyPill.getX() : onTopPill.getX()))
         g.drawText (juce::String::fromUTF8 ("ページ"), x, cy - 10, 60, 20, juce::Justification::centredLeft);
 
     const auto mouse = getMouseXYRelative();
-    drawPill (g, logicOnlyPill, juce::String::fromUTF8 ("Logic が前面のときだけ"), deck.logicOnly, logicOnlyPill.contains (mouse));
+    if (logicMode)
+        drawPill (g, logicOnlyPill, juce::String::fromUTF8 ("Logic が前面のときだけ"), deck.logicOnly, logicOnlyPill.contains (mouse));
     drawPill (g, onTopPill, juce::String::fromUTF8 ("いつも手前"), deck.alwaysOnTop, onTopPill.contains (mouse));
     drawPill (g, settingsPill, juce::String::fromUTF8 ("設定"), false, settingsPill.contains (mouse));
 }
@@ -546,7 +583,7 @@ void MainComponent::paintLearning (juce::Graphics& g)
     auto t = c.reduced (24.0f, 22.0f).toNearestInt();
     g.setColour (sub);
     g.setFont (font (13.0f));
-    g.drawText (Deck::pageName (learnPage) + juce::String::fromUTF8 (" ページ ・ テンキー ") + juce::String (learnIndex + 1),
+    g.drawText (deck.pageName (learnPage) + juce::String::fromUTF8 (" ページ ・ テンキー ") + juce::String (learnIndex + 1),
                 t.removeFromTop (20), juce::Justification::centred);
     g.setColour (text);
     g.setFont (font (20.0f, true));
@@ -570,15 +607,16 @@ void MainComponent::paintLearning (juce::Graphics& g)
 // ============================================================================
 void MainComponent::mouseMove (const juce::MouseEvent& e)
 {
+    const auto p = e.getPosition();
     int h = -1;
     for (int i = 0; i < 9; ++i)
-        if (tiles[i].contains (e.getPosition())) h = i;
+        if (tiles[i].contains (p)) h = i;
     hoverTile = h;
-    const bool clickable = h >= 0 || statusPill.contains (e.getPosition()) || bannerButton.contains (e.getPosition())
-                        || logicOnlyPill.contains (e.getPosition()) || onTopPill.contains (e.getPosition())
-                        || settingsPill.contains (e.getPosition()) || prevPage.contains (e.getPosition())
-                        || nextPage.contains (e.getPosition())
-                        || std::any_of (std::begin (pageTabs), std::end (pageTabs), [&] (auto& r) { return r.contains (e.getPosition()); });
+    auto any = [&] (auto& rects) { return std::any_of (std::begin (rects), std::end (rects), [&] (auto& r) { return r.contains (p); }); };
+    const bool clickable = h >= 0 || statusPill.contains (p) || bannerButton.contains (p)
+                        || (deck.mode == Deck::ModeLogic && logicOnlyPill.contains (p))
+                        || onTopPill.contains (p) || settingsPill.contains (p)
+                        || prevPage.contains (p) || nextPage.contains (p) || any (pageTabs) || any (modeTabs);
     setMouseCursor (clickable ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
     repaint();
 }
@@ -605,29 +643,52 @@ void MainComponent::mouseDown (const juce::MouseEvent& e)
         KeyTap::openPermissionSettings();
         return;
     }
+    for (int m = 0; m < Deck::kModes; ++m)
+        if (modeTabs[m].contains (p)) { deck.setMode (m); repaint(); return; }
     if (statusPill.contains (p))   { deck.enabled = ! deck.enabled; deck.save(); repaint(); return; }
-    if (prevPage.contains (p))     { deck.page = (deck.page + Deck::kPages - 1) % Deck::kPages; deck.save(); repaint(); return; }
-    if (nextPage.contains (p))     { deck.page = (deck.page + 1) % Deck::kPages; deck.save(); repaint(); return; }
+    if (prevPage.contains (p))     { deck.setPage (deck.page() - 1); repaint(); return; }
+    if (nextPage.contains (p))     { deck.setPage (deck.page() + 1); repaint(); return; }
     for (int i = 0; i < Deck::kPages; ++i)
-        if (pageTabs[i].contains (p)) { deck.page = i; deck.save(); repaint(); return; }
-    if (logicOnlyPill.contains (p)) { deck.logicOnly = ! deck.logicOnly; deck.save(); repaint(); return; }
+        if (pageTabs[i].contains (p)) { deck.setPage (i); repaint(); return; }
+    if (deck.mode == Deck::ModeLogic && logicOnlyPill.contains (p)) { deck.logicOnly = ! deck.logicOnly; deck.save(); repaint(); return; }
     if (onTopPill.contains (p))     { deck.alwaysOnTop = ! deck.alwaysOnTop; deck.save(); applyOnTop(); repaint(); return; }
     if (settingsPill.contains (p))  { showSettingsMenu(); return; }
     for (int i = 0; i < 9; ++i)
         if (tiles[i].contains (p)) { showTileMenu (i); return; }
 }
 
+// ============================================================================
+juce::Colour MainComponent::modeAccent() const
+{
+    return deck.mode == Deck::ModeLogic ? accent : juce::Colour (0xff4fd6c8);
+}
+
+juce::Image MainComponent::appIcon (const juce::String& path)
+{
+    auto it = iconCache.find (path);
+    if (it != iconCache.end()) return it->second;
+    const auto png = KeyTap::appIconPNG (path.toStdString(), 256);
+    auto img = png.empty() ? juce::Image() : juce::ImageFileFormat::loadFrom (png.data(), png.size());
+    iconCache[path] = img;
+    return img;
+}
+
 void MainComponent::showTileMenu (int index)
 {
-    const int page = deck.page;
-    const auto& current = deck.slots[(size_t) page][(size_t) index];
+    const int page = deck.page();
+    const auto current = deck.slot (page, index);
 
     juce::PopupMenu m;
-    m.addSectionHeader (Deck::pageName (page) + juce::String::fromUTF8 (" ページ ・ テンキー ") + juce::String (index + 1));
+    m.addSectionHeader (Deck::modeName (deck.mode) + juce::String::fromUTF8 (" ・ ") + deck.pageName (page)
+                        + juce::String::fromUTF8 (" ページ ・ テンキー ") + juce::String (index + 1));
 
+    // 決まった操作（モードに合う分類を先に）
     std::map<int, juce::String> ids;
     int id = 1;
-    for (auto cat : { Cat::Transport, Cat::Edit, Cat::Track, Cat::Window, Cat::File })
+    const std::vector<Cat> order = deck.mode == Deck::ModeLogic
+        ? std::vector<Cat> { Cat::Transport, Cat::Edit, Cat::Track, Cat::Window, Cat::File, Cat::General, Cat::Browser }
+        : std::vector<Cat> { Cat::General, Cat::Browser, Cat::Edit, Cat::File };
+    for (auto cat : order)
     {
         juce::PopupMenu sub;
         bool any = false;
@@ -641,29 +702,68 @@ void MainComponent::showTileMenu (int index)
         }
         m.addSubMenu (catName (cat), sub, true, nullptr, any);
     }
+
+    // アプリを開く
+    std::map<int, juce::String> appIds;
+    {
+        juce::PopupMenu apps;
+        static const char* featured[] = {
+            "/Applications/Slack.app", "/Applications/Google Chrome.app", "/Applications/Safari.app",
+            "/System/Library/CoreServices/Finder.app", "/Applications/Microsoft Excel.app", "/Applications/Microsoft Word.app",
+            "/Applications/Microsoft PowerPoint.app", "/Applications/Microsoft Teams.app", "/Applications/zoom.us.app",
+            "/Applications/LINE.app", "/Applications/Discord.app", "/Applications/Logic Pro.app",
+            "/System/Applications/Notes.app", "/System/Applications/Calendar.app", "/System/Applications/Mail.app",
+            "/System/Applications/Reminders.app", "/System/Applications/Calculator.app" };
+        int aid = 2000;
+        for (auto* path : featured)
+        {
+            if (! juce::File (path).exists()) continue;
+            const juce::String ps (path);
+            apps.addItem (aid, juce::String::fromUTF8 (KeyTap::appDisplayName (path).c_str()), true,
+                          current.actionId == "app" && current.path == ps);
+            appIds[aid++] = ps;
+        }
+        apps.addSeparator();
+        apps.addItem (1010, juce::String::fromUTF8 ("ほかのアプリを選ぶ\xe2\x80\xa6"));
+        m.addSeparator();
+        m.addSubMenu (catName (Cat::App), apps, true, nullptr, current.actionId == "app");
+    }
+
+    // ページを開く
+    {
+        juce::PopupMenu links;
+        links.addItem (1020, juce::String::fromUTF8 ("Chrome で今開いているページを登録"));
+        links.addItem (1021, juce::String::fromUTF8 ("アドレス（URL）を入力\xe2\x80\xa6"));
+        m.addSubMenu (catName (Cat::Link), links, true, nullptr, current.actionId == "url");
+    }
+
     m.addSeparator();
     m.addItem (1000, juce::String::fromUTF8 ("ショートカットを覚えさせる\xe2\x80\xa6"), true, current.actionId == "custom");
-    if (current.actionId == "custom")
+    if (current.isUser())
         m.addItem (1001, juce::String::fromUTF8 ("名前を変える\xe2\x80\xa6"));
     m.addItem (1002, juce::String::fromUTF8 ("なし（普通の数字キーとして使う）"), true, current.actionId.isEmpty());
 
     juce::Component::SafePointer<MainComponent> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this)
                                                .withTargetScreenArea (localAreaToGlobal (tiles[index])),
-                     [safe, page, index, ids] (int r)
+                     [safe, page, index, ids, appIds] (int r)
                      {
                          if (safe == nullptr || r == 0) return;
                          auto& self = *safe;
                          if (r == 1000) { self.startLearning (page, index); return; }
                          if (r == 1001) { self.renameSlot (page, index); return; }
+                         if (r == 1010) { self.chooseOtherApp (page, index); return; }
+                         if (r == 1020) { self.registerChromePage (page, index); return; }
+                         if (r == 1021) { self.enterUrl (page, index); return; }
                          Slot s;
-                         if (r != 1002)
-                         {
-                             auto it = ids.find (r);
-                             if (it == ids.end()) return;
+                         if (auto a = appIds.find (r); a != appIds.end())
+                             s = Slot::app (a->second);
+                         else if (auto it = ids.find (r); it != ids.end())
                              s.actionId = it->second;
-                         }
+                         else if (r != 1002)
+                             return;
                          self.deck.setSlot (page, index, s);
+                         self.flash[(size_t) index] = 1.0f;
                          self.repaint();
                      });
 }
@@ -676,8 +776,9 @@ void MainComponent::showSettingsMenu()
     m.addItem (2, "=", true, deck.toggleKey == Deck::ToggleEquals);
     m.addItem (3, juce::String::fromUTF8 ("なし（画面のボタンだけ）"), true, deck.toggleKey == Deck::ToggleNone);
     m.addSeparator();
+    m.addItem (5, juce::String::fromUTF8 ("このページの名前を変える\xe2\x80\xa6"));
     m.addItem (10, juce::String::fromUTF8 ("このページを最初の割り当てに戻す"));
-    m.addItem (11, juce::String::fromUTF8 ("全部のページを最初の割り当てに戻す"));
+    m.addItem (11, Deck::modeName (deck.mode) + juce::String::fromUTF8 (" の全部のページを最初に戻す"));
     m.addSeparator();
     m.addItem (20, juce::String::fromUTF8 ("アクセシビリティの設定を開く"));
 
@@ -688,11 +789,20 @@ void MainComponent::showSettingsMenu()
                      {
                          if (safe == nullptr || r == 0) return;
                          auto& d = safe->deck;
-                         if (r >= 1 && r <= 3) d.toggleKey = r - 1;
-                         if (r == 10) d.resetPage (d.page);
-                         if (r == 11) d.resetAll();
+                         if (r >= 1 && r <= 3) { d.toggleKey = r - 1; d.save(); }
+                         if (r == 5)
+                         {
+                             const int p = d.page();
+                             safe->askText (juce::String::fromUTF8 ("ページの名前"), {},
+                                            { { juce::String::fromUTF8 ("名前"), d.pageName (p) } },
+                                            [safe, p] (const juce::StringArray& v)
+                                            {
+                                                if (safe != nullptr) { safe->deck.setPageName (p, v[0]); safe->repaint(); }
+                                            });
+                         }
+                         if (r == 10) d.resetCurrentPage();
+                         if (r == 11) d.resetCurrentMode();
                          if (r == 20) KeyTap::openPermissionSettings();
-                         d.save();
                          safe->repaint();
                      });
 }
@@ -712,27 +822,106 @@ void MainComponent::startLearning (int page, int index)
     repaint();
 }
 
+void MainComponent::chooseOtherApp (int page, int index)
+{
+    chooser = std::make_unique<juce::FileChooser> (juce::String::fromUTF8 ("開きたいアプリを選んでください"),
+                                                   juce::File ("/Applications"), "*.app");
+    juce::Component::SafePointer<MainComponent> safe (this);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [safe, page, index] (const juce::FileChooser& fc)
+                          {
+                              if (safe == nullptr) return;
+                              const auto f = fc.getResult();
+                              if (f == juce::File()) return;
+                              safe->deck.setSlot (page, index, Slot::app (f.getFullPathName()));
+                              safe->flash[(size_t) index] = 1.0f;
+                              safe->repaint();
+                          });
+}
+
+void MainComponent::registerChromePage (int page, int index)
+{
+    std::string url, title;
+    if (! KeyTap::chromeFrontPage (url, title))
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+            juce::String::fromUTF8 ("Chrome のページが取れませんでした"),
+            juce::String::fromUTF8 ("Chrome で登録したいページを開いてから、もう一度選んでください。\n"
+                                    "「Num Deck が Google Chrome を制御しようとしています」と出たら「許可」を押してください。\n"
+                                    "（システム設定 → プライバシーとセキュリティ → オートメーション でも ON にできます）"));
+        return;
+    }
+    // 名前は短くできるよう、登録の前に確認する
+    auto name = juce::String::fromUTF8 (title.c_str()).upToFirstOccurrenceOf (" - ", false, false)
+                                                     .upToFirstOccurrenceOf (" | ", false, false).trim();
+    const auto u = juce::String::fromUTF8 (url.c_str());
+    juce::Component::SafePointer<MainComponent> safe (this);
+    askText (juce::String::fromUTF8 ("このページを登録"), u,
+             { { juce::String::fromUTF8 ("タイルに出す名前（短いほど見やすい）"), name } },
+             [safe, page, index, u] (const juce::StringArray& v)
+             {
+                 if (safe == nullptr) return;
+                 Slot s; s.actionId = "url"; s.url = u; s.label = v[0].trim();
+                 safe->deck.setSlot (page, index, s);
+                 safe->flash[(size_t) index] = 1.0f;
+                 safe->repaint();
+             });
+}
+
+void MainComponent::enterUrl (int page, int index)
+{
+    const auto& cur = deck.slot (page, index);
+    juce::Component::SafePointer<MainComponent> safe (this);
+    askText (juce::String::fromUTF8 ("ページを登録"), {},
+             { { juce::String::fromUTF8 ("アドレス（URL）"), cur.actionId == "url" ? cur.url : juce::String ("https://") },
+               { juce::String::fromUTF8 ("タイルに出す名前"), cur.actionId == "url" ? cur.label : juce::String() } },
+             [safe, page, index] (const juce::StringArray& v)
+             {
+                 if (safe == nullptr) return;
+                 auto u = v[0].trim();
+                 if (u.isEmpty() || u == "https://") return;
+                 if (! u.containsChar (':')) u = "https://" + u;
+                 Slot s; s.actionId = "url"; s.url = u; s.label = v[1].trim();
+                 safe->deck.setSlot (page, index, s);
+                 safe->flash[(size_t) index] = 1.0f;
+                 safe->repaint();
+             });
+}
+
 void MainComponent::renameSlot (int page, int index)
 {
-    const auto current = deck.resolve (page, index).name;
-    renameWindow = std::make_unique<juce::AlertWindow> (juce::String::fromUTF8 ("名前を変える"),
-                                                        juce::String::fromUTF8 ("タイルに出す名前"),
-                                                        juce::MessageBoxIconType::NoIcon);
-    renameWindow->addTextEditor ("name", current);
-    renameWindow->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
-    renameWindow->addButton (juce::String::fromUTF8 ("キャンセル"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
-
     juce::Component::SafePointer<MainComponent> safe (this);
-    renameWindow->enterModalState (true, juce::ModalCallbackFunction::create ([safe, page, index] (int r)
+    askText (juce::String::fromUTF8 ("名前を変える"), {},
+             { { juce::String::fromUTF8 ("タイルに出す名前"), deck.resolve (page, index).name } },
+             [safe, page, index] (const juce::StringArray& v)
+             {
+                 if (safe == nullptr) return;
+                 auto s = safe->deck.slot (page, index);
+                 s.label = v[0].trim();
+                 safe->deck.setSlot (page, index, s);
+                 safe->repaint();
+             });
+}
+
+void MainComponent::askText (const juce::String& title, const juce::String& message,
+                             const std::vector<std::pair<juce::String, juce::String>>& fields,
+                             std::function<void (const juce::StringArray&)> done)
+{
+    inputWindow = std::make_unique<juce::AlertWindow> (title, message, juce::MessageBoxIconType::NoIcon);
+    for (size_t i = 0; i < fields.size(); ++i)
+        inputWindow->addTextEditor ("f" + juce::String ((int) i), fields[i].second, fields[i].first);
+    inputWindow->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    inputWindow->addButton (juce::String::fromUTF8 ("キャンセル"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+
+    const int n = (int) fields.size();
+    juce::Component::SafePointer<MainComponent> safe (this);
+    inputWindow->enterModalState (true, juce::ModalCallbackFunction::create ([safe, n, done] (int r)
     {
-        if (safe == nullptr || safe->renameWindow == nullptr) return;
-        if (r == 1)
-        {
-            auto s = safe->deck.slots[(size_t) page][(size_t) index];
-            s.label = safe->renameWindow->getTextEditorContents ("name").trim();
-            safe->deck.setSlot (page, index, s);
-        }
-        safe->renameWindow->setVisible (false);
-        safe->repaint();
+        if (safe == nullptr || safe->inputWindow == nullptr) return;
+        juce::StringArray values;
+        for (int i = 0; i < n; ++i)
+            values.add (safe->inputWindow->getTextEditorContents ("f" + juce::String (i)));
+        safe->inputWindow->setVisible (false);
+        if (r == 1 && done) done (values);
     }), false);
 }

@@ -6,7 +6,7 @@
 namespace numdeck
 {
     enum class Icon { None, Play, Record, Rewind, Forward, ToStart, Cycle, Metronome, Undo, Redo, Split, Capture };
-    enum class Cat { Transport, Edit, Track, Window, File, Custom };
+    enum class Cat { Transport, Edit, Track, Window, File, General, Browser, Custom, App, Link };
 
     struct ActionDef
     {
@@ -25,7 +25,8 @@ namespace numdeck
     {
         enum { A = 0, S = 1, Z = 6, X = 7, C = 8, B = 11, E = 14, R = 15, Y = 16, T = 17, O = 31, U = 32,
                I = 34, P = 35, Return = 36, J = 38, K = 40, Comma = 43, M = 46, Period = 47, Space = 49,
-               Delete = 51, G = 5, D = 2, Left = 123, Right = 124 };
+               Delete = 51, G = 5, D = 2, Left = 123, Right = 124,
+               V = 9, F = 3, W = 13, L = 37, Tab = 48, LBracket = 33, RBracket = 30, Four = 21 };
     }
 
     inline const std::vector<ActionDef>& catalog()
@@ -72,6 +73,24 @@ namespace numdeck
             // ファイル
             { "save",      "保存",              Cat::File, vk::S, kCmd, false, Icon::None, "SAVE" },
             { "bounce",    "バウンス",          Cat::File, vk::B, kCmd, false, Icon::None, "BNC" },
+            // どのアプリでも
+            { "copy",      "コピー",            Cat::General, vk::C, kCmd,          false, Icon::None, "COPY" },
+            { "paste",     "貼り付け",          Cat::General, vk::V, kCmd,          false, Icon::None, "PASTE" },
+            { "cut",       "切り取り",          Cat::General, vk::X, kCmd,          false, Icon::None, "CUT" },
+            { "pastePlain","書式なしで貼り付け", Cat::General, vk::V, kCmd | kOpt | kShift, false, Icon::None, "PLAIN" },
+            { "selectAll", "すべて選択",        Cat::General, vk::A, kCmd,          false, Icon::None, "ALL" },
+            { "find",      "検索",              Cat::General, vk::F, kCmd,          false, Icon::None, "FIND" },
+            { "screenshot","範囲スクリーンショット", Cat::General, vk::Four, kCmd | kShift, false, Icon::None, "SHOT" },
+            // ブラウザ（Chrome など）
+            { "newTab",    "新しいタブ",        Cat::Browser, vk::T, kCmd,          false, Icon::None, "+TAB" },
+            { "closeTab",  "タブを閉じる",      Cat::Browser, vk::W, kCmd,          false, Icon::None, "xTAB" },
+            { "reopenTab", "閉じたタブを開く",  Cat::Browser, vk::T, kCmd | kShift, false, Icon::None, "REOPEN" },
+            { "nextTab",   "次のタブ",          Cat::Browser, vk::Tab, kCtrl,       true,  Icon::None, "TAB>" },
+            { "prevTab",   "前のタブ",          Cat::Browser, vk::Tab, kCtrl | kShift, true, Icon::None, "<TAB" },
+            { "reload",    "再読み込み",        Cat::Browser, vk::R, kCmd,          false, Icon::None, "RELOAD" },
+            { "back",      "戻る",              Cat::Browser, vk::LBracket, kCmd,   true,  Icon::None, "BACK" },
+            { "fwd",       "進む",              Cat::Browser, vk::RBracket, kCmd,   true,  Icon::None, "FWD" },
+            { "address",   "アドレスバー",      Cat::Browser, vk::L, kCmd,          false, Icon::None, "URL" },
         };
         return list;
     }
@@ -94,7 +113,11 @@ namespace numdeck
             case Cat::Track:     return jp ("トラック");
             case Cat::Window:    return jp ("ウィンドウ");
             case Cat::File:      return jp ("ファイル");
+            case Cat::General:   return jp ("どのアプリでも");
+            case Cat::Browser:   return jp ("ブラウザ");
             case Cat::Custom:    return jp ("自分で決めたキー");
+            case Cat::App:       return jp ("アプリを開く");
+            case Cat::Link:      return jp ("ページを開く");
         }
         return {};
     }
@@ -108,7 +131,11 @@ namespace numdeck
             case Cat::Track:     return juce::Colour (0xff5fe08f);
             case Cat::Window:    return juce::Colour (0xffb58cff);
             case Cat::File:      return juce::Colour (0xffffd34d);
+            case Cat::General:   return juce::Colour (0xff4fd6c8);
+            case Cat::Browser:   return juce::Colour (0xff6f9dff);
             case Cat::Custom:    return juce::Colour (0xffff6fae);
+            case Cat::App:       return juce::Colour (0xffe8eef5);
+            case Cat::Link:      return juce::Colour (0xff8fd14f);
         }
         return juce::Colours::grey;
     }

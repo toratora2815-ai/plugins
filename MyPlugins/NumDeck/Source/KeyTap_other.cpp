@@ -14,4 +14,9 @@ namespace numdeck
     bool KeyTap::isLogicFrontmost()        { return false; }
     bool KeyTap::isLogicRunning()          { return false; }
     void KeyTap::sendKey (int, int)        {}
+    void KeyTap::openApp (const std::string&) {}
+    void KeyTap::openURL (const std::string&) {}
+    bool KeyTap::chromeFrontPage (std::string&, std::string&) { return false; }
+    std::string KeyTap::appDisplayName (const std::string& path) { return path; }
+    std::vector<unsigned char> KeyTap::appIconPNG (const std::string&, int) { return {}; }
 }

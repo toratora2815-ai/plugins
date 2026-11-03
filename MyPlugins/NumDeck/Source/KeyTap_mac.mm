@@ -153,3 +153,90 @@ namespace numdeck
         if (src != nullptr) CFRelease (src);
     }
 }
+
+namespace numdeck
+{
+    static NSString* ns (const std::string& s) { return [NSString stringWithUTF8String: s.c_str()]; }
+
+    void KeyTap::openApp (const std::string& path)
+    {
+        NSURL* u = [NSURL fileURLWithPath: ns (path)];
+        [[NSWorkspace sharedWorkspace] openApplicationAtURL: u
+                                              configuration: [NSWorkspaceOpenConfiguration configuration]
+                                          completionHandler: nil];
+    }
+
+    void KeyTap::openURL (const std::string& url)
+    {
+        NSString* s = ns (url);
+        NSURL* u = [NSURL URLWithString: s];
+        if (u == nil) // 日本語などが混ざったアドレス
+            u = [NSURL URLWithString: [s stringByAddingPercentEncodingWithAllowedCharacters: [NSCharacterSet URLFragmentAllowedCharacterSet]]];
+        if (u == nil) return;
+
+        NSURL* chrome = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier: @"com.google.Chrome"];
+        if (chrome != nil)
+            [[NSWorkspace sharedWorkspace] openURLs: @[ u ] withApplicationAtURL: chrome
+                                      configuration: [NSWorkspaceOpenConfiguration configuration]
+                                  completionHandler: nil];
+        else
+            [[NSWorkspace sharedWorkspace] openURL: u];
+    }
+
+    bool KeyTap::chromeFrontPage (std::string& url, std::string& title)
+    {
+        NSString* src = @"tell application \"Google Chrome\"\n"
+                         "if (count of windows) is 0 then return \"\"\n"
+                         "set t to active tab of front window\n"
+                         "return (URL of t) & linefeed & (title of t)\n"
+                         "end tell";
+        NSAppleScript* script = [[NSAppleScript alloc] initWithSource: src];
+        NSDictionary* err = nil;
+        NSAppleEventDescriptor* r = [script executeAndReturnError: &err];
+        NSString* out = r != nil ? [r stringValue] : nil;
+        bool ok = false;
+        if (out != nil && out.length > 0)
+        {
+            NSRange nl = [out rangeOfString: @"\n"];
+            NSString* u = nl.location == NSNotFound ? out : [out substringToIndex: nl.location];
+            NSString* t = nl.location == NSNotFound ? @"" : [out substringFromIndex: nl.location + 1];
+            url = u.UTF8String != nullptr ? u.UTF8String : "";
+            title = t.UTF8String != nullptr ? t.UTF8String : "";
+            ok = ! url.empty();
+        }
+       #if ! __has_feature(objc_arc)
+        [script release];
+       #endif
+        return ok;
+    }
+
+    std::string KeyTap::appDisplayName (const std::string& path)
+    {
+        NSString* n = [[NSFileManager defaultManager] displayNameAtPath: ns (path)];
+        if ([n hasSuffix: @".app"]) n = [n substringToIndex: n.length - 4];
+        return n.UTF8String != nullptr ? n.UTF8String : path;
+    }
+
+    std::vector<unsigned char> KeyTap::appIconPNG (const std::string& path, int size)
+    {
+        std::vector<unsigned char> result;
+        NSImage* img = [[NSWorkspace sharedWorkspace] iconForFile: ns (path)];
+        if (img == nil) return result;
+
+        NSBitmapImageRep* rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes: NULL pixelsWide: size pixelsHigh: size
+                                                                    bitsPerSample: 8 samplesPerPixel: 4 hasAlpha: YES isPlanar: NO
+                                                                   colorSpaceName: NSCalibratedRGBColorSpace bytesPerRow: 0 bitsPerPixel: 0];
+        [NSGraphicsContext saveGraphicsState];
+        [NSGraphicsContext setCurrentContext: [NSGraphicsContext graphicsContextWithBitmapImageRep: rep]];
+        [img drawInRect: NSMakeRect (0, 0, size, size) fromRect: NSZeroRect operation: NSCompositingOperationCopy fraction: 1.0];
+        [NSGraphicsContext restoreGraphicsState];
+
+        NSData* png = [rep representationUsingType: NSBitmapImageFileTypePNG properties: @{}];
+        if (png != nil)
+            result.assign ((const unsigned char*) png.bytes, (const unsigned char*) png.bytes + png.length);
+       #if ! __has_feature(objc_arc)
+        [rep release];
+       #endif
+        return result;
+    }
+}

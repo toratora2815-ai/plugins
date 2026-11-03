@@ -22,6 +22,14 @@ private:
     void showSettingsMenu();
     void startLearning (int page, int index);
     void renameSlot (int page, int index);
+    void chooseOtherApp (int page, int index);
+    void registerChromePage (int page, int index);
+    void enterUrl (int page, int index);
+    void askText (const juce::String& title, const juce::String& message,
+                  const std::vector<std::pair<juce::String, juce::String>>& fields,
+                  std::function<void (const juce::StringArray&)> done);
+    juce::Image appIcon (const juce::String& path);
+    juce::Colour modeAccent() const;
 
     void paintHeader (juce::Graphics&);
     void paintTile (juce::Graphics&, int index);
@@ -42,11 +50,13 @@ private:
     bool onTopApplied = false;
 
     // クリックできる場所
-    juce::Rectangle<int> headerArea, statusPill, pageTabs[numdeck::Deck::kPages], prevPage, nextPage,
+    juce::Rectangle<int> headerArea, statusPill, modeTabs[numdeck::Deck::kModes], pageTabs[numdeck::Deck::kPages], prevPage, nextPage,
                          gridArea, tiles[9], footerArea, logicOnlyPill, onTopPill, settingsPill,
                          bannerArea, bannerButton, learnCancel;
 
-    std::unique_ptr<juce::AlertWindow> renameWindow;
+    std::unique_ptr<juce::AlertWindow> inputWindow;
+    std::unique_ptr<juce::FileChooser> chooser;
+    std::map<juce::String, juce::Image> iconCache;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

@@ -1,6 +1,8 @@
 #pragma once
 #include <functional>
 #include <memory>
+#include <string>
+#include <vector>
 
 // テンキーを横取りして、代わりに Logic のショートカットを送る仕組み（Mac では CGEventTap）。
 // コールバックはすべてメインスレッド（JUCE のメッセージスレッド）で呼ばれる。
@@ -36,6 +38,13 @@ namespace numdeck
         static bool isLogicFrontmost();
         static bool isLogicRunning();
         static void sendKey (int keyCode, int mods);
+
+        // 業務モード用: アプリやページを開く
+        static void openApp (const std::string& path);
+        static void openURL (const std::string& url);   // Chrome があれば Chrome で
+        static bool chromeFrontPage (std::string& url, std::string& title); // Chrome の前面のタブ
+        static std::string appDisplayName (const std::string& path);
+        static std::vector<unsigned char> appIconPNG (const std::string& path, int size);
 
     private:
         struct Impl;
