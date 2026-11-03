@@ -120,6 +120,14 @@ private:
     void drawTimeline (juce::Graphics&, juce::Rectangle<float>);
     void drawSpectrum (juce::Graphics&, juce::Rectangle<float>);
     void drawMeters (juce::Graphics&, juce::Rectangle<float>);
+    void drawWidth (juce::Graphics&, juce::Rectangle<float>);
+    void setWidthView (bool on);
+    void takeSnapshot();
+    void clearSnapshot();
+    // 音色の差 a − b（音量の差は除く、となりと少しならす）
+    std::vector<float> toneDiff (const std::vector<float>& a, const std::vector<float>& b) const;
+    // 低・中・高の広がり（サイドの割合 0〜1）。測れないとき -1
+    static std::array<float, 3> bandWidths (const std::vector<double>& mid, const std::vector<double>& side, double sampleRate);
 
     // ---- 中身 ----
     Engine engine;
@@ -135,10 +143,11 @@ private:
     juce::ListBox refList { "refs", this };
     juce::TextButton addButton { "+ ADD" }, removeButton { "REMOVE" };
     juce::ComboBox liveAppBox, refBox;   // refBox = 参照曲の選択（0 番目がライブ）
-    Seg abSeg, levelSeg, bandSeg, stereoSeg, outSeg, listenSeg;
+    Seg abSeg, levelSeg, bandSeg, stereoSeg, outSeg, listenSeg, viewSeg;
     juce::TextButton playButton { "PLAY" }, loopButton { "LOOP" }, restartButton { "CUE ON SWITCH" }, addCueButton { "+ CUE" }, setMixButton { "SET MIX" };
     juce::OwnedArray<CueButton> cueButtons;
     juce::String cueSignature;
+    CueButton snapButton;   // SNAP（右クリックで消す）
     juce::TextButton resetButton { "RESET METERS" }, dimButton { "DIM" }, muteButton { "MUTE" },
                      pinButton { "PIN" }, bypassButton { "BYPASS" };
     juce::Slider trimSlider, volumeSlider;
@@ -171,7 +180,14 @@ private:
     std::vector<float> centers, mixDb, refDb, diffDb;
     bool mixHas = false, refHas = false;
     float displayTop = -20.0f;
-    std::vector<double> snapBuf;
+    std::vector<double> snapBuf, sideBuf;
+    bool widthView = false;                        // false = TONE、true = WIDTH
+    std::vector<float> mixSlow;                    // ゆっくり平均したミックスの音色（SNAP で覚える元）
+    std::array<float, 3> mixWidth { -1, -1, -1 }, refWidth { -1, -1, -1 }, snapWidth { -1, -1, -1 };
+    std::vector<float> snapDb, snapDiffDb;         // SNAP したときのミックスの音色と、その REF との差
+    bool snapHas = false;
+    double snapTime = 0.0;
+    juce::Rectangle<int> specHeader, legendArea;
     juce::Rectangle<int> cueRow, headerArea, statusArea, refLabel, liveLabel, hintArea, timelineArea, specArea, meterArea, labelsRow1, labelsRow2;
     juce::Rectangle<int> levelLabel, bandLabel, stereoLabel, trimLabel, outLabel, volLabel, listenLabel;
 
