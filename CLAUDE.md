@@ -92,6 +92,8 @@
   v1.5.0: アプリのタイルは前面ならもう一度押すと隠して開く前のアプリへ戻る。リンクを開く Chrome のアカウントを設定で選べる（Local State を読む、--profile-directory で開く）
   v1.6.0: テンキー . の欄（添字 10、設定キー slot{p}_dot）。1 ページ目の . は低レイテンシモード（⌃⌥⇧⌘L、Logic で 1 回覚えさせる）
   v1.7.0: モード切替キー（最初は Home=115、設定で覚えさせる。特殊キーは NX_SYSDEFINED を 1000+番号で扱う）。全画面アプリも、戻り先アプリを NSWorkspace で開き直して戻る
+  v1.8.0: ページ切替を / と * に（− と + は通す）
+  v1.9.0: リンクを 2 画面で開く（Slot の split: "chrome" か アプリの場所。Chrome --new-window で開き、アクセシビリティで左右半分に並べる）
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）
 
 ## Claude からの提案（余った利用枠の活用）

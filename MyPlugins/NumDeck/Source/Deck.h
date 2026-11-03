@@ -12,6 +12,7 @@ namespace numdeck
         juce::String label;         // custom / app / url のときのタイルの名前
         juce::String path;          // app のとき
         juce::String url;           // url のとき
+        juce::String split;         // url のとき、2 画面で開く右側: "" = しない、"chrome" = Chrome の新しいウィンドウ、それ以外 = アプリの場所
 
         bool isUser() const { return actionId == "custom" || actionId == "app" || actionId == "url"; }
 
@@ -22,7 +23,7 @@ namespace numdeck
             o->setProperty ("type", actionId);
             if (actionId == "custom") { o->setProperty ("keyCode", keyCode); o->setProperty ("mods", mods); }
             if (actionId == "app")    o->setProperty ("path", path);
-            if (actionId == "url")    o->setProperty ("url", url);
+            if (actionId == "url")    { o->setProperty ("url", url); if (split.isNotEmpty()) o->setProperty ("split", split); }
             o->setProperty ("label", label);
             return juce::JSON::toString (juce::var (o), true);
         }
@@ -39,6 +40,7 @@ namespace numdeck
                 slot.label    = v.getProperty ("label", "").toString();
                 slot.path     = v.getProperty ("path", "").toString();
                 slot.url      = v.getProperty ("url", "").toString();
+                slot.split    = v.getProperty ("split", "").toString();
                 if (! slot.isUser()) slot = {};
             }
             else if (s.startsWith ("custom|")) // 1.0.0 の形式
@@ -68,7 +70,7 @@ namespace numdeck
         enum Kind { Key, App, Url, Remote };
         bool valid = false;
         Kind kind = Key;
-        juce::String name, glyph, path, url, remote;
+        juce::String name, glyph, path, url, remote, split;
         Cat cat = Cat::Custom;
         Icon icon = Icon::None;
         int keyCode = -1, mods = 0;
@@ -160,7 +162,7 @@ namespace numdeck
             }
             else if (s.actionId == "url" && s.url.isNotEmpty())
             {
-                r.valid = true; r.kind = Resolved::Url; r.cat = Cat::Link; r.url = s.url;
+                r.valid = true; r.kind = Resolved::Url; r.cat = Cat::Link; r.url = s.url; r.split = s.split;
                 r.name = s.label.isNotEmpty() ? s.label : juce::URL (s.url).getDomain();
                 r.glyph = r.name.substring (0, 4).toUpperCase();
             }
@@ -185,7 +187,10 @@ namespace numdeck
                     else           KeyTap::sendKey (r.keyCode, r.mods);
                     break;
                 case Resolved::App: KeyTap::openApp (r.path.toStdString()); break;
-                case Resolved::Url: KeyTap::openURL (r.url.toStdString(), chromeProfile.toStdString()); break;
+                case Resolved::Url:
+                    if (r.split.isNotEmpty()) KeyTap::openURLSplit (r.url.toStdString(), chromeProfile.toStdString(), r.split.toStdString());
+                    else                      KeyTap::openURL (r.url.toStdString(), chromeProfile.toStdString());
+                    break;
                 case Resolved::Remote: KeyTap::sendRemote ("referencemonitor", r.remote.toStdString()); break;
             }
         }

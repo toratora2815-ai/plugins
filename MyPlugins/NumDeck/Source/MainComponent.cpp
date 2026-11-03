@@ -1010,6 +1010,22 @@ void MainComponent::showTileMenu (int index)
         m.addSubMenu (catName (Cat::Link), links, true, nullptr, current.actionId == "url");
     }
 
+    // 2 画面で開く（リンクのときだけ）: 左にページ、右に Chrome の新しいウィンドウかアプリ
+    if (current.actionId == "url")
+    {
+        juce::PopupMenu split;
+        split.addItem (1030, juce::String::fromUTF8 ("しない（いつもどおり開く）"), true, current.split.isEmpty());
+        split.addItem (1031, juce::String::fromUTF8 ("右に Chrome の新しいウィンドウ"), true, current.split == "chrome");
+        const juce::String claude ("/Applications/Claude.app");
+        if (juce::File (claude).exists())
+            split.addItem (1032, juce::String::fromUTF8 ("右に Claude"), true, current.split == claude);
+        const bool otherApp = current.split.isNotEmpty() && current.split != "chrome" && current.split != claude;
+        split.addItem (1033, otherApp ? juce::String::fromUTF8 ("右に ") + juce::String::fromUTF8 (KeyTap::appDisplayName (current.split.toStdString()).c_str())
+                                      : juce::String::fromUTF8 ("右にほかのアプリを選ぶ\xe2\x80\xa6"),
+                       true, otherApp);
+        m.addSubMenu (juce::String::fromUTF8 ("2 画面で開く"), split, true, nullptr, current.split.isNotEmpty());
+    }
+
     m.addSeparator();
     m.addItem (1000, juce::String::fromUTF8 ("ショートカットを覚えさせる\xe2\x80\xa6"), true, current.actionId == "custom");
     if (current.isUser())
@@ -1028,6 +1044,17 @@ void MainComponent::showTileMenu (int index)
                          if (r == 1010) { self.chooseOtherApp (page, index); return; }
                          if (r == 1020) { self.registerChromePage (page, index); return; }
                          if (r == 1021) { self.enterUrl (page, index); return; }
+                         if (r >= 1030 && r <= 1032)
+                         {
+                             auto s = self.deck.slot (page, index);
+                             s.split = r == 1030 ? juce::String() : r == 1031 ? juce::String ("chrome") : juce::String ("/Applications/Claude.app");
+                             self.deck.setSlot (page, index, s);
+                             self.flash[(size_t) index] = 1.0f;
+                             self.repaint();
+                             juce::Timer::callAfterDelay (120, [] { KeyTap::activateLastApp(); });
+                             return;
+                         }
+                         if (r == 1033) { self.chooseSplitApp (page, index); return; }
                          Slot s;
                          if (auto a = appIds.find (r); a != appIds.end())
                              s = Slot::app (a->second);
@@ -1125,6 +1152,26 @@ void MainComponent::startLearning (int page, int index)
     tap.learnAnyKey = index == kLearnModeKey;
     tap.learning = true;
     repaint();
+}
+
+// 2 画面で開くときに右に置くアプリを選ぶ
+void MainComponent::chooseSplitApp (int page, int index)
+{
+    chooser = std::make_unique<juce::FileChooser> (juce::String::fromUTF8 ("右に置くアプリを選んでください"),
+                                                   juce::File ("/Applications"), "*.app");
+    juce::Component::SafePointer<MainComponent> safe (this);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [safe, page, index] (const juce::FileChooser& fc)
+                          {
+                              if (safe == nullptr) return;
+                              const auto f = fc.getResult();
+                              if (f == juce::File()) return;
+                              auto s = safe->deck.slot (page, index);
+                              s.split = f.getFullPathName();
+                              safe->deck.setSlot (page, index, s);
+                              safe->flash[(size_t) index] = 1.0f;
+                              safe->repaint();
+                          });
 }
 
 void MainComponent::chooseOtherApp (int page, int index)

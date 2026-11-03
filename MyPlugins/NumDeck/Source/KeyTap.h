@@ -58,6 +58,9 @@ namespace numdeck
         static void openApp (const std::string& path);
         // Chrome があれば Chrome で。profileDir（例: "Profile 2"）を指定すると、そのアカウントで開く
         static void openURL (const std::string& url, const std::string& profileDir = {});
+        // 2 画面で開く: ページを Chrome の新しいウィンドウで左半分に、右半分に split
+        // （"chrome" = Chrome の新しいウィンドウ、それ以外 = そのアプリ）を並べる。マウスのある画面を使う
+        static void openURLSplit (const std::string& url, const std::string& profileDir, const std::string& split);
         // Chrome のアカウント一覧（フォルダ名, 表示名）。初回は macOS が「ほかのアプリのデータ」へのアクセスを聞く
         static std::vector<std::pair<std::string, std::string>> chromeProfiles();
         static bool chromeFrontPage (std::string& url, std::string& title); // Chrome の前面のタブ

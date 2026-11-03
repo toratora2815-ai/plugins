@@ -1,6 +1,7 @@
 #include "KeyTap.h"
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
+#include <cmath>
 
 namespace numdeck
 {
@@ -333,6 +334,120 @@ namespace numdeck
                                   completionHandler: nil];
         else
             [[NSWorkspace sharedWorkspace] openURL: u];
+    }
+
+    namespace
+    {
+        // マウスのある画面の、メニューバーと Dock を除いた範囲（アクセシビリティの座標＝いちばん左上が原点）
+        CGRect visibleAreaForAX()
+        {
+            const NSPoint m = [NSEvent mouseLocation];
+            NSScreen* scr = [NSScreen mainScreen];
+            for (NSScreen* s in [NSScreen screens])
+                if (NSPointInRect (m, s.frame)) { scr = s; break; }
+            const NSRect v = scr.visibleFrame;
+            const CGFloat primaryH = [NSScreen screens].firstObject.frame.size.height;
+            return CGRectMake (v.origin.x, primaryH - (v.origin.y + v.size.height), v.size.width, v.size.height);
+        }
+
+        void placeWindow (AXUIElementRef win, CGRect r)
+        {
+            CGPoint p = r.origin;
+            CGSize s = r.size;
+            AXValueRef pv = AXValueCreate ((AXValueType) kAXValueCGPointType, &p);
+            AXValueRef sv = AXValueCreate ((AXValueType) kAXValueCGSizeType, &s);
+            AXUIElementSetAttributeValue (win, kAXPositionAttribute, pv);
+            AXUIElementSetAttributeValue (win, kAXSizeAttribute, sv);
+            AXUIElementSetAttributeValue (win, kAXPositionAttribute, pv); // 大きさを変えるとずれるアプリがあるので、もう一度
+            CFRelease (pv);
+            CFRelease (sv);
+        }
+
+        pid_t runningPid (NSString* bundleId)
+        {
+            for (NSRunningApplication* a in [NSRunningApplication runningApplicationsWithBundleIdentifier: bundleId])
+                if (! a.terminated) return a.processIdentifier;
+            return 0;
+        }
+
+        // そのアプリの前面のウィンドウ（呼んだ側で CFRelease）
+        AXUIElementRef copyFrontWindow (NSString* bundleId)
+        {
+            const pid_t pid = runningPid (bundleId);
+            if (pid == 0) return nullptr;
+            AXUIElementRef app = AXUIElementCreateApplication (pid);
+            CFTypeRef w = nullptr;
+            AXUIElementCopyAttributeValue (app, kAXFocusedWindowAttribute, &w);
+            if (w == nullptr) AXUIElementCopyAttributeValue (app, kAXMainWindowAttribute, &w);
+            CFRelease (app);
+            return (AXUIElementRef) w;
+        }
+
+        // before と違うウィンドウが前に出るまで待って（最大 6 秒）、r に置いてから then。before は最後に CFRelease する
+        void waitAndPlace (NSString* bundleId, AXUIElementRef before, CGRect r, int tries, void (^then) (void))
+        {
+            AXUIElementRef w = copyFrontWindow (bundleId);
+            const bool ready = w != nullptr && (before == nullptr || ! CFEqual (w, before));
+            if (! ready && tries < 60)
+            {
+                if (w != nullptr) CFRelease (w);
+                dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                    waitAndPlace (bundleId, before, r, tries + 1, then);
+                });
+                return;
+            }
+            if (ready) placeWindow (w, r);
+            if (w != nullptr) CFRelease (w);
+            if (before != nullptr) CFRelease (before);
+            if (then != nil) then();
+        }
+
+        // Chrome を引数付きで開く（起動中なら、起動中の Chrome に渡される）
+        void launchChrome (const std::string& profileDir, NSArray<NSString*>* args)
+        {
+            NSURL* chrome = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier: @"com.google.Chrome"];
+            if (chrome == nil) return;
+            NSMutableArray<NSString*>* a = [NSMutableArray array];
+            if (! profileDir.empty()) [a addObject: [@"--profile-directory=" stringByAppendingString: ns (profileDir)]];
+            [a addObjectsFromArray: args];
+            NSWorkspaceOpenConfiguration* c = [NSWorkspaceOpenConfiguration configuration];
+            c.createsNewApplicationInstance = YES;
+            c.arguments = a;
+            [[NSWorkspace sharedWorkspace] openApplicationAtURL: chrome configuration: c completionHandler: nil];
+        }
+    }
+
+    void KeyTap::openURLSplit (const std::string& url, const std::string& profileDir, const std::string& split)
+    {
+        NSString* chromeId = @"com.google.Chrome";
+        if ([[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier: chromeId] == nil) { openURL (url, profileDir); return; }
+
+        const CGRect area = visibleAreaForAX();
+        const CGFloat half = std::floor (area.size.width / 2);
+        const CGRect left  = CGRectMake (area.origin.x, area.origin.y, half, area.size.height);
+        const CGRect right = CGRectMake (area.origin.x + half, area.origin.y, area.size.width - half, area.size.height);
+        const std::string rightSide = split;
+
+        // 1. ページを新しいウィンドウで開いて左半分へ
+        AXUIElementRef before = copyFrontWindow (chromeId);
+        launchChrome (profileDir, @[ @"--new-window", ns (url) ]);
+        waitAndPlace (chromeId, before, left, 0, ^{
+            // 2. 右半分
+            if (rightSide == "chrome")
+            {
+                AXUIElementRef leftWin = copyFrontWindow (chromeId);
+                launchChrome (profileDir, @[ @"--new-window" ]);
+                waitAndPlace (chromeId, leftWin, right, 0, nil);
+                return;
+            }
+            NSString* path = ns (rightSide);
+            NSString* bid = [NSBundle bundleWithPath: path].bundleIdentifier;
+            if (bid == nil) return;
+            [[NSWorkspace sharedWorkspace] openApplicationAtURL: [NSURL fileURLWithPath: path]
+                                                  configuration: [NSWorkspaceOpenConfiguration configuration]
+                                              completionHandler: nil];
+            waitAndPlace (bid, nullptr, right, 0, nil);
+        });
     }
 
     std::vector<std::pair<std::string, std::string>> KeyTap::chromeProfiles()
