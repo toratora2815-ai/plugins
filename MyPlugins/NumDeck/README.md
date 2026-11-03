@@ -81,6 +81,11 @@ Reference Monitor が後ろにあっても届くので、Logic を前に出し�
 タイルのメニュー → **Reference Monitor** から、ループ・DIM・ミュート・出力 A / 出力 B・キュー追加・SET MIX・メーターのリセットなども選べます。
 Reference Monitor を前に出しているときも「Logic が前面のときだけ」と同じに動きます。
 
+**Logic の操作は Logic にだけ届きます（v1.3.3）**：1〜3 ページ目の再生・録音・巻き戻しなど（Logic のキーを送るタイル）は、
+Reference Monitor などほかのアプリが前面にあっても、**Logic に届けます**（一瞬だけ Logic を前に出して送り、すぐ元のアプリに戻します）。
+前は Reference Monitor が前面だと、再生 / 停止のスペースキーが Reference Monitor に届いて **MIX と REF が入れ替わる**ことがありました。
+Reference Monitor を操作したいときは、4 ページ目「リファレンス」を使ってください。
+
 ## トラックをフリーズ（v1.3.2、最初に 1 回だけ設定）
 
 Logic には「フリーズ」のキーが最初から決まっていないので、Num Deck は **⌃⌥⇧⌘F**（control + option + shift + command + F）を送ります。

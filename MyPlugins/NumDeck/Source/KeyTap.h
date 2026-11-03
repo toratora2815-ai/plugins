@@ -41,6 +41,9 @@ namespace numdeck
         static void rememberFrontApp();    // 自分以外の前面アプリを覚えておく
         static void activateLastApp();     // 覚えておいたアプリを前面に戻す（Num Deck をクリックした後）
         static void sendKey (int keyCode, int mods);
+        // Logic に送る。Logic が後ろにいるときは一瞬だけ前に出して送り、元のアプリに戻す
+        // （Logic は後ろにいる間のキーを受け付けないため）
+        static void sendKeyToLogic (int keyCode, int mods);
         static void sendRemote (const std::string& app, const std::string& command); // 自作アプリへの命令（分散通知）
         static bool isRefMonitorFrontmost();
 

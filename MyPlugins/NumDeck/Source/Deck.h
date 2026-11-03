@@ -73,6 +73,7 @@ namespace numdeck
         Icon icon = Icon::None;
         int keyCode = -1, mods = 0;
         bool repeat = false;
+        bool toLogic = false;   // Logic Pro モードのキー: 前面のアプリに関係なく Logic に送る
     };
 
     class Deck
@@ -168,6 +169,7 @@ namespace numdeck
                 r.keyCode = a->keyCode; r.mods = a->mods; r.repeat = a->repeat;
                 if (a->remote != nullptr) { r.kind = Resolved::Remote; r.remote = a->remote; }
             }
+            r.toLogic = mode == ModeLogic && r.kind == Resolved::Key;
             return r;
         }
 
@@ -175,7 +177,10 @@ namespace numdeck
         {
             switch (r.kind)
             {
-                case Resolved::Key: KeyTap::sendKey (r.keyCode, r.mods); break;
+                case Resolved::Key:
+                    if (r.toLogic) KeyTap::sendKeyToLogic (r.keyCode, r.mods);
+                    else           KeyTap::sendKey (r.keyCode, r.mods);
+                    break;
                 case Resolved::App: KeyTap::openApp (r.path.toStdString()); break;
                 case Resolved::Url: KeyTap::openURL (r.url.toStdString()); break;
                 case Resolved::Remote: KeyTap::sendRemote ("referencemonitor", r.remote.toStdString()); break;

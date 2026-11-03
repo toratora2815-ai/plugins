@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 # Logic・ミュージックの音を直接受け取る仕組み（プロセスタップ）が macOS 14.2 からなので、このアプリだけ 14.2
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.2" CACHE STRING "")
-project(ReferenceMonitor VERSION 1.3.1 LANGUAGES C CXX)
+project(ReferenceMonitor VERSION 1.3.2 LANGUAGES C CXX)
 if(APPLE)
     enable_language(OBJCXX)
 endif()
@@ -19,6 +19,7 @@ FetchContent_MakeAvailable(JUCE)
 
 juce_add_gui_app(ReferenceMonitor
     PRODUCT_NAME "Reference Monitor"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Icon.png"
     COMPANY_NAME "MyPlugins"
     BUNDLE_ID com.myplugins.referencemonitor
     PLIST_TO_MERGE [[

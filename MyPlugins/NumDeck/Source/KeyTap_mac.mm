@@ -194,7 +194,56 @@ namespace numdeck
         }
         if (src != nullptr) CFRelease (src);
     }
+    namespace
+    {
+        // 何回目の送信か。最後の送信から少し経ってから元のアプリに戻す（連打しても行き来しない）
+        int sendGeneration = 0;
+
+        void sendWhenLogicFront (pid_t logicPid, pid_t backPid, int keyCode, int mods, int tries)
+        {
+            NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+            if ((front == nil || front.processIdentifier != logicPid) && tries < 40)
+            {
+                dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                    sendWhenLogicFront (logicPid, backPid, keyCode, mods, tries + 1);
+                });
+                return;
+            }
+            KeyTap::sendKey (keyCode, mods);
+
+            const int gen = ++sendGeneration;
+            if (backPid == 0) return;
+            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                if (gen != sendGeneration) return;
+                if (NSRunningApplication* back = [NSRunningApplication runningApplicationWithProcessIdentifier: backPid])
+                    [back activateWithOptions: 0];
+            });
+        }
+    }
+
+    void KeyTap::sendKeyToLogic (int keyCode, int mods)
+    {
+        NSRunningApplication* logic = nil;
+        for (NSRunningApplication* app in [[NSWorkspace sharedWorkspace] runningApplications])
+            if (isLogic (app)) { logic = app; break; }
+
+        NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+        if (logic == nil || (front != nil && front.processIdentifier == logic.processIdentifier))
+        {
+            sendKey (keyCode, mods);
+            return;
+        }
+
+        // 前にいたアプリ（Reference Monitor など）。Num Deck 自身なら戻さない
+        pid_t backPid = 0;
+        if (front != nil && front.processIdentifier != [NSRunningApplication currentApplication].processIdentifier)
+            backPid = front.processIdentifier;
+
+        [logic activateWithOptions: 0];
+        sendWhenLogicFront (logic.processIdentifier, backPid, keyCode, mods, 0);
+    }
 }
+
 
 namespace numdeck
 {

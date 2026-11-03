@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
-project(NumDeck VERSION 1.3.2 LANGUAGES C CXX)
+project(NumDeck VERSION 1.3.3 LANGUAGES C CXX)
 if(APPLE)
     enable_language(OBJCXX)
 endif()
@@ -18,6 +18,7 @@ FetchContent_MakeAvailable(JUCE)
 
 juce_add_gui_app(NumDeck
     PRODUCT_NAME "Num Deck"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Icon.png"
     COMPANY_NAME "MyPlugins"
     BUNDLE_ID com.myplugins.numdeck
     PLIST_TO_MERGE [[
