@@ -2,6 +2,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 // テンキーを横取りして、代わりに Logic のショートカットを送る仕組み（Mac では CGEventTap）。
@@ -48,8 +49,12 @@ namespace numdeck
         static bool isRefMonitorFrontmost();
 
         // 業務モード用: アプリやページを開く
+        // アプリを開く。そのアプリがもう前面なら隠して、開く前のアプリに戻す（全画面でも同じ）
         static void openApp (const std::string& path);
-        static void openURL (const std::string& url);   // Chrome があれば Chrome で
+        // Chrome があれば Chrome で。profileDir（例: "Profile 2"）を指定すると、そのアカウントで開く
+        static void openURL (const std::string& url, const std::string& profileDir = {});
+        // Chrome のアカウント一覧（フォルダ名, 表示名）。初回は macOS が「ほかのアプリのデータ」へのアクセスを聞く
+        static std::vector<std::pair<std::string, std::string>> chromeProfiles();
         static bool chromeFrontPage (std::string& url, std::string& title); // Chrome の前面のタブ
         static std::string appDisplayName (const std::string& path);
         static std::vector<unsigned char> appIconPNG (const std::string& path, int size);

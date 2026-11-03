@@ -91,6 +91,7 @@ namespace numdeck
         int mode = ModeLogic;      // 画面のクリックでだけ切り替える（テンキーでは変わらない）
         int toggleKey = ToggleClear;
         juce::String windowState;  // ウィンドウの位置と大きさ
+        juce::String chromeProfile, chromeProfileName;  // リンクを開く Chrome のアカウント（空 = いつもの）
 
         std::function<void()> onStateChanged;     // ON/OFF やページが変わった
         std::function<void (int index)> onFired;  // 0..8 = キー 1〜9、9 = キー 0 のタイルが動いた
@@ -174,7 +175,7 @@ namespace numdeck
             return r;
         }
 
-        static void run (const Resolved& r)
+        void run (const Resolved& r) const
         {
             switch (r.kind)
             {
@@ -183,7 +184,7 @@ namespace numdeck
                     else           KeyTap::sendKey (r.keyCode, r.mods);
                     break;
                 case Resolved::App: KeyTap::openApp (r.path.toStdString()); break;
-                case Resolved::Url: KeyTap::openURL (r.url.toStdString()); break;
+                case Resolved::Url: KeyTap::openURL (r.url.toStdString(), chromeProfile.toStdString()); break;
                 case Resolved::Remote: KeyTap::sendRemote ("referencemonitor", r.remote.toStdString()); break;
             }
         }
@@ -278,6 +279,8 @@ namespace numdeck
             props->setValue ("mode", mode);
             props->setValue ("toggleKey", toggleKey);
             props->setValue ("window", windowState);
+            props->setValue ("chromeProfile", chromeProfile);
+            props->setValue ("chromeProfileName", chromeProfileName);
             for (int m = 0; m < kModes; ++m)
             {
                 props->setValue (prefix (m) + "page", pages[(size_t) m]);
@@ -311,6 +314,8 @@ namespace numdeck
             mode        = juce::jlimit (0, kModes - 1, props->getIntValue ("mode", ModeLogic));
             toggleKey   = juce::jlimit (0, (int) ToggleNone, props->getIntValue ("toggleKey", ToggleClear));
             windowState = props->getValue ("window");
+            chromeProfile     = props->getValue ("chromeProfile");
+            chromeProfileName = props->getValue ("chromeProfileName");
             for (int m = 0; m < kModes; ++m)
             {
                 pages[(size_t) m] = juce::jlimit (0, kPages - 1, props->getIntValue (prefix (m) + "page", 0));

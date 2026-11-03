@@ -249,15 +249,37 @@ namespace numdeck
 {
     static NSString* ns (const std::string& s) { return [NSString stringWithUTF8String: s.c_str()]; }
 
+    // アプリごとの「開く前に前面だったアプリ」（隠したときにそこへ戻る）
+    static NSMutableDictionary<NSString*, NSNumber*>* appBackPids = nil;
+
     void KeyTap::openApp (const std::string& path)
     {
+        NSString* p = [ns (path) stringByStandardizingPath];
+        NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+        if (appBackPids == nil) appBackPids = [[NSMutableDictionary alloc] init];
+
+        // もう前面にいる → 隠して、開く前のアプリに戻す
+        if (front != nil && front.bundleURL != nil && [[front.bundleURL.path stringByStandardizingPath] isEqualToString: p])
+        {
+            NSNumber* back = appBackPids[p];
+            [front hide];
+            if (back != nil)
+                if (NSRunningApplication* b = [NSRunningApplication runningApplicationWithProcessIdentifier: (pid_t) back.intValue])
+                    if (! b.terminated && b.processIdentifier != front.processIdentifier)
+                        [b activateWithOptions: 0];
+            return;
+        }
+
+        if (front != nil && front.processIdentifier != [NSRunningApplication currentApplication].processIdentifier)
+            appBackPids[p] = @(front.processIdentifier);
+
         NSURL* u = [NSURL fileURLWithPath: ns (path)];
         [[NSWorkspace sharedWorkspace] openApplicationAtURL: u
                                               configuration: [NSWorkspaceOpenConfiguration configuration]
                                           completionHandler: nil];
     }
 
-    void KeyTap::openURL (const std::string& url)
+    void KeyTap::openURL (const std::string& url, const std::string& profileDir)
     {
         NSString* s = ns (url);
         NSURL* u = [NSURL URLWithString: s];
@@ -266,12 +288,42 @@ namespace numdeck
         if (u == nil) return;
 
         NSURL* chrome = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier: @"com.google.Chrome"];
-        if (chrome != nil)
+        if (chrome != nil && ! profileDir.empty())
+        {
+            // 「open -na Google Chrome --args --profile-directory=…」と同じ。
+            // Chrome が起動中なら、新しい方は起動中の Chrome にページを渡してすぐ終わる
+            NSWorkspaceOpenConfiguration* c = [NSWorkspaceOpenConfiguration configuration];
+            c.createsNewApplicationInstance = YES;
+            c.arguments = @[ [@"--profile-directory=" stringByAppendingString: ns (profileDir)], u.absoluteString ];
+            [[NSWorkspace sharedWorkspace] openApplicationAtURL: chrome configuration: c completionHandler: nil];
+        }
+        else if (chrome != nil)
             [[NSWorkspace sharedWorkspace] openURLs: @[ u ] withApplicationAtURL: chrome
                                       configuration: [NSWorkspaceOpenConfiguration configuration]
                                   completionHandler: nil];
         else
             [[NSWorkspace sharedWorkspace] openURL: u];
+    }
+
+    std::vector<std::pair<std::string, std::string>> KeyTap::chromeProfiles()
+    {
+        std::vector<std::pair<std::string, std::string>> result;
+        NSString* f = [NSHomeDirectory() stringByAppendingPathComponent: @"Library/Application Support/Google/Chrome/Local State"];
+        NSData* d = [NSData dataWithContentsOfFile: f];
+        if (d == nil) return result;
+        id j = [NSJSONSerialization JSONObjectWithData: d options: 0 error: nil];
+        if (! [j isKindOfClass: [NSDictionary class]]) return result;
+        id prof = ((NSDictionary*) j)[@"profile"];
+        id cache = [prof isKindOfClass: [NSDictionary class]] ? ((NSDictionary*) prof)[@"info_cache"] : nil;
+        if (! [cache isKindOfClass: [NSDictionary class]]) return result;
+        for (NSString* dir in [[(NSDictionary*) cache allKeys] sortedArrayUsingSelector: @selector (localizedStandardCompare:)])
+        {
+            id info = ((NSDictionary*) cache)[dir];
+            id name = [info isKindOfClass: [NSDictionary class]] ? ((NSDictionary*) info)[@"name"] : nil;
+            NSString* n = [name isKindOfClass: [NSString class]] ? (NSString*) name : dir;
+            result.push_back ({ dir.UTF8String, n.UTF8String != nullptr ? n.UTF8String : dir.UTF8String });
+        }
+        return result;
     }
 
     bool KeyTap::chromeFrontPage (std::string& url, std::string& title)

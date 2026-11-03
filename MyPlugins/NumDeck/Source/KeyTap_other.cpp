@@ -21,7 +21,8 @@ namespace numdeck
     void KeyTap::sendRemote (const std::string&, const std::string&) {}
     bool KeyTap::isRefMonitorFrontmost()   { return false; }
     void KeyTap::openApp (const std::string&) {}
-    void KeyTap::openURL (const std::string&) {}
+    void KeyTap::openURL (const std::string&, const std::string&) {}
+    std::vector<std::pair<std::string, std::string>> KeyTap::chromeProfiles() { return {}; }
     bool KeyTap::chromeFrontPage (std::string&, std::string&) { return false; }
     std::string KeyTap::appDisplayName (const std::string& path) { return path; }
     std::vector<unsigned char> KeyTap::appIconPNG (const std::string&, int) { return {}; }

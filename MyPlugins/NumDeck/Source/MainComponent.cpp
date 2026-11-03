@@ -1041,6 +1041,19 @@ void MainComponent::showSettingsMenu()
     m.addItem (10, juce::String::fromUTF8 ("このページを最初の割り当てに戻す"));
     m.addItem (11, Deck::modeName (deck.mode) + juce::String::fromUTF8 (" の全部のページを最初に戻す"));
     m.addSeparator();
+    // リンクを開く Chrome のアカウント（初回は macOS が Chrome のデータを読む許可を聞く）
+    juce::PopupMenu prof;
+    const auto profiles = KeyTap::chromeProfiles();
+    prof.addItem (40, juce::String::fromUTF8 ("指定しない（今使っている Chrome）"), true, deck.chromeProfile.isEmpty());
+    for (size_t i = 0; i < profiles.size(); ++i)
+        prof.addItem (41 + (int) i, juce::String::fromUTF8 (profiles[i].second.c_str()), true,
+                      deck.chromeProfile == juce::String::fromUTF8 (profiles[i].first.c_str()));
+    if (profiles.empty())
+        prof.addItem (39, juce::String::fromUTF8 ("（一覧を読めませんでした）"), false);
+    m.addSubMenu (juce::String::fromUTF8 ("リンクを開く Chrome のアカウント")
+                    + (deck.chromeProfileName.isNotEmpty() ? juce::String::fromUTF8 ("：") + deck.chromeProfileName : juce::String()),
+                  prof);
+    m.addSeparator();
     m.addItem (30, juce::String::fromUTF8 ("大きい画面にする"), true, ! compact);
     m.addItem (31, juce::String::fromUTF8 ("小さい画面にする（4 分の 1）"), true, compact);
     m.addSeparator();
@@ -1049,11 +1062,18 @@ void MainComponent::showSettingsMenu()
     juce::Component::SafePointer<MainComponent> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this)
                                                .withTargetScreenArea (localAreaToGlobal (settingsPill)),
-                     [safe] (int r)
+                     [safe, profiles] (int r)
                      {
                          if (safe == nullptr || r == 0) return;
                          auto& d = safe->deck;
                          if (r >= 1 && r <= 3) { d.toggleKey = r - 1; d.save(); }
+                         if (r == 40) { d.chromeProfile.clear(); d.chromeProfileName.clear(); d.save(); }
+                         if (r > 40 && r - 41 < (int) profiles.size())
+                         {
+                             d.chromeProfile     = juce::String::fromUTF8 (profiles[(size_t) (r - 41)].first.c_str());
+                             d.chromeProfileName = juce::String::fromUTF8 (profiles[(size_t) (r - 41)].second.c_str());
+                             d.save();
+                         }
                          if (r == 5)
                          {
                              const int p = d.page();
