@@ -275,9 +275,17 @@ namespace numdeck
     // アプリごとの「開く前に前面だったアプリ」（隠したときにそこへ戻る）
     static NSMutableDictionary<NSString*, NSNumber*>* appBackPids = nil;
 
+    namespace
+    {
+        bool unsplitToFullScreen (NSString* path);  // 下で定義
+    }
+
     void KeyTap::openApp (const std::string& path)
     {
         NSString* p = [ns (path) stringByStandardizingPath];
+        // 全画面の左右分割に入っている → 分割を解いて、そのアプリだけを全画面に
+        if (unsplitToFullScreen (p)) return;
+
         NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
         if (appBackPids == nil) appBackPids = [[NSMutableDictionary alloc] init];
 
@@ -473,6 +481,44 @@ namespace numdeck
             }
             CFRelease (kids);
             return found;
+        }
+
+        // path のアプリの前面のウィンドウが、全画面の左右分割（全画面なのに画面の幅より狭い）に入っていれば、
+        // 分割を解いてそのウィンドウだけの全画面にする。した場合 true
+        bool unsplitToFullScreen (NSString* path)
+        {
+            NSRunningApplication* app = nil;
+            for (NSRunningApplication* a in [[NSWorkspace sharedWorkspace] runningApplications])
+                if (a.bundleURL != nil && [[a.bundleURL.path stringByStandardizingPath] isEqualToString: path]) { app = a; break; }
+            if (app == nil || app.bundleIdentifier == nil) return false;
+            AXUIElementRef win = copyFrontWindow (app.bundleIdentifier);
+            if (win == nullptr) return false;
+            if (! axBool (win, CFSTR ("AXFullScreen"))) { CFRelease (win); return false; }
+
+            CGPoint pos {}; CGSize size {};
+            CFTypeRef pv = nullptr, sv = nullptr;
+            AXUIElementCopyAttributeValue (win, kAXPositionAttribute, &pv);
+            AXUIElementCopyAttributeValue (win, kAXSizeAttribute, &sv);
+            if (pv != nullptr) { AXValueGetValue ((AXValueRef) pv, (AXValueType) kAXValueCGPointType, &pos); CFRelease (pv); }
+            if (sv != nullptr) { AXValueGetValue ((AXValueRef) sv, (AXValueType) kAXValueCGSizeType, &size); CFRelease (sv); }
+
+            // ウィンドウがある画面の幅と比べる（画面の座標は左下が原点なので変換）
+            const CGFloat primaryH = [NSScreen screens].firstObject.frame.size.height;
+            const NSPoint probe = NSMakePoint (pos.x + 2, primaryH - pos.y - 2);
+            CGFloat screenW = 0;
+            for (NSScreen* s in [NSScreen screens])
+                if (NSPointInRect (probe, s.frame)) screenW = s.frame.size.width;
+            if (screenW <= 0 || size.width > screenW * 0.9) { CFRelease (win); return false; }
+
+            [[NSWorkspace sharedWorkspace] openApplicationAtURL: app.bundleURL
+                                                  configuration: [NSWorkspaceOpenConfiguration configuration]
+                                              completionHandler: nil];
+            AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
+            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanTrue);
+                CFRelease (win);
+            });
+            return true;
         }
 
         // アプリのメニュー「ウィンドウ」→「フルスクリーンのタイル表示」→「画面左側」を押す
