@@ -31,6 +31,18 @@ namespace
 }
 
 // ============================================================================
+// 名前を付けていないキュー（空、または前の版の「Cue 3」のような自動の名前）は番号だけで出す
+static bool cueUnnamed (const juce::String& name)
+{
+    const auto n = name.trim();
+    return n.isEmpty() || n.equalsIgnoreCase ("Cue") || (n.startsWithIgnoreCase ("Cue ") && n.substring (4).trim().containsOnly ("0123456789"));
+}
+
+static juce::String cueLabel (const juce::String& name, int idx)
+{
+    return cueUnnamed (name) ? "CUE " + juce::String (idx + 1) : juce::String (idx + 1) + ". " + name.trim();
+}
+
 Seg::Seg (const juce::StringArray& labels, std::vector<juce::Colour> onColours, std::function<void (int)> cb)
     : onSelect (std::move (cb))
 {
@@ -623,7 +635,7 @@ void MainComponent::setMixPosition (int idx, bool clear)
             return;
         }
         (*cues)[(size_t) idx].mixT = logic.getPosition();
-        flash ("MY MIX position for \"" + (*cues)[(size_t) idx].name + "\" set to " + LogicLink::format ((*cues)[(size_t) idx].mixT));
+        flash ("MY MIX position for \"" + cueLabel ((*cues)[(size_t) idx].name, idx) + "\" set to " + LogicLink::format ((*cues)[(size_t) idx].mixT));
     }
     library.save();
     cueSignature.clear();
@@ -717,7 +729,7 @@ void MainComponent::addCue()
         return;
     }
     const double t = currentPosition();
-    Cue c { "Cue " + juce::String ((int) cues->size() + 1), t };
+    Cue c { {}, t };   // 名前なし＝「CUE 番号」と出す。名前はボタンのダブルクリックで後から
     cues->push_back (c);
     Library::sortCues (*cues);
     for (int i = 0; i < (int) cues->size(); ++i)
@@ -725,16 +737,16 @@ void MainComponent::addCue()
     library.save();
     rebuildCueButtons();
     updateLoop();
-    renameCue (activeCue);   // すぐ名前を付けられるように
 }
 
 void MainComponent::renameCue (int idx)
 {
     auto* cues = currentCues();
     if (cues == nullptr || idx < 0 || idx >= (int) cues->size()) return;
-    auto* w = new juce::AlertWindow ("Cue name", "Name this cue (e.g. Verse, Chorus). You can rename it later with right-click.",
+    auto* w = new juce::AlertWindow ("Cue name", "Name this cue (e.g. Verse, Chorus). Leave it empty to show just the number.",
                                      juce::MessageBoxIconType::NoIcon);
-    w->addTextEditor ("name", (*cues)[(size_t) idx].name);
+    const auto& cur = (*cues)[(size_t) idx].name;
+    w->addTextEditor ("name", cueUnnamed (cur) ? juce::String() : cur);
     w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
     w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
     w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w, idx] (int res)
@@ -742,8 +754,7 @@ void MainComponent::renameCue (int idx)
         auto* c2 = currentCues();
         if (res == 1 && c2 != nullptr && idx < (int) c2->size())
         {
-            const auto n = w->getTextEditorContents ("name").trim();
-            if (n.isNotEmpty()) (*c2)[(size_t) idx].name = n;
+            (*c2)[(size_t) idx].name = w->getTextEditorContents ("name").trim();   // 空なら番号だけに戻る
             library.save();
             rebuildCueButtons();
         }
@@ -757,7 +768,7 @@ void MainComponent::cueMenu (int idx)
     if (cues == nullptr || idx < 0 || idx >= (int) cues->size()) return;
 
     juce::PopupMenu m;
-    m.addSectionHeader ((*cues)[(size_t) idx].name + "  " + mmss ((*cues)[(size_t) idx].t));
+    m.addSectionHeader (cueLabel ((*cues)[(size_t) idx].name, idx) + "  " + mmss ((*cues)[(size_t) idx].t));
     m.addItem (1, "Rename...");
     m.addItem (2, "Move to current reference position");
     m.addItem (4, "Set MY MIX position (Logic now)");
@@ -804,11 +815,13 @@ void MainComponent::rebuildCueButtons()
         for (int i = 0; i < (int) cues->size(); ++i)
         {
             auto* b = cueButtons.add (new CueButton());
-            b->setButtonText (juce::String (i + 1) + ". " + (*cues)[(size_t) i].name + ((*cues)[(size_t) i].mixT >= 0.0 ? "  +MIX" : ""));
+            b->setButtonText (cueLabel ((*cues)[(size_t) i].name, i) + ((*cues)[(size_t) i].mixT >= 0.0 ? "  +MIX" : ""));
             styleToggle (*b, refCol);
             b->setToggleState (i == activeCue, juce::dontSendNotification);
             b->onClick = [this, i] { jumpToCue (i, true); rebuildCueButtons(); };
             b->onRightClick = [this, i] { cueMenu (i); };
+            b->onDoubleClick = [this, i] { renameCue (i); };
+            b->setTooltip ("Click = jump here.  Double-click = rename.  Right-click = more.");
             noFocus (*b);
             addAndMakeVisible (b);
         }

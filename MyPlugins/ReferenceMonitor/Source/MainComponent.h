@@ -26,11 +26,15 @@ private:
 class CueButton : public juce::TextButton
 {
 public:
-    std::function<void()> onRightClick;
+    std::function<void()> onRightClick, onDoubleClick;
     void mouseDown (const juce::MouseEvent& e) override
     {
         if (e.mods.isPopupMenu()) { if (onRightClick) onRightClick(); return; }
         juce::TextButton::mouseDown (e);
+    }
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        if (! e.mods.isPopupMenu() && onDoubleClick) onDoubleClick();
     }
 };
 
