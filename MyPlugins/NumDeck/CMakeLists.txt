@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
-project(NumDeck VERSION 1.1.0 LANGUAGES C CXX)
+project(NumDeck VERSION 1.1.1 LANGUAGES C CXX)
 if(APPLE)
     enable_language(OBJCXX)
 endif()
@@ -24,6 +24,10 @@ juce_add_gui_app(NumDeck
 <plist><dict>
   <key>NSAppleEventsUsageDescription</key>
   <string>Chrome で今開いているページを、テンキーのタイルに登録するために使います。</string>
+  <key>CFBundleAllowMixedLocalizations</key>
+  <true/>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>ja</string>
 </dict></plist>
 ]])
 
