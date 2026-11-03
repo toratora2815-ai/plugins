@@ -190,7 +190,7 @@ MainComponent::MainComponent()
     };
 
     deck.onFired = [this] (int i) { flash[(size_t) i] = 1.0f; repaint(); };
-    deck.onStateChanged = [this] { repaint(); };
+    deck.onStateChanged = [this] { resized(); repaint(); };
     deck.onIgnored = [this] { ignoredHint = 1.0f; repaint(); };
 
     setSize (860, 600);
@@ -269,9 +269,10 @@ void MainComponent::resized()
         auto tabs = h.reduced (12, 0).withSizeKeepingCentre (juce::jmin (h.getWidth() - 24, 480), 40);
         prevPage = tabs.removeFromLeft (30).withSizeKeepingCentre (26, 24);
         nextPage = tabs.removeFromRight (30).withSizeKeepingCentre (26, 24);
-        const int w = tabs.getWidth() / Deck::kPages;
+        const int n = deck.numVisible();
+        const int w = tabs.getWidth() / juce::jmax (1, n);
         for (int i = 0; i < Deck::kPages; ++i)
-            pageTabs[i] = tabs.removeFromLeft (w);
+            pageTabs[i] = i < n ? tabs.removeFromLeft (w) : juce::Rectangle<int>();
     }
 
     b.removeFromTop (8);
@@ -331,9 +332,10 @@ void MainComponent::layoutCompact()
         auto tabs = h.reduced (6, 0);
         prevPage = tabs.removeFromLeft (22).withSizeKeepingCentre (18, 18);
         nextPage = tabs.removeFromRight (22).withSizeKeepingCentre (18, 18);
-        const int w = tabs.getWidth() / Deck::kPages;
+        const int n = deck.numVisible();
+        const int w = tabs.getWidth() / juce::jmax (1, n);
         for (int i = 0; i < Deck::kPages; ++i)
-            pageTabs[i] = tabs.removeFromLeft (w);
+            pageTabs[i] = i < n ? tabs.removeFromLeft (w) : juce::Rectangle<int>();
     }
 
     b.removeFromTop (5);
@@ -475,13 +477,24 @@ void MainComponent::paintHeader (juce::Graphics& g)
     const float kh = compact ? 18.0f : 22.0f;
     drawKeycap (g, prevPage.getX(), prevPage.getCentreY(), "/", hoverPrev ? 1.0f : 0.7f, kh);
     drawKeycap (g, nextPage.getX(), nextPage.getCentreY(), "*", hoverNext ? 1.0f : 0.7f, kh);
-    for (int i = 0; i < Deck::kPages; ++i)
+    for (int i = 0; i < deck.numVisible(); ++i)
     {
-        const bool sel = i == deck.page();
+        const int pg = deck.visiblePage (i);
+        const bool sel = pg == deck.page();
         auto r = pageTabs[i];
+        if (draggingTab && pressTab == i)
+        {
+            g.setColour (modeAccent().withAlpha (0.18f));
+            g.fillRoundedRectangle (r.toFloat().reduced (1.0f), 6.0f);
+        }
+        if (draggingTab && dropTab == i)
+        {
+            g.setColour (modeAccent());
+            g.drawRoundedRectangle (r.toFloat().reduced (1.0f), 6.0f, 2.0f);
+        }
         g.setColour (sel ? text : sub);
         g.setFont (font (compact ? 11.0f : 14.0f, sel));
-        g.drawFittedText (deck.pageName (i), r.reduced (2, 0), juce::Justification::centred, 1, 0.6f);
+        g.drawFittedText (deck.pageName (pg), r.reduced (2, 0), juce::Justification::centred, 1, 0.6f);
         if (sel)
         {
             g.setColour (modeAccent());
@@ -931,16 +944,18 @@ void MainComponent::mouseDown (const juce::MouseEvent& e)
     // Num Deck が前面のままだと、テンキーが Logic に届かないため
     auto done = [this]
     {
+        resized();
         repaint();
         juce::Timer::callAfterDelay (120, [] { KeyTap::activateLastApp(); });
     };
     for (int m = 0; m < Deck::kModes; ++m)
         if (modeTabs[m].contains (p)) { deck.setMode (m); done(); return; }
     if (statusPill.contains (p))   { deck.enabled = ! deck.enabled; deck.save(); done(); return; }
-    if (prevPage.contains (p))     { deck.setPage (deck.page() - 1); done(); return; }
-    if (nextPage.contains (p))     { deck.setPage (deck.page() + 1); done(); return; }
-    for (int i = 0; i < Deck::kPages; ++i)
-        if (pageTabs[i].contains (p)) { deck.setPage (i); done(); return; }
+    if (prevPage.contains (p))     { deck.stepPage (-1); done(); return; }
+    if (nextPage.contains (p))     { deck.stepPage (1); done(); return; }
+    // タブは離したときに決める（そのまま離せばそのページへ、ほかのタブまでドラッグすれば並べ替え）
+    for (int i = 0; i < deck.numVisible(); ++i)
+        if (pageTabs[i].contains (p)) { pressTab = i; dropTab = -1; draggingTab = false; return; }
     if (deck.mode == Deck::ModeLogic && logicOnlyPill.contains (p)) { deck.logicOnly = ! deck.logicOnly; deck.save(); done(); return; }
     if (onTopPill.contains (p))     { deck.alwaysOnTop = ! deck.alwaysOnTop; deck.save(); applyOnTop(); done(); return; }
     if (settingsPill.contains (p))  { showSettingsMenu(); return; }
@@ -952,6 +967,17 @@ void MainComponent::mouseDown (const juce::MouseEvent& e)
 
 void MainComponent::mouseDrag (const juce::MouseEvent& e)
 {
+    if (pressTab >= 0)
+    {
+        if (! draggingTab && e.getDistanceFromDragStart() < 8) return;
+        draggingTab = true;
+        dropTab = -1;
+        for (int i = 0; i < deck.numVisible(); ++i)
+            if (pageTabs[i].contains (e.getPosition()) && i != pressTab) dropTab = i;
+        setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        repaint();
+        return;
+    }
     if (pressTile < 0) return;
     if (! draggingTile && e.getDistanceFromDragStart() < 8) return;
     draggingTile = true;
@@ -964,6 +990,20 @@ void MainComponent::mouseDrag (const juce::MouseEvent& e)
 
 void MainComponent::mouseUp (const juce::MouseEvent&)
 {
+    if (pressTab >= 0)
+    {
+        const int from = pressTab, to = dropTab;
+        const bool dragged = draggingTab;
+        pressTab = dropTab = -1;
+        draggingTab = false;
+        if (! dragged)          deck.setPage (deck.visiblePage (from));
+        else if (to >= 0)       deck.moveTab (from, to);
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        resized();
+        repaint();
+        juce::Timer::callAfterDelay (120, [] { KeyTap::activateLastApp(); });
+        return;
+    }
     const int from = pressTile, to = dropTile;
     const bool dragged = draggingTile;
     pressTile = dropTile = -1;
@@ -1138,6 +1178,13 @@ void MainComponent::showSettingsMenu()
     m.addItem (7, juce::String::fromUTF8 ("キーで切り替えない（画面のクリックだけ）"), true, deck.modeKey < 0);
     m.addSeparator();
     m.addItem (5, juce::String::fromUTF8 ("このページの名前を変える\xe2\x80\xa6"));
+    {
+        // 出すページ（チェックを外すと隠れる。割り当ては残る）。並べ替えは上のタブをドラッグ
+        juce::PopupMenu vis;
+        for (int p = 0; p < Deck::kPages; ++p)
+            vis.addItem (60 + p, deck.pageName (p), true, deck.isVisible (deck.mode, p));
+        m.addSubMenu (juce::String::fromUTF8 ("出すページ（") + Deck::modeName (deck.mode) + juce::String::fromUTF8 ("）"), vis);
+    }
     m.addItem (10, juce::String::fromUTF8 ("このページを最初の割り当てに戻す"));
     m.addItem (11, Deck::modeName (deck.mode) + juce::String::fromUTF8 (" の全部のページを最初に戻す"));
     m.addSeparator();
@@ -1167,6 +1214,12 @@ void MainComponent::showSettingsMenu()
                          if (safe == nullptr || r == 0) return;
                          auto& d = safe->deck;
                          if (r >= 1 && r <= 3) { d.toggleKey = r - 1; d.save(); }
+                         if (r >= 60 && r < 60 + Deck::kPages)
+                         {
+                             const int p = r - 60;
+                             d.setPageVisible (p, ! d.isVisible (d.mode, p));
+                             safe->resized();
+                         }
                          if (r == 6) safe->startLearning (0, kLearnModeKey);
                          if (r == 7) { d.modeKey = -1; d.save(); }
                          if (r == 40) { d.chromeProfile.clear(); d.chromeProfileName.clear(); d.save(); }

@@ -128,6 +128,42 @@ namespace numdeck
 
         int page() const { return pages[(size_t) mode]; }
         void setPage (int p) { pages[(size_t) mode] = (p % kPages + kPages) % kPages; save(); }
+
+        // 出しているページと、その並び（隠したページの割り当ては消さずに残す）
+        int numVisible() const { return (int) order[(size_t) mode].size(); }
+        int visiblePage (int i) const { return order[(size_t) mode][(size_t) juce::jlimit (0, numVisible() - 1, i)]; }
+        bool isVisible (int m, int p) const { auto& o = order[(size_t) m]; return std::find (o.begin(), o.end(), p) != o.end(); }
+        int visibleIndexOfPage() const
+        {
+            auto& o = order[(size_t) mode];
+            auto it = std::find (o.begin(), o.end(), page());
+            return it == o.end() ? 0 : (int) (it - o.begin());
+        }
+        // テンキーの / と * : 出しているページの中で前・次へ
+        void stepPage (int dir)
+        {
+            const int n = numVisible();
+            setPage (visiblePage (((visibleIndexOfPage() + dir) % n + n) % n));
+        }
+        // タブの並べ替え: from 番目のタブを to 番目へ
+        void moveTab (int from, int to)
+        {
+            auto& o = order[(size_t) mode];
+            if (from < 0 || to < 0 || from >= (int) o.size() || to >= (int) o.size() || from == to) return;
+            const int p = o[(size_t) from];
+            o.erase (o.begin() + from);
+            o.insert (o.begin() + to, p);
+            save();
+        }
+        void setPageVisible (int p, bool visible)
+        {
+            auto& o = order[(size_t) mode];
+            const bool now = isVisible (mode, p);
+            if (visible && ! now) o.push_back (p);
+            if (! visible && now && o.size() > 1) o.erase (std::find (o.begin(), o.end(), p));
+            if (! isVisible (mode, page())) setPage (o.front());
+            save();
+        }
         void setMode (int m) { mode = juce::jlimit (0, kModes - 1, m); save(); }
 
         juce::String pageName (int p) const { return names[(size_t) mode][(size_t) p]; }
@@ -232,7 +268,7 @@ namespace numdeck
 
             if (isPageKey)
             {
-                if (down && ! repeat) { setPage (page() + (pad == PadMultiply ? 1 : -1)); changed(); }
+                if (down && ! repeat) { stepPage (pad == PadMultiply ? 1 : -1); changed(); }
                 return true;
             }
 
@@ -309,6 +345,9 @@ namespace numdeck
             for (int m = 0; m < kModes; ++m)
             {
                 props->setValue (prefix (m) + "page", pages[(size_t) m]);
+                juce::StringArray ord;
+                for (int p : order[(size_t) m]) ord.add (juce::String (p));
+                props->setValue (prefix (m) + "pageOrder", ord.joinIntoString (","));
                 for (int p = 0; p < kPages; ++p)
                 {
                     props->setValue (prefix (m) + "pageName" + juce::String (p), names[(size_t) m][(size_t) p]);
@@ -323,6 +362,7 @@ namespace numdeck
         std::unique_ptr<juce::PropertiesFile> props;
         std::array<std::array<std::array<Slot, kSlots>, kPages>, kModes> slots;
         std::array<std::array<juce::String, kPages>, kModes> names;
+        std::array<std::vector<int>, kModes> order;
         std::array<int, kModes> pages {};
 
         // Logic Pro モードは 1.0.0 と同じ名前で保存する
@@ -345,6 +385,15 @@ namespace numdeck
             for (int m = 0; m < kModes; ++m)
             {
                 pages[(size_t) m] = juce::jlimit (0, kPages - 1, props->getIntValue (prefix (m) + "page", 0));
+                auto& o = order[(size_t) m];
+                o.clear();
+                for (auto& t : juce::StringArray::fromTokens (props->getValue (prefix (m) + "pageOrder", "0,1,2,3"), ",", ""))
+                {
+                    const int p = t.getIntValue();
+                    if (t.trim().isNotEmpty() && p >= 0 && p < kPages && std::find (o.begin(), o.end(), p) == o.end()) o.push_back (p);
+                }
+                if (o.empty()) for (int p = 0; p < kPages; ++p) o.push_back (p);
+                if (std::find (o.begin(), o.end(), pages[(size_t) m]) == o.end()) pages[(size_t) m] = o.front();
                 for (int p = 0; p < kPages; ++p)
                 {
                     const auto nk = prefix (m) + "pageName" + juce::String (p);

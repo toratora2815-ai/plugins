@@ -100,6 +100,7 @@
   v1.11.1: アプリのタイル: そのアプリが全画面の左右分割中（AXFullScreen なのに画面幅の 9 割未満）なら、分割を解いてそのアプリだけ全画面に
   v1.12.0: リファレンスのページの 0 = TONE / WIDTH 切替（"width"）、SNAP（"snap"）も選べる
   v1.12.1: 前面のアプリのタイルをもう一度押したとき、全画面（1 枚）なら AXFullScreen を外して 1.3 秒後に隠す
+  v1.13.0: ページのタブをドラッグで並べ替え、設定の「出すページ」で隠す（設定キー pageOrder / work_pageOrder、例 "0,1,3"。隠したページの割り当ては残る）
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）
 
 ## Claude からの提案（余った利用枠の活用）

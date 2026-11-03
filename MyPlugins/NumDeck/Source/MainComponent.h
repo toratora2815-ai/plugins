@@ -61,6 +61,9 @@ private:
     // タイルのドラッグで入れ替え: 押したタイル、ドラッグ中か、今どのタイルの上か
     int pressTile = -1, dropTile = -1;
     bool draggingTile = false;
+    // ページのタブのドラッグで並べ替え
+    int pressTab = -1, dropTab = -1;
+    bool draggingTab = false;
     int learnPage = -1, learnIndex = -1;
     float ignoredHint = 0.0f;
     int tick = 0;
