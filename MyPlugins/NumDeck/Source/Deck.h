@@ -85,13 +85,14 @@ namespace numdeck
         static constexpr int kSlots = 11;  // キー 1〜9、キー 0（添字 9）、キー .（添字 10）
         static constexpr int kModes = 2;
         enum Mode { ModeLogic = 0, ModeWork };
-        enum ToggleKey { ToggleClear = 0, ToggleEquals, ToggleNone };
+        enum ToggleKey { ToggleClear = 0, ToggleEquals, ToggleNone, ToggleLearned };  // ToggleLearned = toggleKeyCode のキー
 
         bool enabled = true;
         bool logicOnly = true;     // Logic Pro モードだけに効く
         bool alwaysOnTop = false;
         int mode = ModeLogic;      // 画面のクリックでだけ切り替える（テンキーでは変わらない）
         int toggleKey = ToggleClear;
+        int toggleKeyCode = -1;  // ToggleLearned のときのキー（Home など）
         int modeKey = 115;  // モード（Logic Pro / 業務）を切り替えるキー。最初は Home。-1 = なし
         juce::String windowState;  // ウィンドウの位置と大きさ
         juce::String chromeProfile, chromeProfileName;  // リンクを開く Chrome のアカウント（空 = いつもの）
@@ -286,6 +287,11 @@ namespace numdeck
         // テンキー以外も含む全部のキー。モード切替のキーなら切り替えて true（そのキーは他のアプリに渡さない）
         bool handleAnyKey (int keyCode, bool down, bool repeat)
         {
+            if (toggleKey == ToggleLearned && keyCode == toggleKeyCode)
+            {
+                if (down && ! repeat) { enabled = ! enabled; changed(); }
+                return true;
+            }
             if (modeKey < 0 || keyCode != modeKey) return false;
             if (down && ! repeat) { setMode (mode == ModeLogic ? ModeWork : ModeLogic); changed(); }
             return true;
@@ -338,6 +344,7 @@ namespace numdeck
             props->setValue ("alwaysOnTop", alwaysOnTop);
             props->setValue ("mode", mode);
             props->setValue ("toggleKey", toggleKey);
+            props->setValue ("toggleKeyCode", toggleKeyCode);
             props->setValue ("modeKey", modeKey);
             props->setValue ("window", windowState);
             props->setValue ("chromeProfile", chromeProfile);
@@ -377,7 +384,9 @@ namespace numdeck
             logicOnly   = props->getBoolValue ("logicOnly", true);
             alwaysOnTop = props->getBoolValue ("alwaysOnTop", false);
             mode        = juce::jlimit (0, kModes - 1, props->getIntValue ("mode", ModeLogic));
-            toggleKey   = juce::jlimit (0, (int) ToggleNone, props->getIntValue ("toggleKey", ToggleClear));
+            toggleKey   = juce::jlimit (0, (int) ToggleLearned, props->getIntValue ("toggleKey", ToggleClear));
+            toggleKeyCode = props->getIntValue ("toggleKeyCode", -1);
+            if (toggleKey == ToggleLearned && toggleKeyCode < 0) toggleKey = ToggleClear;
             windowState = props->getValue ("window");
             modeKey     = props->getIntValue ("modeKey", 115);
             chromeProfile     = props->getValue ("chromeProfile");

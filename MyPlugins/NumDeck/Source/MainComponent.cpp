@@ -17,7 +17,8 @@ namespace
     // テンキーの並び（上から 7 8 9 / 4 5 6 / 1 2 3）→ キー番号 - 1
     const int kGridOrder[9] = { 6, 7, 8, 3, 4, 5, 0, 1, 2 };
     // タイルの番号（添字 0〜8 = キー 1〜9、添字 9 = キー 0、添字 10 = キー .）
-    constexpr int kLearnModeKey = 100;  // learnIndex がこれなら、モード切替のキーを覚えさせている
+    constexpr int kLearnModeKey = 100;    // learnIndex がこれなら、モード切替のキーを覚えさせている
+    constexpr int kLearnToggleKey = 101;  // learnIndex がこれなら、ON / OFF のキーを覚えさせている
     juce::String keyNumber (int index) { return index == 10 ? juce::String (".") : juce::String ((index + 1) % 10); }
 
     // コントローラーのボタン表示のような、キーキャップ
@@ -169,7 +170,11 @@ MainComponent::MainComponent()
 
     tap.onLearnKey = [this] (int code, int mods)
     {
-        if (learnIndex == kLearnModeKey)
+        if (learnIndex == kLearnToggleKey)
+        {
+            if (! (code == 53 && mods == 0)) { deck.toggleKey = Deck::ToggleLearned; deck.toggleKeyCode = code; deck.save(); }
+        }
+        else if (learnIndex == kLearnModeKey)
         {
             if (! (code == 53 && mods == 0)) { deck.modeKey = code; deck.save(); }
         }
@@ -392,7 +397,7 @@ void MainComponent::paint (juce::Graphics& g)
             msg = juce::String::fromUTF8 ("テンキーは普通の数字キー");
         else if (deck.toggleKey != Deck::ToggleNone)
             msg += juce::String::fromUTF8 ("（もう一度 ")
-                 + (deck.toggleKey == Deck::ToggleClear ? "Clear" : "=")
+                 + toggleKeyLabel()
                  + juce::String::fromUTF8 (" で ON）");
         g.drawText (msg, gridArea.withTrimmedTop (gridArea.getHeight() / 2 + (compact ? 6 : 14)).withHeight (24), juce::Justification::centred);
     }
@@ -820,7 +825,7 @@ void MainComponent::paintFooter (juce::Graphics& g)
     {
     if (deck.toggleKey != Deck::ToggleNone)
     {
-        x += drawKeycap (g, x, cy, deck.toggleKey == Deck::ToggleClear ? "Clear" : "=") + 6;
+        x += drawKeycap (g, x, cy, toggleKeyLabel()) + 6;
         g.setColour (sub);
         g.drawText ("ON/OFF", x, cy - 10, 60, 20, juce::Justification::centredLeft);
         x += 62;
@@ -854,12 +859,13 @@ void MainComponent::paintLearning (juce::Graphics& g)
         auto t = c.reduced (12.0f).toNearestInt().withBottom (learnCancel.getY() - 4);
         g.setColour (sub);
         g.setFont (font (11.0f));
-        g.drawText (learnIndex == kLearnModeKey ? juce::String::fromUTF8 ("モードの切り替え")
+        g.drawText (learnIndex == kLearnToggleKey ? juce::String::fromUTF8 ("ON / OFF の切り替え")
+                  : learnIndex == kLearnModeKey ? juce::String::fromUTF8 ("モードの切り替え")
                                                 : deck.pageName (learnPage) + juce::String::fromUTF8 (" ・ テンキー ") + keyNumber (learnIndex),
                     t.removeFromTop (18), juce::Justification::centred);
         g.setColour (text);
         g.setFont (font (15.0f, true));
-        g.drawFittedText (juce::String::fromUTF8 (learnIndex == kLearnModeKey ? "切り替えに使うキーを押す" : "入れたいショートカットを押す"), t.removeFromTop (30), juce::Justification::centred, 1, 0.7f);
+        g.drawFittedText (juce::String::fromUTF8 (learnIndex >= kLearnModeKey ? "切り替えに使うキーを押す" : "入れたいショートカットを押す"), t.removeFromTop (30), juce::Justification::centred, 1, 0.7f);
         g.setColour (sub);
         g.setFont (font (11.0f));
         g.drawText (juce::String::fromUTF8 ("Esc でやめる"), t.removeFromTop (18), juce::Justification::centred);
@@ -875,16 +881,17 @@ void MainComponent::paintLearning (juce::Graphics& g)
     auto t = c.reduced (24.0f, 22.0f).toNearestInt();
     g.setColour (sub);
     g.setFont (font (13.0f));
-    g.drawText (learnIndex == kLearnModeKey ? juce::String::fromUTF8 ("モード（Logic Pro / 業務）の切り替え")
+    g.drawText (learnIndex == kLearnToggleKey ? juce::String::fromUTF8 ("テンキーの ON / OFF の切り替え")
+              : learnIndex == kLearnModeKey ? juce::String::fromUTF8 ("モード（Logic Pro / 業務）の切り替え")
                                             : deck.pageName (learnPage) + juce::String::fromUTF8 (" ページ ・ テンキー ") + keyNumber (learnIndex),
                 t.removeFromTop (20), juce::Justification::centred);
     g.setColour (text);
     g.setFont (font (20.0f, true));
-    g.drawText (juce::String::fromUTF8 (learnIndex == kLearnModeKey ? "切り替えに使うキーを押してください" : "入れたいショートカットを押してください"),
+    g.drawText (juce::String::fromUTF8 (learnIndex >= kLearnModeKey ? "切り替えに使うキーを押してください" : "入れたいショートカットを押してください"),
                 t.removeFromTop (40), juce::Justification::centred);
     g.setColour (sub);
     g.setFont (font (13.0f));
-    g.drawText (learnIndex == kLearnModeKey ? juce::String::fromUTF8 ("例: テンキーのいちばん上の Home キーなど（そのキーは切り替え専用になります）")
+    g.drawText (learnIndex >= kLearnModeKey ? juce::String::fromUTF8 ("例: テンキーのいちばん上の Home キーなど（そのキーは切り替え専用になります）")
                                             : juce::String::fromUTF8 ("例: \xe2\x8c\x98 + T 、 \xe2\x87\xa7 + R など（Logic のキーコマンドと同じものを押す）"),
                 t.removeFromTop (24), juce::Justification::centred);
     g.drawText (juce::String::fromUTF8 ("Esc でやめる"), t.removeFromTop (22), juce::Justification::centred);
@@ -1025,6 +1032,12 @@ void MainComponent::setWindowSize (bool small)
 {
     if (auto* w = findParentComponentOfClass<juce::ResizableWindow>())
         w->setContentComponentSize (small ? 430 : 860, small ? 300 : 600);
+}
+
+juce::String MainComponent::toggleKeyLabel() const
+{
+    if (deck.toggleKey == Deck::ToggleLearned) return keyName (deck.toggleKeyCode);
+    return deck.toggleKey == Deck::ToggleClear ? "Clear" : "=";
 }
 
 juce::Colour MainComponent::modeAccent() const
@@ -1172,6 +1185,10 @@ void MainComponent::showSettingsMenu()
     m.addItem (1, juce::String::fromUTF8 ("Clear（NumLock）"), true, deck.toggleKey == Deck::ToggleClear);
     m.addItem (2, "=", true, deck.toggleKey == Deck::ToggleEquals);
     m.addItem (3, juce::String::fromUTF8 ("なし（画面のボタンだけ）"), true, deck.toggleKey == Deck::ToggleNone);
+    m.addItem (4, deck.toggleKey == Deck::ToggleLearned
+                    ? juce::String::fromUTF8 ("覚えさせたキー：") + keyName (deck.toggleKeyCode) + juce::String::fromUTF8 ("（覚え直す\xe2\x80\xa6）")
+                    : juce::String::fromUTF8 ("ほかのキーを覚えさせる\xe2\x80\xa6"),
+               true, deck.toggleKey == Deck::ToggleLearned);
     m.addSectionHeader (juce::String::fromUTF8 ("モード（Logic Pro / 業務）を切り替えるキー：")
                         + (deck.modeKey >= 0 ? keyName (deck.modeKey) : juce::String::fromUTF8 ("なし")));
     m.addItem (6, juce::String::fromUTF8 ("切り替えのキーを覚えさせる\xe2\x80\xa6"));
@@ -1214,6 +1231,7 @@ void MainComponent::showSettingsMenu()
                          if (safe == nullptr || r == 0) return;
                          auto& d = safe->deck;
                          if (r >= 1 && r <= 3) { d.toggleKey = r - 1; d.save(); }
+                         if (r == 4) safe->startLearning (0, kLearnToggleKey);
                          if (r >= 60 && r < 60 + Deck::kPages)
                          {
                              const int p = r - 60;
@@ -1258,7 +1276,7 @@ void MainComponent::startLearning (int page, int index)
     }
     learnPage = page;
     learnIndex = index;
-    tap.learnAnyKey = index == kLearnModeKey;
+    tap.learnAnyKey = index >= kLearnModeKey;
     tap.learning = true;
     repaint();
 }

@@ -26,6 +26,7 @@ private:
     void renameSlot (int page, int index);
     void chooseOtherApp (int page, int index);
     void chooseSplitApp (int page, int index);
+    juce::String toggleKeyLabel() const;
     void registerChromePage (int page, int index);
     void enterUrl (int page, int index);
     void askText (const juce::String& title, const juce::String& message,
