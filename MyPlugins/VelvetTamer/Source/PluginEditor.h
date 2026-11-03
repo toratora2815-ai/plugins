@@ -60,7 +60,7 @@ private:
     VelvetTamerProcessor& processor;
 
     Knob depth, sharpness, selectivity, attack, release, low, high, mix, output;
-    Toggle delta, link;
+    Toggle delta, link, lowLatency, sidechain;
     juce::ComboBox presetBox;
 
     int hover = grabNone, grab = grabNone;
@@ -73,6 +73,8 @@ private:
     float spec[vt::TamerEngine::displayPoints] {}, gr[vt::TamerEngine::displayPoints] {};
     float shownSpec[vt::TamerEngine::displayPoints] {}, shownGr[vt::TamerEngine::displayPoints] {};
     float shownMax = 0.0f;
+    float scSpec[vt::TamerEngine::displayPoints] {}, shownSc[vt::TamerEngine::displayPoints] {};
+    bool scOn = false, scSignal = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VelvetTamerEditor)
 };

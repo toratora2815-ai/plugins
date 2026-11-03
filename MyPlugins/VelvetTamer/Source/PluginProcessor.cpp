@@ -28,7 +28,8 @@ namespace
 VelvetTamerProcessor::VelvetTamerProcessor()
     : AudioProcessor (BusesProperties()
                         .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                        .withInput  ("Sidechain", juce::AudioChannelSet::stereo(), false)),
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
     for (int i = 0; i < vt::numWeights; ++i)
@@ -80,6 +81,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout VelvetTamerProcessor::create
                                           A().withStringFromValueFunction (signedPct)));
     }
 
+    // v1.2 で追加（バージョン 3）
+    v.push_back (std::make_unique<B> (juce::ParameterID { "lowlatency", 3 }, "Low Latency", false));
+    v.push_back (std::make_unique<B> (juce::ParameterID { "sidechain", 3 }, "External Sidechain", false));
+
     return { v.begin(), v.end() };
 }
 
@@ -87,14 +92,36 @@ bool VelvetTamerProcessor::isBusesLayoutSupported (const BusesLayout& layouts) c
 {
     const auto in = layouts.getMainInputChannelSet(), out = layouts.getMainOutputChannelSet();
     if (in != out) return false;
-    return out == juce::AudioChannelSet::stereo() || out == juce::AudioChannelSet::mono();
+    if (out != juce::AudioChannelSet::stereo() && out != juce::AudioChannelSet::mono()) return false;
+
+    // サイドチェーン：なし・モノラル・ステレオ
+    if (layouts.inputBuses.size() > 1)
+    {
+        const auto sc = layouts.getChannelSet (true, 1);
+        if (! sc.isDisabled() && sc != juce::AudioChannelSet::mono() && sc != juce::AudioChannelSet::stereo())
+            return false;
+    }
+    return true;
 }
 
 void VelvetTamerProcessor::prepareToPlay (double sampleRate, int)
 {
-    engine.setSettings (readSettings());
-    engine.prepare (sampleRate, getTotalNumOutputChannels());
-    setLatencySamples (engine.getLatency());
+    const auto s = readSettings();
+    const int numCh = getMainBusNumOutputChannels();
+    for (int i = 0; i < 2; ++i)
+    {
+        engines[i].setSettings (s);
+        engines[i].prepare (sampleRate, numCh, i == 1);
+    }
+    currentRate = sampleRate;
+    activeLowLatency = apvts.getRawParameterValue ("lowlatency")->load() > 0.5f;
+    setLatencySamples (engines[activeLowLatency ? 1 : 0].getLatency());
+}
+
+// 低遅延の切り替えは音の処理の中で気づき、遅延の報告だけはメッセージスレッドで行う
+void VelvetTamerProcessor::handleAsyncUpdate()
+{
+    setLatencySamples (engines[activeLowLatency ? 1 : 0].getLatency());
 }
 
 vt::Settings VelvetTamerProcessor::readSettings() const
@@ -113,6 +140,7 @@ vt::Settings VelvetTamerProcessor::readSettings() const
     s.outDb = f ("output");
     s.delta = f ("delta") > 0.5f;
     s.link = f ("link") > 0.5f;
+    s.external = f ("sidechain") > 0.5f;
     for (int i = 0; i < vt::numWeights; ++i)
         s.weight[i] = weightParams[i]->load() * 0.01f;
     return s;
@@ -121,8 +149,30 @@ vt::Settings VelvetTamerProcessor::readSettings() const
 void VelvetTamerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
+
+    const bool wantLow = apvts.getRawParameterValue ("lowlatency")->load() > 0.5f;
+    if (wantLow != activeLowLatency.load())
+    {
+        engines[wantLow ? 1 : 0].reset();
+        activeLowLatency = wantLow;
+        triggerAsyncUpdate();
+    }
+    auto& engine = engines[wantLow ? 1 : 0];
+
+    auto main = getBusBuffer (buffer, true, 0);
+    juce::AudioBuffer<float> scBuf;   // 中身はホストの音を指すだけ（コピーしない）
+    const float* const* sc = nullptr;
+    int numSc = 0;
+    if (getBusCount (true) > 1)
+        if (auto* bus = getBus (true, 1); bus != nullptr && bus->isEnabled())
+        {
+            scBuf = getBusBuffer (buffer, true, 1);
+            sc = scBuf.getArrayOfReadPointers();
+            numSc = scBuf.getNumChannels();
+        }
+
     engine.setSettings (readSettings());
-    engine.process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), buffer.getNumSamples());
+    engine.process (main.getArrayOfWritePointers(), main.getNumChannels(), main.getNumSamples(), sc, numSc);
 }
 
 namespace

@@ -2,7 +2,7 @@
 #include <JuceHeader.h>
 #include "TamerEngine.h"
 
-class VelvetTamerProcessor : public juce::AudioProcessor
+class VelvetTamerProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
 {
 public:
     VelvetTamerProcessor();
@@ -39,10 +39,20 @@ public:
     void applyPreset (int index);
 
     juce::AudioProcessorValueTreeState apvts;
-    vt::TamerEngine engine;
+
+    // 画面用：いま使っているほうのエンジン（HIGH / LOW LATENCY）
+    const vt::TamerEngine& displayEngine() const { return engines[activeLowLatency.load() ? 1 : 0]; }
+    bool isLowLatency() const { return activeLowLatency.load(); }
+    double getSampleRateForDisplay() const { return currentRate.load(); }
 
 private:
     vt::Settings readSettings() const;
+    void handleAsyncUpdate() override;
+
+    // [0] = HIGH（今までどおり）、[1] = LOW LATENCY。両方とも先に準備しておき、切り替えで確保し直さない
+    vt::TamerEngine engines[2];
+    std::atomic<bool> activeLowLatency { false };
+    std::atomic<double> currentRate { 48000.0 };
 
     std::atomic<float>* weightParams[vt::numWeights] {};
 

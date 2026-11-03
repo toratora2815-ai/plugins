@@ -17,6 +17,11 @@
 //   → まわりの平均（なだらかな「山なみ」）を求める → 山なみより THRESHOLD 以上飛び出た分を DEPTH の割合で下げる
 //   → WEIGHT（帯域ごとの効きの強弱）を掛ける → FOCUS（LOW〜HIGH）の外は効かせない → 隣の周波数とならす → ATTACK / RELEASE で時間方向にならす
 //   → 逆 FFT して重ね合わせ → MIX / DELTA / OUTPUT
+//
+// v1.2：
+//   ・低遅延モード（フレームを 1/4 の長さにする。48 kHz で 2048 → 512 サンプル）
+//   ・外部サイドチェーン：「どこを下げるか」をサイドチェーンの音（たとえばボーカル）で決め、
+//     メインの音（ギターなど）のその帯域だけを下げる。サイドチェーンが小さい帯域は下げない
 namespace vt
 {
     // WEIGHT の点（周波数は固定。上下だけ動かす）
@@ -34,6 +39,7 @@ namespace vt
         bool delta = false;          // 削った音だけを聴く
         bool link = true;            // 左右で同じだけ下げる
         float weight[numWeights] { 0, 0, 0, 0, 0, 0, 0 };   // -1..+1  -1 でその帯域は効かない、+1 で 2 倍効く
+        bool external = false;       // サイドチェーンの音で検出する
     };
 
     // 2 のべき乗サイズの複素 FFT（反復型）
@@ -98,13 +104,16 @@ namespace vt
         {
             for (auto& v : dispSpec) v = -120.0f;
             for (auto& v : dispGr) v = 0.0f;
+            for (auto& v : dispSc) v = -120.0f;
         }
 
-        void prepare (double sampleRate, int numChannels)
+        // lowLatency = true でフレームを 1/4 にする（遅延も 1/4）
+        void prepare (double sampleRate, int numChannels, bool lowLatency = false)
         {
             sr = sampleRate;
             channels = std::clamp (numChannels, 1, maxChannels);
             n = sr <= 50000.0 ? 2048 : (sr <= 100000.0 ? 4096 : 8192);
+            if (lowLatency) n /= 4;
             hop = n / 8;
             fifoLatency = n - hop;
             latency = n;   // 入口の待ち (n - hop) ＋ 出口の重ね合わせ (hop)
@@ -128,7 +137,10 @@ namespace vt
                 detPow[c].assign ((size_t) bins, 0.0f);
                 grDb[c].assign ((size_t) bins, 0.0f);
                 dryDelay[c].assign ((size_t) latency + 1, 0.0f);
+                scFifo[c].assign ((size_t) n, 0.0f);
             }
+            scPow.assign ((size_t) bins, 0.0f);
+            scSpec.assign ((size_t) n, {});
             rover = fifoLatency;
             dryPos = 0;
 
@@ -151,15 +163,36 @@ namespace vt
             mixCur = settings.mix;
             outCur = std::pow (10.0f, settings.outDb / 20.0f);
             smoothCoef = 1.0f - (float) std::exp (-1.0 / (0.02 * sr));
+            for (auto& v : dispSc) v.store (-120.0f, std::memory_order_relaxed);
+            scSeen.store (false, std::memory_order_relaxed);
+        }
+
+        // 確保し直さずに、中の音と状態だけを空にする（モードを切り替えた直後用）
+        void reset()
+        {
+            for (int c = 0; c < maxChannels; ++c)
+            {
+                for (auto* v : { &inFifo[c], &outFifo[c], &outAcc[c], &dryDelay[c], &scFifo[c], &detPow[c], &grDb[c] })
+                    std::fill (v->begin(), v->end(), 0.0f);
+            }
+            std::fill (scPow.begin(), scPow.end(), 0.0f);
+            rover = fifoLatency;
+            dryPos = 0;
+            mixCur = settings.mix;
+            outCur = std::pow (10.0f, settings.outDb / 20.0f);
         }
 
         int getLatency() const { return latency; }
+        int getFrameSize() const { return n; }
         void setSettings (const Settings& s) { settings = s; }
 
         // ch[c] をその場で書き換える。numCh は 1 か 2
-        void process (float* const* ch, int numCh, int numSamples)
+        // sc はサイドチェーン（なければ nullptr / numSc = 0）。読むだけ
+        void process (float* const* ch, int numCh, int numSamples, const float* const* sc = nullptr, int numSc = 0)
         {
             numCh = std::clamp (numCh, 1, channels);
+            numSc = sc != nullptr ? std::clamp (numSc, 0, maxChannels) : 0;
+            scChannels = numSc;
             const float mixTarget = std::clamp (settings.mix, 0.0f, 1.0f);
             const float outTarget = std::pow (10.0f, settings.outDb / 20.0f);
 
@@ -183,6 +216,8 @@ namespace vt
                 }
                 if (++dryPos >= latency) dryPos = 0;
 
+                for (int c = 0; c < numSc; ++c) scFifo[c][(size_t) rover] = sc[c][i];
+
                 if (++rover >= n)
                 {
                     rover = fifoLatency;
@@ -192,14 +227,17 @@ namespace vt
         }
 
         // 画面用（メッセージスレッドから読む）
-        void copyDisplay (float* specDb, float* reductionDb) const
+        void copyDisplay (float* specDb, float* reductionDb, float* scDb = nullptr) const
         {
             for (int p = 0; p < displayPoints; ++p)
             {
                 specDb[p] = dispSpec[p].load (std::memory_order_relaxed);
                 reductionDb[p] = dispGr[p].load (std::memory_order_relaxed);
+                if (scDb != nullptr) scDb[p] = dispSc[p].load (std::memory_order_relaxed);
             }
         }
+        // サイドチェーンに音が来ているか（直近のフレームで）
+        bool sidechainHasSignal() const { return scSeen.load (std::memory_order_relaxed); }
         float getMaxReductionDb() const { return maxReduction.load (std::memory_order_relaxed); }
 
     private:
@@ -284,6 +322,8 @@ namespace vt
                     const float e = over <= -knee ? 0.0f
                                   : (over >= knee ? over : (over + knee) * (over + knee) / (4.0f * knee));
                     t = -std::min (maxDepthDb, e * depth * weightCurve[(size_t) k]) * focus[(size_t) k];
+                    // サイドチェーンで検出しているときは、サイドチェーンが十分大きい帯域だけ下げる
+                    if (externalNow) t *= std::clamp ((levelDb[(size_t) k] - scGateDb) / 12.0f, 0.0f, 1.0f);
                 }
                 tmpB[(size_t) k] = t;
             }
@@ -324,9 +364,32 @@ namespace vt
                 }
             }
 
+            // サイドチェーン（検出専用）。左右を足して 1 つの強さにする
+            externalNow = settings.external;
+            if (externalNow)
+            {
+                const float a = 1.0f - (float) std::exp (-(double) hop / (0.010 * sr));
+                float peak = 0.0f;
+                for (int k = 0; k < bins; ++k) scTmp (k) = 0.0f;
+                for (int c = 0; c < scChannels; ++c)
+                {
+                    auto* x = scSpec.data();
+                    for (int k = 0; k < n; ++k) x[k] = { scFifo[c][(size_t) k] * win[(size_t) k], 0.0f };
+                    fft.run (x, false);
+                    for (int k = 0; k < bins; ++k) scTmp (k) += std::norm (x[k]) * powerNorm / (float) scChannels;
+                }
+                for (int k = 0; k < bins; ++k)
+                {
+                    scPow[(size_t) k] += (scTmp (k) - scPow[(size_t) k]) * a;
+                    peak = std::max (peak, scPow[(size_t) k]);
+                }
+                scSeen.store (peak > 1.0e-9f, std::memory_order_relaxed);   // どこかの帯域が約 -90 dB より大きい
+            }
+
             const float atk = (float) std::exp (-(double) hop / (std::max (0.5f, settings.attackMs) * 0.001 * sr));
             const float rel = (float) std::exp (-(double) hop / (std::max (1.0f, settings.releaseMs) * 0.001 * sr));
-            const bool linked = settings.link || numCh == 1;
+            // サイドチェーンで検出するときは、左右とも同じだけ下げる
+            const bool linked = settings.link || numCh == 1 || externalNow;
             const int groups = linked ? 1 : numCh;
 
             for (int g = 0; g < groups; ++g)
@@ -334,7 +397,8 @@ namespace vt
                 for (int k = 0; k < bins; ++k)
                 {
                     float p = 0.0f;
-                    if (linked) { for (int c = 0; c < numCh; ++c) p += detPow[c][(size_t) k]; p /= (float) numCh; }
+                    if (externalNow) p = scPow[(size_t) k];
+                    else if (linked) { for (int c = 0; c < numCh; ++c) p += detPow[c][(size_t) k]; p /= (float) numCh; }
                     else p = detPow[g][(size_t) k];
                     levelDb[(size_t) k] = 10.0f * std::log10 (p + 1e-14f);
                 }
@@ -347,7 +411,7 @@ namespace vt
                     const float coef = t < gr[(size_t) k] ? atk : rel;
                     gr[(size_t) k] = t + (gr[(size_t) k] - t) * coef;
                 }
-                if (g == 0) storeDisplay();
+                if (g == 0) { numMain = numCh; storeDisplay(); }
             }
 
             for (int c = 0; c < numCh; ++c)
@@ -369,7 +433,12 @@ namespace vt
                 std::copy (acc.begin() + hop, acc.begin() + n + hop, acc.begin());
                 std::copy (inFifo[c].begin() + hop, inFifo[c].end(), inFifo[c].begin());
             }
+            for (int c = 0; c < maxChannels; ++c)
+                std::copy (scFifo[c].begin() + hop, scFifo[c].end(), scFifo[c].begin());
         }
+
+        // サイドチェーンの強さを足し合わせる一時置き場（tmpA を借りる。computeTarget の前にしか使わない）
+        float& scTmp (int k) { return tmpA[(size_t) k]; }
 
         void storeDisplay()
         {
@@ -377,25 +446,36 @@ namespace vt
             for (int p = 0; p < displayPoints; ++p)
             {
                 const int a = dispEdge[p], b = std::max (a, dispEdge[p + 1]);
-                float lv = -120.0f, g = 0.0f;
+                float lv = -120.0f, g = 0.0f, sv = -120.0f;
                 for (int k = a; k <= b; ++k)
                 {
-                    lv = std::max (lv, levelDb[(size_t) k]);
+                    if (externalNow)
+                    {
+                        // 画面の紫はいつもメインの音。サイドチェーンは別の線で出す
+                        float mp = 0.0f;
+                        for (int c = 0; c < numMain; ++c) mp += detPow[c][(size_t) k];
+                        lv = std::max (lv, 10.0f * std::log10 (mp / (float) numMain + 1e-14f));
+                        sv = std::max (sv, levelDb[(size_t) k]);
+                    }
+                    else lv = std::max (lv, levelDb[(size_t) k]);
                     g = std::min (g, grDb[0][(size_t) k]);
                 }
                 dispSpec[p].store (lv, std::memory_order_relaxed);
                 dispGr[p].store (g, std::memory_order_relaxed);
+                dispSc[p].store (sv, std::memory_order_relaxed);
                 worst = std::min (worst, g);
             }
             maxReduction.store (worst, std::memory_order_relaxed);
         }
 
         static constexpr float floorDb = -90.0f, maxDepthDb = 24.0f;
+        static constexpr float scGateDb = -72.0f;   // サイドチェーンがこれより小さい帯域は下げない（-60 dB で全部効く）
 
         Settings settings;
         double sr = 48000.0;
         int channels = 2, n = 2048, hop = 256, fifoLatency = 1792, latency = 2048, bins = 1025;
-        int rover = 0, dryPos = 0;
+        int rover = 0, dryPos = 0, scChannels = 0, numMain = 1;
+        bool externalNow = false;
         float olaScale = 0.25f, powerNorm = 1.0f;
         float mixCur = 1.0f, outCur = 1.0f, smoothCoef = 0.001f;
         float lastLow = -1.0f, lastHigh = -1.0f;
@@ -408,9 +488,13 @@ namespace vt
         std::vector<float> levelDb, tmpA, tmpB, focus, weightCurve;
         float lastWeight[numWeights] {};
         std::vector<double> prefix;
+        std::vector<float> scFifo[maxChannels], scPow;
+        std::vector<std::complex<float>> scSpec;
 
         int dispEdge[displayPoints + 1] {};
         std::atomic<float> dispSpec[displayPoints], dispGr[displayPoints];
+        std::atomic<float> dispSc[displayPoints];
         std::atomic<float> maxReduction { 0.0f };
+        std::atomic<bool> scSeen { false };
     };
 }

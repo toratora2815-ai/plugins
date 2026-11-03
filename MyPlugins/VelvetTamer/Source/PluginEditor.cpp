@@ -3,7 +3,8 @@
 namespace
 {
     const juce::Colour bg (0xff120f16), panel (0xff1b1621), edge (0xff2c2433),
-                       rose (0xffe58fb4), plum (0xffb59cff), gold (0xffffd27a), text (0xffefe9f3);
+                       rose (0xffe58fb4), plum (0xffb59cff), gold (0xffffd27a), text (0xffefe9f3),
+                       teal (0xff6fd6c9);
 
     constexpr int points = vt::TamerEngine::displayPoints;
     constexpr float specTop = 0.0f, specBottom = -90.0f;   // 入力スペクトルの表示範囲
@@ -25,8 +26,13 @@ VelvetTamerEditor::VelvetTamerEditor (VelvetTamerProcessor& p)
 
     setupToggle (delta, "delta", "DELTA");
     setupToggle (link, "link", "LINK");
+    setupToggle (lowLatency, "lowlatency", "LOW LATENCY");
+    setupToggle (sidechain, "sidechain", "SIDECHAIN");
     delta.button.setTooltip ("Listen only to what is being removed");
     link.button.setTooltip ("Reduce both channels by the same amount");
+    lowLatency.button.setTooltip ("Shorter analysis frame: 1/4 of the delay, coarser frequency detail");
+    sidechain.button.setTooltip ("Decide where to reduce from the sidechain input (e.g. vocal), reduce it on this track");
+    sidechain.button.setColour (juce::TextButton::buttonOnColourId, teal);
 
     presetBox.addItemList (VelvetTamerProcessor::presetNames(), 1);
     presetBox.setTextWhenNothingSelected ("PRESET");
@@ -40,7 +46,7 @@ VelvetTamerEditor::VelvetTamerEditor (VelvetTamerProcessor& p)
     };
     addAndMakeVisible (presetBox);
 
-    for (int i = 0; i < points; ++i) { shownSpec[i] = specBottom; shownGr[i] = 0.0f; }
+    for (int i = 0; i < points; ++i) { shownSpec[i] = specBottom; shownGr[i] = 0.0f; shownSc[i] = specBottom; }
 
     setSize (980, 600);
     startTimerHz (30);
@@ -97,7 +103,11 @@ void VelvetTamerEditor::resized()
     header.removeFromRight (6);
     delta.button.setBounds (header.removeFromRight (90).reduced (2, 8));
     header.removeFromRight (6);
-    presetBox.setBounds (header.removeFromRight (200).reduced (2, 8));
+    presetBox.setBounds (header.removeFromRight (180).reduced (2, 8));
+    header.removeFromRight (6);
+    sidechain.button.setBounds (header.removeFromRight (100).reduced (2, 8));
+    header.removeFromRight (6);
+    lowLatency.button.setBounds (header.removeFromRight (110).reduced (2, 8));
     area.removeFromTop (8);
 
     const int gap = 12;
@@ -129,14 +139,18 @@ void VelvetTamerEditor::resized()
 
 void VelvetTamerEditor::timerCallback()
 {
-    processor.engine.copyDisplay (spec, gr);
+    const auto& engine = processor.displayEngine();
+    engine.copyDisplay (spec, gr, scSpec);
+    scOn = param ("sidechain") > 0.5f;
+    scSignal = engine.sidechainHasSignal();
     for (int i = 0; i < points; ++i)
     {
+        shownSc[i] = scSpec[i] > shownSc[i] ? scSpec[i] : shownSc[i] + (scSpec[i] - shownSc[i]) * 0.15f;
         // 上がるときはすぐ、下がるときはゆっくり（見やすさのため）
         shownSpec[i] = spec[i] > shownSpec[i] ? spec[i] : shownSpec[i] + (spec[i] - shownSpec[i]) * 0.15f;
         shownGr[i] = gr[i] < shownGr[i] ? gr[i] : shownGr[i] + (gr[i] - shownGr[i]) * 0.2f;
     }
-    const float m = processor.engine.getMaxReductionDb();
+    const float m = engine.getMaxReductionDb();
     shownMax = m < shownMax ? m : shownMax + (m - shownMax) * 0.1f;
     repaint (tDisplay.bounds);
 }
@@ -303,6 +317,24 @@ void VelvetTamerEditor::paint (juce::Graphics& g)
     g.drawText ("MAX  " + juce::String (shownMax, 1) + " dB",
                 tDisplay.bounds.reduced (12, 8).removeFromTop (22), juce::Justification::centredRight);
 
+    // 遅延とサイドチェーンの状態（タイトルの横）
+    {
+        auto info = tDisplay.bounds.reduced (12, 8).removeFromTop (22).withTrimmedLeft (110).withTrimmedRight (110);
+        const double rate = processor.getSampleRateForDisplay();
+        const int lat = processor.getLatencySamples();
+        g.setFont (juce::FontOptions (11.0f));
+        g.setColour (text.withAlpha (0.45f));
+        juce::String s = "LATENCY " + juce::String (lat) + " smp (" + juce::String (lat * 1000.0 / rate, 1) + " ms)";
+        g.drawText (s, info, juce::Justification::centredLeft);
+        if (scOn)
+        {
+            g.setColour (scSignal ? teal : rose);
+            g.drawText (scSignal ? "SIDECHAIN: detecting from sidechain (teal line)"
+                                 : "SIDECHAIN: no signal - choose a source in Logic's Side Chain menu",
+                        info.withTrimmedLeft (190), juce::Justification::centredLeft);
+        }
+    }
+
     drawDisplay (g, displayArea.toFloat());
 }
 
@@ -372,6 +404,20 @@ void VelvetTamerEditor::drawDisplay (juce::Graphics& g, juce::Rectangle<float> r
     g.fillPath (specPath);
     g.setColour (plum.withAlpha (0.7f));
     g.strokePath (specPath, juce::PathStrokeType (1.2f));
+
+    // サイドチェーンの音（検出に使っている音）
+    if (scOn)
+    {
+        juce::Path scPath;
+        for (int i = 0; i < points; ++i)
+        {
+            const float v = juce::jlimit (specBottom, specTop, shownSc[i]);
+            const float y = juce::jmap (v, specBottom, specTop, plot.getBottom(), plot.getY());
+            if (i == 0) scPath.startNewSubPath (xAt (i), y); else scPath.lineTo (xAt (i), y);
+        }
+        g.setColour (teal.withAlpha (0.85f));
+        g.strokePath (scPath, juce::PathStrokeType (1.3f));
+    }
 
     // 下げている量（上から垂れ下がる）
     juce::Path grPath;
