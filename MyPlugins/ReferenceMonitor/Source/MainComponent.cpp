@@ -264,10 +264,17 @@ void MainComponent::saveSettings()
     library.save();
 }
 
-juce::String MainComponent::outputUID() const
+// 選んでいる出力先。つながっていない（オーディオインターフェイスを外した・Bluetooth が切れた）ときは、
+// Mac の今の出力先で鳴らす。つなぎ直せば、manageCapture が数秒で元の出力先に戻す
+juce::String MainComponent::outputUID()
 {
     const auto& u = outSeg.getIndex() == 1 ? outB : outA;
-    return u.isNotEmpty() ? u : CaptureEngine::defaultOutputUID();
+    outputFallback = false;
+    if (u.isEmpty()) return CaptureEngine::defaultOutputUID();
+    for (auto& d : CaptureEngine::listOutputDevices())
+        if (d.uid == u) return u;
+    outputFallback = true;
+    return CaptureEngine::defaultOutputUID();
 }
 
 void MainComponent::refreshOutputs()
@@ -559,7 +566,8 @@ void MainComponent::togglePlay()
     if (! engine.ab.load())
     {
         if (! logic.hasTimecode())
-            flash ("To play/stop Logic from here, turn on sync in Logic (see README: Logic setup).");
+            flash ("Logic doesn't answer: this Logic project isn't set up yet (once per project). In Logic: File > Project Settings > Sync > MIDI, "
+                   "set a row to Reference Monitor, check MTC and MMC, and turn on \"Auto-enable MMC input\" below. Then save.");
         if (logic.isPlaying()) logic.stop(); else logic.play();
         return;
     }
@@ -1080,7 +1088,10 @@ void MainComponent::updateSpectra()
     }
     if (! bypass && capture.numMixProcesses() > 0)
         statusMix += logic.hasTimecode() ? ("   |   Logic " + LogicLink::format (logic.getPosition()) + (logic.isPlaying() ? "  playing" : "  stopped"))
-                                         : juce::String ("   |   sync off (Logic can't be controlled yet)");
+                                         : juce::String ("   |   sync off: set up this Logic project (README)");
+    if (outputFallback && ! bypass)
+        statusHint = "OUTPUT " + juce::String (outSeg.getIndex() == 1 ? "B" : "A")
+                   + " is not connected, so the sound goes to the Mac's current output for now. It switches back when you reconnect it.";
 
     if (isLive())
     {

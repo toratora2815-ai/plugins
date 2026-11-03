@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 # Logic・ミュージックの音を直接受け取る仕組み（プロセスタップ）が macOS 14.2 からなので、このアプリだけ 14.2
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.2" CACHE STRING "")
-project(ReferenceMonitor VERSION 1.2.0 LANGUAGES C CXX)
+project(ReferenceMonitor VERSION 1.2.1 LANGUAGES C CXX)
 if(APPLE)
     enable_language(OBJCXX)
 endif()

@@ -94,7 +94,8 @@ private:
     bool refIsPlaying() const;
     void setMixPosition (int idx, bool clear);
     void flash (const juce::String& msg);
-    juce::String outputUID() const;
+    juce::String outputUID();
+    bool outputFallback = false;   // 選んだ出力先がつながっていないので、Mac の出力先で鳴らしている
     void refreshOutputs();
     void refreshLiveApps();
     void saveSettings();
