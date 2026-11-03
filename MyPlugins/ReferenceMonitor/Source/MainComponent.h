@@ -54,6 +54,15 @@ public:
     bool isInterestedInFileDrag (const juce::StringArray&) override;
     void filesDropped (const juce::StringArray&, int, int) override;
 
+    // ウィンドウの位置と大きさ（次に開いたとき、同じ場所に出す）
+    juce::String savedWindowState() const { return library.settings.getWithDefault ("window", "").toString(); }
+    void saveWindowState (const juce::String& st)
+    {
+        if (st == savedWindowState()) return;
+        library.settings.set ("window", st);
+        library.save();
+    }
+
     // テスト用
     Engine& getEngine() { return engine; }
     void selectItem (int row);

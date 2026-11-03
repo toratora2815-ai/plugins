@@ -74,6 +74,7 @@
   v1.1.0: LISTEN AS（PHONE / LAPTOP / EARBUDS / BT SPEAKER / CAR / CLUB の聞こえ方、ピンクノイズで音量を自動補正）、
   LEVEL に SPOTIFY / APPLE / YOUTUBE の音量正規化、メーターに各サービスで何 dB 上げ下げされるか
   v1.2.0: 幅 720〜（MacBook 画面の半分）に収まる縦並びレイアウト。左の参照曲リストは上の REF メニューに
+  v1.3.3: ウィンドウの位置と大きさを覚える（library.json の settings "window"、動かして 0.8 秒後と終了時に保存）
 - Mix Time Machine（MixTimeMachine）… バウンス履歴と聴き比べの単体 Mac アプリ。~/Music/Logic（と Bounces フォルダ）を見張って新しいバウンスを自動で取り込み、
   FLAC でコピー保存（~/Music/Mix Time Machine）。A/B を音量合わせ・頭のずれ自動合わせで切替、5回のブラインドテスト、何が変わったか（音量・PLR・広がり・音色差）
 - Num Deck（NumDeck）… テンキー 1〜9 に Logic の操作を割り当てる単体 Mac アプリ（ゲーム機メニュー風の 3×3 タイル画面）。
