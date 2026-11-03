@@ -18,11 +18,11 @@ namespace
     const int kGridOrder[9] = { 6, 7, 8, 3, 4, 5, 0, 1, 2 };
 
     // コントローラーのボタン表示のような、キーキャップ
-    int drawKeycap (juce::Graphics& g, int x, int centreY, const juce::String& label, float alpha = 1.0f)
+    int drawKeycap (juce::Graphics& g, int x, int centreY, const juce::String& label, float alpha = 1.0f, float h = 22.0f)
     {
-        const auto f = font (12.0f, true);
-        const int w = juce::jmax (22, juce::GlyphArrangement::getStringWidthInt (f, label) + 12);
-        juce::Rectangle<float> r ((float) x, (float) centreY - 11.0f, (float) w, 22.0f);
+        const auto f = font (h * 0.55f, true);
+        const int w = juce::jmax ((int) h, juce::GlyphArrangement::getStringWidthInt (f, label) + (int) (h * 0.55f));
+        juce::Rectangle<float> r ((float) x, (float) centreY - h / 2, (float) w, h);
         g.setColour (juce::Colour (0xff0a0e13).withAlpha (alpha));
         g.fillRoundedRectangle (r, 5.0f);
         g.setColour (sub.withAlpha (0.8f * alpha));
@@ -33,7 +33,7 @@ namespace
         return w;
     }
 
-    void drawPill (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& label, bool on, bool hover)
+    void drawPill (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& label, bool on, bool hover, float fontSize = 12.0f)
     {
         auto rf = r.toFloat();
         g.setColour (on ? accent.withAlpha (0.22f) : card.withAlpha (hover ? 1.0f : 0.7f));
@@ -41,8 +41,9 @@ namespace
         g.setColour (on ? accent : line.brighter (hover ? 0.4f : 0.0f));
         g.drawRoundedRectangle (rf.reduced (0.5f), rf.getHeight() / 2, 1.0f);
         g.setColour (on ? text : sub);
-        g.setFont (font (12.0f, on));
-        g.drawText ((on ? juce::String::fromUTF8 ("\xe2\x9c\x93 ") : juce::String()) + label, r, juce::Justification::centred);
+        g.setFont (font (fontSize, on));
+        g.drawFittedText ((on ? juce::String::fromUTF8 ("\xe2\x9c\x93 ") : juce::String()) + label, r.reduced (4, 0),
+                          juce::Justification::centred, 1, 0.7f);
     }
 
     void triangle (juce::Path& p, juce::Rectangle<float> r, bool right)
@@ -234,6 +235,14 @@ void MainComponent::timerCallback()
 // ============================================================================
 void MainComponent::resized()
 {
+    // 小さいウィンドウでは、文字やすき間を詰めた配置にする
+    compact = getWidth() < 640 || getHeight() < 440;
+    if (compact)
+    {
+        layoutCompact();
+        return;
+    }
+
     auto b = getLocalBounds().reduced (18, 12);
 
     headerArea = b.removeFromTop (60);
@@ -286,6 +295,57 @@ void MainComponent::resized()
     learnCancel = getLocalBounds().withSizeKeepingCentre (140, 34).translated (0, 70);
 }
 
+void MainComponent::layoutCompact()
+{
+    auto b = getLocalBounds().reduced (8, 6);
+
+    headerArea = b.removeFromTop (28);
+    {
+        auto h = headerArea;
+        auto seg = h.removeFromLeft (100).withSizeKeepingCentre (100, 22);
+        for (int m = 0; m < Deck::kModes; ++m)
+            modeTabs[m] = seg.removeFromLeft (50);
+        statusPill = h.removeFromRight (52).withSizeKeepingCentre (52, 22);
+        auto tabs = h.reduced (6, 0);
+        prevPage = tabs.removeFromLeft (22).withSizeKeepingCentre (18, 18);
+        nextPage = tabs.removeFromRight (22).withSizeKeepingCentre (18, 18);
+        const int w = tabs.getWidth() / Deck::kPages;
+        for (int i = 0; i < Deck::kPages; ++i)
+            pageTabs[i] = tabs.removeFromLeft (w);
+    }
+
+    b.removeFromTop (5);
+    bannerArea = {};
+    bannerButton = {};
+    if (! permitted || ! tapRunning)
+    {
+        bannerArea = b.removeFromTop (28);
+        bannerButton = bannerArea.reduced (4, 0).removeFromRight (78).withSizeKeepingCentre (78, 20);
+        b.removeFromTop (5);
+    }
+
+    footerArea = b.removeFromBottom (24);
+    {
+        auto f = footerArea;
+        settingsPill = f.removeFromRight (40).withSizeKeepingCentre (40, 18);
+        f.removeFromRight (4);
+        onTopPill = f.removeFromRight (50).withSizeKeepingCentre (50, 18);
+        f.removeFromRight (4);
+        logicOnlyPill = f.removeFromRight (78).withSizeKeepingCentre (78, 18);
+    }
+    b.removeFromBottom (5);
+
+    gridArea = b;
+    const int gap = 5;
+    const int tw = (gridArea.getWidth() - 2 * gap) / 3;
+    const int th = (gridArea.getHeight() - 2 * gap) / 3;
+    for (int row = 0; row < 3; ++row)
+        for (int col = 0; col < 3; ++col)
+            tiles[kGridOrder[row * 3 + col]] = { gridArea.getX() + col * (tw + gap), gridArea.getY() + row * (th + gap), tw, th };
+
+    learnCancel = getLocalBounds().withSizeKeepingCentre (90, 24).translated (0, juce::jmin (60, getHeight() / 2 - 20));
+}
+
 // ============================================================================
 void MainComponent::paint (juce::Graphics& g)
 {
@@ -301,26 +361,30 @@ void MainComponent::paint (juce::Graphics& g)
         g.setColour (bg.withAlpha (0.6f));
         g.fillRoundedRectangle (gridArea.toFloat().expanded (6), 16.0f);
         g.setColour (text);
-        g.setFont (font (26.0f, true));
-        g.drawText ("OFF", gridArea.withTrimmedBottom (gridArea.getHeight() / 2 - 10), juce::Justification::centredBottom);
+        g.setFont (font (compact ? 18.0f : 26.0f, true));
+        g.drawText ("OFF", gridArea.withTrimmedBottom (gridArea.getHeight() / 2 - (compact ? 4 : 10)), juce::Justification::centredBottom);
         g.setColour (sub);
-        g.setFont (font (15.0f));
+        g.setFont (font (compact ? 11.0f : 15.0f));
         auto msg = juce::String::fromUTF8 ("テンキーは普通の数字キーとして使えます");
-        if (deck.toggleKey != Deck::ToggleNone)
+        if (compact)
+            msg = juce::String::fromUTF8 ("テンキーは普通の数字キー");
+        else if (deck.toggleKey != Deck::ToggleNone)
             msg += juce::String::fromUTF8 ("（もう一度 ")
                  + (deck.toggleKey == Deck::ToggleClear ? "Clear" : "=")
                  + juce::String::fromUTF8 (" で ON）");
-        g.drawText (msg, gridArea.withTrimmedTop (gridArea.getHeight() / 2 + 14).withHeight (24), juce::Justification::centred);
+        g.drawText (msg, gridArea.withTrimmedTop (gridArea.getHeight() / 2 + (compact ? 6 : 14)).withHeight (24), juce::Justification::centred);
     }
 
     if (ignoredHint > 0.0f)
     {
-        auto r = gridArea.withSizeKeepingCentre (juce::jmin (gridArea.getWidth(), 460), 40).withBottomY (gridArea.getBottom() - 8);
+        auto r = gridArea.withSizeKeepingCentre (juce::jmin (gridArea.getWidth(), 460), compact ? 26 : 40).withBottomY (gridArea.getBottom() - 8);
         g.setColour (juce::Colour (0xff0a0e13).withAlpha (0.92f * juce::jmin (1.0f, ignoredHint * 3.0f)));
         g.fillRoundedRectangle (r.toFloat(), 20.0f);
         g.setColour (warn.withAlpha (juce::jmin (1.0f, ignoredHint * 3.0f)));
-        g.setFont (font (13.0f, true));
-        g.drawText (juce::String::fromUTF8 ("Logic Pro が前面のときだけ動きます（下の設定で変えられます）"), r, juce::Justification::centred);
+        g.setFont (font (compact ? 11.0f : 13.0f, true));
+        g.drawFittedText (compact ? juce::String::fromUTF8 ("Logic が前面のときだけ動きます")
+                                  : juce::String::fromUTF8 ("Logic Pro が前面のときだけ動きます（下の設定で変えられます）"),
+                          r.reduced (8, 0), juce::Justification::centred, 1, 0.7f);
     }
 
     paintFooter (g);
@@ -329,11 +393,12 @@ void MainComponent::paint (juce::Graphics& g)
 
 void MainComponent::paintHeader (juce::Graphics& g)
 {
-    auto h = headerArea;
-    auto title = h.removeFromLeft (200);
-    g.setColour (text);
-    g.setFont (font (20.0f, true));
-    g.drawText ("NUM DECK", title.removeFromTop (28), juce::Justification::centredLeft);
+    if (! compact)
+    {
+        g.setColour (text);
+        g.setFont (font (20.0f, true));
+        g.drawText ("NUM DECK", headerArea.withWidth (200).withHeight (28), juce::Justification::centredLeft);
+    }
 
     // モード（クリックでだけ切り替わる）
     const auto mouse = getMouseXYRelative();
@@ -355,25 +420,28 @@ void MainComponent::paintHeader (juce::Graphics& g)
             g.fillRoundedRectangle (r, r.getHeight() / 2);
         }
         g.setColour (sel ? juce::Colour (0xff06121c) : sub);
-        g.setFont (font (12.0f, true));
-        g.drawText (Deck::modeName (m), modeTabs[m], juce::Justification::centred);
+        g.setFont (font (compact ? 10.0f : 12.0f, true));
+        g.drawFittedText (compact && m == Deck::ModeLogic ? juce::String ("Logic") : Deck::modeName (m),
+                          modeTabs[m], juce::Justification::centred, 1, 0.7f);
     }
 
     // ページ（左右の − / + はテンキーの − / +）
     const bool hoverPrev = prevPage.contains (getMouseXYRelative()), hoverNext = nextPage.contains (getMouseXYRelative());
-    drawKeycap (g, prevPage.getX(), prevPage.getCentreY(), juce::String::fromUTF8 ("\xe2\x88\x92"), hoverPrev ? 1.0f : 0.7f);
-    drawKeycap (g, nextPage.getX(), nextPage.getCentreY(), "+", hoverNext ? 1.0f : 0.7f);
+    const float kh = compact ? 18.0f : 22.0f;
+    drawKeycap (g, prevPage.getX(), prevPage.getCentreY(), juce::String::fromUTF8 ("\xe2\x88\x92"), hoverPrev ? 1.0f : 0.7f, kh);
+    drawKeycap (g, nextPage.getX(), nextPage.getCentreY(), "+", hoverNext ? 1.0f : 0.7f, kh);
     for (int i = 0; i < Deck::kPages; ++i)
     {
         const bool sel = i == deck.page();
         auto r = pageTabs[i];
         g.setColour (sel ? text : sub);
-        g.setFont (font (14.0f, sel));
+        g.setFont (font (compact ? 11.0f : 14.0f, sel));
         g.drawFittedText (deck.pageName (i), r.reduced (2, 0), juce::Justification::centred, 1, 0.6f);
         if (sel)
         {
             g.setColour (modeAccent());
-            g.fillRoundedRectangle (r.withSizeKeepingCentre (r.getWidth() - 24, 3).withBottomY (r.getBottom()).toFloat(), 1.5f);
+            g.fillRoundedRectangle (r.withSizeKeepingCentre (r.getWidth() - (compact ? 8 : 24), compact ? 2 : 3)
+                                     .withBottomY (r.getBottom()).toFloat(), 1.5f);
         }
     }
 
@@ -386,6 +454,13 @@ void MainComponent::paintHeader (juce::Graphics& g)
     {
         g.setColour (text.withAlpha (0.6f));
         g.drawRoundedRectangle (pr.reduced (0.5f), pr.getHeight() / 2, 1.5f);
+    }
+    if (compact)
+    {
+        g.setColour (deck.enabled ? juce::Colour (0xff06160c) : text);
+        g.setFont (font (12.0f, true));
+        g.drawText (deck.enabled ? "ON" : "OFF", statusPill, juce::Justification::centred);
+        return;
     }
     auto inner = statusPill.reduced (16, 0);
     auto dot = inner.removeFromLeft (14).withSizeKeepingCentre (10, 10).toFloat();
@@ -410,6 +485,22 @@ void MainComponent::paintBanner (juce::Graphics& g)
     g.setColour (warn.withAlpha (0.7f));
     g.drawRoundedRectangle (r.reduced (0.5f), 12.0f, 1.0f);
 
+    auto br = bannerButton.toFloat();
+    g.setColour (warn);
+    g.fillRoundedRectangle (br, br.getHeight() / 2);
+    g.setColour (juce::Colour (0xff1a1006));
+    g.setFont (font (compact ? 11.0f : 13.0f, true));
+    g.drawText (juce::String::fromUTF8 ("許可する\xe2\x80\xa6"), bannerButton, juce::Justification::centred);
+
+    if (compact)
+    {
+        g.setColour (text);
+        g.setFont (font (11.0f, true));
+        g.drawFittedText (juce::String::fromUTF8 ("アクセシビリティの許可が必要です"),
+                          bannerArea.reduced (10, 0).withRight (bannerButton.getX() - 6), juce::Justification::centredLeft, 1, 0.7f);
+        return;
+    }
+
     auto t = bannerArea.reduced (16, 6);
     t.removeFromRight (170);
     g.setColour (text);
@@ -421,13 +512,6 @@ void MainComponent::paintBanner (juce::Graphics& g)
     g.setFont (font (12.0f));
     g.drawText (juce::String::fromUTF8 ("システム設定 \xe2\x86\x92 プライバシーとセキュリティ \xe2\x86\x92 アクセシビリティ で「Num Deck」を ON"),
                 t, juce::Justification::centredLeft);
-
-    auto br = bannerButton.toFloat();
-    g.setColour (warn);
-    g.fillRoundedRectangle (br, br.getHeight() / 2);
-    g.setColour (juce::Colour (0xff1a1006));
-    g.setFont (font (13.0f, true));
-    g.drawText (juce::String::fromUTF8 ("許可する\xe2\x80\xa6"), bannerButton, juce::Justification::centred);
 }
 
 void MainComponent::paintTile (juce::Graphics& g, int index)
@@ -437,14 +521,14 @@ void MainComponent::paintTile (juce::Graphics& g, int index)
     const juce::Colour ac = res.valid ? catColour (res.cat) : sub;
     const float f = flash[(size_t) index];
     const bool hover = hoverTile == index && learnIndex < 0;
-    const float corner = 14.0f;
+    const float corner = compact ? 8.0f : 14.0f;
 
     // 押した瞬間の光
     if (f > 0.0f)
         for (int k = 4; k >= 1; --k)
         {
             g.setColour (ac.withAlpha (0.10f * f));
-            g.fillRoundedRectangle (r.expanded ((float) k * 3.0f), corner + (float) k * 3.0f);
+            g.fillRoundedRectangle (r.expanded ((float) k * (compact ? 1.5f : 3.0f)), corner + (float) k * 3.0f);
         }
 
     g.setGradientFill (juce::ColourGradient (card.brighter (hover ? 0.12f : 0.0f), 0, r.getY(),
@@ -457,6 +541,12 @@ void MainComponent::paintTile (juce::Graphics& g, int index)
     }
     g.setColour (f > 0.05f ? ac : (hover ? text.withAlpha (0.55f) : line));
     g.drawRoundedRectangle (r.reduced (0.75f), corner, f > 0.05f ? 2.0f : 1.5f);
+
+    if (compact)
+    {
+        paintTileCompact (g, index, r, res, ac);
+        return;
+    }
 
     auto in = r.reduced (12.0f, 10.0f);
     const float scale = juce::jlimit (0.75f, 1.5f, r.getHeight() / 140.0f);
@@ -524,6 +614,46 @@ void MainComponent::paintTile (juce::Graphics& g, int index)
     }
 }
 
+// 小さい画面のタイル: 上に番号と名前、真ん中にアイコン（ショートカット表示は省く）
+void MainComponent::paintTileCompact (juce::Graphics& g, int index, juce::Rectangle<float> r, const Resolved& res, juce::Colour ac)
+{
+    auto in = r.reduced (5.0f, 4.0f);
+    auto top = in.removeFromTop (16.0f);
+    auto badge = top.removeFromLeft (16.0f).reduced (0.5f);
+    g.setColour (juce::Colour (0xff0a0e13));
+    g.fillEllipse (badge);
+    g.setColour (res.valid ? ac.withAlpha (0.9f) : line.brighter (0.3f));
+    g.drawEllipse (badge, 1.0f);
+    g.setColour (text);
+    g.setFont (font (10.0f, true));
+    g.drawText (juce::String (index + 1), badge, juce::Justification::centred);
+    top.removeFromLeft (4.0f);
+
+    g.setColour (res.valid ? text : sub.withAlpha (0.8f));
+    g.setFont (font (11.0f, true));
+    g.drawFittedText (res.valid ? res.name : juce::String::fromUTF8 ("なし"), top.toNearestInt(), juce::Justification::centredLeft, 1, 0.6f);
+
+    if (! res.valid) return;
+
+    in.removeFromBottom (3.0f);
+    const float isz = juce::jmin (in.getHeight(), in.getWidth() * 0.6f);
+    auto iconArea = in.withSizeKeepingCentre (isz, isz);
+    const auto img = res.kind == Resolved::App ? appIcon (res.path) : juce::Image();
+    if (img.isValid())
+        g.drawImage (img, iconArea, juce::RectanglePlacement::centred);
+    else if (res.icon != Icon::None)
+        drawIcon (g, res.icon, iconArea, ac);
+    else
+    {
+        g.setColour (ac);
+        g.setFont (font (juce::jmin (isz * 0.7f, 22.0f), true));
+        g.drawFittedText (res.glyph, in.toNearestInt(), juce::Justification::centred, 1, 0.5f);
+    }
+
+    g.setColour (ac.withAlpha (0.85f));
+    g.fillRoundedRectangle (r.getX() + 8.0f, r.getBottom() - 3.0f, r.getWidth() - 16.0f, 2.0f, 1.0f);
+}
+
 void MainComponent::paintFooter (juce::Graphics& g)
 {
     g.setColour (line);
@@ -539,6 +669,20 @@ void MainComponent::paintFooter (juce::Graphics& g)
     g.setColour (dot);
     g.fillEllipse ((float) x, (float) cy - 4.0f, 8.0f, 8.0f);
     x += 14;
+    const auto mouse = getMouseXYRelative();
+    if (compact)
+    {
+        if (logicMode)
+            drawPill (g, logicOnlyPill, juce::String::fromUTF8 ("Logicだけ"), deck.logicOnly, logicOnlyPill.contains (mouse), 10.0f);
+        drawPill (g, onTopPill, juce::String::fromUTF8 ("手前"), deck.alwaysOnTop, onTopPill.contains (mouse), 10.0f);
+        drawPill (g, settingsPill, juce::String::fromUTF8 ("設定"), false, settingsPill.contains (mouse), 10.0f);
+        g.setColour (sub);
+        g.setFont (font (10.0f));
+        g.drawFittedText (deck.enabled ? deck.pageName (deck.page()) : juce::String ("OFF"),
+                          x, cy - 8, (logicMode ? logicOnlyPill.getX() : onTopPill.getX()) - x - 4, 16,
+                          juce::Justification::centredLeft, 1, 0.7f);
+        return;
+    }
     g.setColour (sub);
     g.setFont (font (12.0f));
     const auto ls = ! logicMode ? juce::String::fromUTF8 ("どのアプリでも")
@@ -562,7 +706,6 @@ void MainComponent::paintFooter (juce::Graphics& g)
     if (x + 60 < (logicMode ? logicOnlyPill.getX() : onTopPill.getX()))
         g.drawText (juce::String::fromUTF8 ("ページ"), x, cy - 10, 60, 20, juce::Justification::centredLeft);
 
-    const auto mouse = getMouseXYRelative();
     if (logicMode)
         drawPill (g, logicOnlyPill, juce::String::fromUTF8 ("Logic が前面のときだけ"), deck.logicOnly, logicOnlyPill.contains (mouse));
     drawPill (g, onTopPill, juce::String::fromUTF8 ("いつも手前"), deck.alwaysOnTop, onTopPill.contains (mouse));
@@ -574,6 +717,27 @@ void MainComponent::paintLearning (juce::Graphics& g)
     g.setColour (juce::Colours::black.withAlpha (0.78f));
     g.fillAll();
 
+    if (compact)
+    {
+        auto c = getLocalBounds().reduced (10).toFloat();
+        g.setColour (bg2);
+        g.fillRoundedRectangle (c, 10.0f);
+        g.setColour (catColour (Cat::Custom));
+        g.drawRoundedRectangle (c.reduced (0.75f), 10.0f, 1.5f);
+        auto t = c.reduced (12.0f).toNearestInt().withBottom (learnCancel.getY() - 4);
+        g.setColour (sub);
+        g.setFont (font (11.0f));
+        g.drawText (deck.pageName (learnPage) + juce::String::fromUTF8 (" ・ テンキー ") + juce::String (learnIndex + 1),
+                    t.removeFromTop (18), juce::Justification::centred);
+        g.setColour (text);
+        g.setFont (font (15.0f, true));
+        g.drawFittedText (juce::String::fromUTF8 ("入れたいショートカットを押す"), t.removeFromTop (30), juce::Justification::centred, 1, 0.7f);
+        g.setColour (sub);
+        g.setFont (font (11.0f));
+        g.drawText (juce::String::fromUTF8 ("Esc でやめる"), t.removeFromTop (18), juce::Justification::centred);
+    }
+    else
+    {
     auto c = getLocalBounds().withSizeKeepingCentre (juce::jmin (getWidth() - 40, 520), 220).toFloat();
     g.setColour (bg2);
     g.fillRoundedRectangle (c, 18.0f);
@@ -593,6 +757,7 @@ void MainComponent::paintLearning (juce::Graphics& g)
     g.drawText (juce::String::fromUTF8 ("例: \xe2\x8c\x98 + T 、 \xe2\x87\xa7 + R など（Logic のキーコマンドと同じものを押す）"),
                 t.removeFromTop (24), juce::Justification::centred);
     g.drawText (juce::String::fromUTF8 ("Esc でやめる"), t.removeFromTop (22), juce::Justification::centred);
+    }
 
     auto br = learnCancel.toFloat();
     g.setColour (card);
@@ -600,7 +765,7 @@ void MainComponent::paintLearning (juce::Graphics& g)
     g.setColour (line.brighter (0.3f));
     g.drawRoundedRectangle (br.reduced (0.5f), br.getHeight() / 2, 1.0f);
     g.setColour (text);
-    g.setFont (font (13.0f, true));
+    g.setFont (font (compact ? 11.0f : 13.0f, true));
     g.drawText (juce::String::fromUTF8 ("やめる"), learnCancel, juce::Justification::centred);
 }
 
@@ -780,6 +945,9 @@ void MainComponent::showSettingsMenu()
     m.addItem (10, juce::String::fromUTF8 ("このページを最初の割り当てに戻す"));
     m.addItem (11, Deck::modeName (deck.mode) + juce::String::fromUTF8 (" の全部のページを最初に戻す"));
     m.addSeparator();
+    m.addItem (30, juce::String::fromUTF8 ("大きい画面にする"), true, ! compact);
+    m.addItem (31, juce::String::fromUTF8 ("小さい画面にする（4 分の 1）"), true, compact);
+    m.addSeparator();
     m.addItem (20, juce::String::fromUTF8 ("アクセシビリティの設定を開く"));
 
     juce::Component::SafePointer<MainComponent> safe (this);
@@ -803,6 +971,9 @@ void MainComponent::showSettingsMenu()
                          if (r == 10) d.resetCurrentPage();
                          if (r == 11) d.resetCurrentMode();
                          if (r == 20) KeyTap::openPermissionSettings();
+                         if (r == 30 || r == 31)
+                             if (auto* w = safe->findParentComponentOfClass<juce::ResizableWindow>())
+                                 w->setContentComponentSize (r == 30 ? 860 : 430, r == 30 ? 600 : 300);
                          safe->repaint();
                      });
 }

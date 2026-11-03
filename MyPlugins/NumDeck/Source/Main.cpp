@@ -27,11 +27,18 @@ public:
             : DocumentWindow (name, juce::Colour (0xff0d1218), DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            setContentOwned (new MainComponent(), true);
+            auto* content = new MainComponent();
+            setContentOwned (content, true);
             setResizable (true, true);
-            setResizeLimits (680, 480, 1800, 1300);
-            centreWithSize (getWidth(), getHeight());
+            setResizeLimits (360, 250, 1800, 1300);
+            if (! restoreWindowStateFromString (content->savedWindowState()))
+                centreWithSize (getWidth(), getHeight());
             setVisible (true);
+        }
+        ~MainWindow() override
+        {
+            if (auto* c = dynamic_cast<MainComponent*> (getContentComponent()))
+                c->saveWindowState (getWindowStateAsString());
         }
         void closeButtonPressed() override { JUCEApplication::getInstance()->systemRequestedQuit(); }
     };

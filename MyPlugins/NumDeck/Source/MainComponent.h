@@ -31,8 +31,17 @@ private:
     juce::Image appIcon (const juce::String& path);
     juce::Colour modeAccent() const;
 
+public:
+    // ウィンドウの位置と大きさを覚えておく
+    juce::String savedWindowState() const { return deck.windowState; }
+    void saveWindowState (const juce::String& st) { deck.windowState = st; deck.save(); }
+
+private:
+
     void paintHeader (juce::Graphics&);
     void paintTile (juce::Graphics&, int index);
+    void paintTileCompact (juce::Graphics&, int index, juce::Rectangle<float> r, const numdeck::Resolved&, juce::Colour ac);
+    void layoutCompact();
     void paintFooter (juce::Graphics&);
     void paintBanner (juce::Graphics&);
     void paintLearning (juce::Graphics&);
@@ -48,6 +57,7 @@ private:
     float ignoredHint = 0.0f;
     int tick = 0;
     bool onTopApplied = false;
+    bool compact = false;   // 小さいウィンドウ用の配置
 
     // クリックできる場所
     juce::Rectangle<int> headerArea, statusPill, modeTabs[numdeck::Deck::kModes], pageTabs[numdeck::Deck::kPages], prevPage, nextPage,

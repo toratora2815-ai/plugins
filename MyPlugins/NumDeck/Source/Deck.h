@@ -88,6 +88,7 @@ namespace numdeck
         bool alwaysOnTop = false;
         int mode = ModeLogic;      // 画面のクリックでだけ切り替える（テンキーでは変わらない）
         int toggleKey = ToggleClear;
+        juce::String windowState;  // ウィンドウの位置と大きさ
 
         std::function<void()> onStateChanged;     // ON/OFF やページが変わった
         std::function<void (int index)> onFired;  // 0..8 のタイルが動いた
@@ -266,6 +267,7 @@ namespace numdeck
             props->setValue ("alwaysOnTop", alwaysOnTop);
             props->setValue ("mode", mode);
             props->setValue ("toggleKey", toggleKey);
+            props->setValue ("window", windowState);
             for (int m = 0; m < kModes; ++m)
             {
                 props->setValue (prefix (m) + "page", pages[(size_t) m]);
@@ -298,6 +300,7 @@ namespace numdeck
             alwaysOnTop = props->getBoolValue ("alwaysOnTop", false);
             mode        = juce::jlimit (0, kModes - 1, props->getIntValue ("mode", ModeLogic));
             toggleKey   = juce::jlimit (0, (int) ToggleNone, props->getIntValue ("toggleKey", ToggleClear));
+            windowState = props->getValue ("window");
             for (int m = 0; m < kModes; ++m)
             {
                 pages[(size_t) m] = juce::jlimit (0, kPages - 1, props->getIntValue (prefix (m) + "page", 0));
