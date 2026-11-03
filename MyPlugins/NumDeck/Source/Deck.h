@@ -204,7 +204,8 @@ namespace numdeck
             }
             if (! enabled) return false;
 
-            const bool isPageKey = pad == PadPlus || pad == PadMinus;
+            // ページは / で前、* で次（v1.8.0 から。− と + は普通のキーのまま通す）
+            const bool isPageKey = pad == PadMultiply || pad == PadDivide;
             const bool isSlot = (pad >= Pad0 && pad <= Pad9) || pad == PadDot;
             if (! isPageKey && ! isSlot) return false;
 
@@ -217,7 +218,7 @@ namespace numdeck
 
             if (isPageKey)
             {
-                if (down && ! repeat) { setPage (page() + (pad == PadPlus ? 1 : -1)); changed(); }
+                if (down && ! repeat) { setPage (page() + (pad == PadMultiply ? 1 : -1)); changed(); }
                 return true;
             }
 

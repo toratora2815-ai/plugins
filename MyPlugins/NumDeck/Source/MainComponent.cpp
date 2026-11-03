@@ -445,11 +445,11 @@ void MainComponent::paintHeader (juce::Graphics& g)
                           modeTabs[m], juce::Justification::centred, 1, 0.7f);
     }
 
-    // ページ（左右の − / + はテンキーの − / +）
+    // ページ（左右の / と * はテンキーの / と *）
     const bool hoverPrev = prevPage.contains (getMouseXYRelative()), hoverNext = nextPage.contains (getMouseXYRelative());
     const float kh = compact ? 18.0f : 22.0f;
-    drawKeycap (g, prevPage.getX(), prevPage.getCentreY(), juce::String::fromUTF8 ("\xe2\x88\x92"), hoverPrev ? 1.0f : 0.7f, kh);
-    drawKeycap (g, nextPage.getX(), nextPage.getCentreY(), "+", hoverNext ? 1.0f : 0.7f, kh);
+    drawKeycap (g, prevPage.getX(), prevPage.getCentreY(), "/", hoverPrev ? 1.0f : 0.7f, kh);
+    drawKeycap (g, nextPage.getX(), nextPage.getCentreY(), "*", hoverNext ? 1.0f : 0.7f, kh);
     for (int i = 0; i < Deck::kPages; ++i)
     {
         const bool sel = i == deck.page();
@@ -787,8 +787,8 @@ void MainComponent::paintFooter (juce::Graphics& g)
         g.drawText ("ON/OFF", x, cy - 10, 60, 20, juce::Justification::centredLeft);
         x += 62;
     }
-    x += drawKeycap (g, x, cy, juce::String::fromUTF8 ("\xe2\x88\x92")) + 4;
-    x += drawKeycap (g, x, cy, "+") + 6;
+    x += drawKeycap (g, x, cy, "/") + 4;
+    x += drawKeycap (g, x, cy, "*") + 6;
     g.setColour (sub);
     if (x + 60 < hintLimit)
         g.drawText (juce::String::fromUTF8 ("ページ"), x, cy - 10, 60, 20, juce::Justification::centredLeft);
