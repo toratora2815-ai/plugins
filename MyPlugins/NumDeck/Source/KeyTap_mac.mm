@@ -349,14 +349,6 @@ namespace numdeck
             c.createsNewApplicationInstance = YES;
             c.arguments = @[ [@"--profile-directory=" stringByAppendingString: ns (profileDir)], u.absoluteString ];
             [[NSWorkspace sharedWorkspace] openApplicationAtURL: chrome configuration: c completionHandler: nil];
-            // ほかのアプリが全画面で前にいると、ページを開いても Chrome が前に出てこないことがある。
-            // 少し待ってから Chrome そのものを開き直して、Chrome のウィンドウがある画面へ移る
-            NSURL* chromeURL = chrome;
-            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                [[NSWorkspace sharedWorkspace] openApplicationAtURL: chromeURL
-                                                      configuration: [NSWorkspaceOpenConfiguration configuration]
-                                                  completionHandler: nil];
-            });
         }
         else if (chrome != nil)
             [[NSWorkspace sharedWorkspace] openURLs: @[ u ] withApplicationAtURL: chrome
