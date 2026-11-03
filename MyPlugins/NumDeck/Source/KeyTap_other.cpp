@@ -14,6 +14,8 @@ namespace numdeck
     void KeyTap::openPermissionSettings()  {}
     bool KeyTap::isLogicFrontmost()        { return false; }
     bool KeyTap::isLogicRunning()          { return false; }
+    void KeyTap::rememberFrontApp()        {}
+    void KeyTap::activateLastApp()         {}
     void KeyTap::sendKey (int, int)        {}
     void KeyTap::openApp (const std::string&) {}
     void KeyTap::openURL (const std::string&) {}

@@ -197,6 +197,7 @@ MainComponent::~MainComponent()
 
 void MainComponent::refreshStatus()
 {
+    KeyTap::rememberFrontApp();
     const bool p = KeyTap::hasPermission();
     if (p && ! tap.isRunning()) tap.start();
     const bool r = tap.isRunning();
@@ -819,17 +820,24 @@ void MainComponent::mouseDown (const juce::MouseEvent& e)
         KeyTap::openPermissionSettings();
         return;
     }
+    // ボタンを押したら、さっきまで使っていたアプリ（Logic など）に前面を戻す。
+    // Num Deck が前面のままだと、テンキーが Logic に届かないため
+    auto done = [this]
+    {
+        repaint();
+        juce::Timer::callAfterDelay (120, [] { KeyTap::activateLastApp(); });
+    };
     for (int m = 0; m < Deck::kModes; ++m)
-        if (modeTabs[m].contains (p)) { deck.setMode (m); repaint(); return; }
-    if (statusPill.contains (p))   { deck.enabled = ! deck.enabled; deck.save(); repaint(); return; }
-    if (prevPage.contains (p))     { deck.setPage (deck.page() - 1); repaint(); return; }
-    if (nextPage.contains (p))     { deck.setPage (deck.page() + 1); repaint(); return; }
+        if (modeTabs[m].contains (p)) { deck.setMode (m); done(); return; }
+    if (statusPill.contains (p))   { deck.enabled = ! deck.enabled; deck.save(); done(); return; }
+    if (prevPage.contains (p))     { deck.setPage (deck.page() - 1); done(); return; }
+    if (nextPage.contains (p))     { deck.setPage (deck.page() + 1); done(); return; }
     for (int i = 0; i < Deck::kPages; ++i)
-        if (pageTabs[i].contains (p)) { deck.setPage (i); repaint(); return; }
-    if (deck.mode == Deck::ModeLogic && logicOnlyPill.contains (p)) { deck.logicOnly = ! deck.logicOnly; deck.save(); repaint(); return; }
-    if (onTopPill.contains (p))     { deck.alwaysOnTop = ! deck.alwaysOnTop; deck.save(); applyOnTop(); repaint(); return; }
+        if (pageTabs[i].contains (p)) { deck.setPage (i); done(); return; }
+    if (deck.mode == Deck::ModeLogic && logicOnlyPill.contains (p)) { deck.logicOnly = ! deck.logicOnly; deck.save(); done(); return; }
+    if (onTopPill.contains (p))     { deck.alwaysOnTop = ! deck.alwaysOnTop; deck.save(); applyOnTop(); done(); return; }
     if (settingsPill.contains (p))  { showSettingsMenu(); return; }
-    if (sizePill.contains (p))      { setWindowSize (! compact); return; }
+    if (sizePill.contains (p))      { setWindowSize (! compact); done(); return; }
     for (int i = 0; i < 9; ++i)
         if (tiles[i].contains (p)) { showTileMenu (i); return; }
 }
@@ -948,6 +956,7 @@ void MainComponent::showTileMenu (int index)
                          self.deck.setSlot (page, index, s);
                          self.flash[(size_t) index] = 1.0f;
                          self.repaint();
+                         juce::Timer::callAfterDelay (120, [] { KeyTap::activateLastApp(); });
                      });
 }
 

@@ -38,6 +38,8 @@ namespace numdeck
         static void openPermissionSettings();
         static bool isLogicFrontmost();
         static bool isLogicRunning();
+        static void rememberFrontApp();    // 自分以外の前面アプリを覚えておく
+        static void activateLastApp();     // 覚えておいたアプリを前面に戻す（Num Deck をクリックした後）
         static void sendKey (int keyCode, int mods);
 
         // 業務モード用: アプリやページを開く

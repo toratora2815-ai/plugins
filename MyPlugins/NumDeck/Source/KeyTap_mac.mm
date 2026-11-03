@@ -147,6 +147,22 @@ namespace numdeck
         return false;
     }
 
+    static pid_t lastFrontPid = 0;
+
+    void KeyTap::rememberFrontApp()
+    {
+        NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+        if (front != nil && front.processIdentifier != [NSRunningApplication currentApplication].processIdentifier)
+            lastFrontPid = front.processIdentifier;
+    }
+
+    void KeyTap::activateLastApp()
+    {
+        if (lastFrontPid == 0) return;
+        if (NSRunningApplication* app = [NSRunningApplication runningApplicationWithProcessIdentifier: lastFrontPid])
+            [app activateWithOptions: 0];
+    }
+
     void KeyTap::sendKey (int keyCode, int mods)
     {
         // 実際に押されている修飾キーが混ざらないよう、独立したイベントソースから送る
