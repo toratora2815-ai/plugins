@@ -6,7 +6,7 @@
 namespace numdeck
 {
     enum class Icon { None, Play, Record, Rewind, Forward, ToStart, Cycle, Metronome, Undo, Redo, Split, Capture };
-    enum class Cat { Transport, Edit, Track, Window, File, General, Browser, Custom, App, Link };
+    enum class Cat { Transport, Edit, Track, Window, File, RefMon, General, Browser, Custom, App, Link };
 
     struct ActionDef
     {
@@ -18,6 +18,7 @@ namespace numdeck
         bool repeat;        // 押しっぱなしで連打するか
         Icon icon;
         const char* glyph;  // アイコンがないときに大きく出す文字
+        const char* remote = nullptr; // Reference Monitor への命令（keyCode の代わり）
     };
 
     // キーコード（US 配列の位置。日本語配列でも英字・記号の位置は同じ）
@@ -73,6 +74,25 @@ namespace numdeck
             // ファイル
             { "save",      "保存",              Cat::File, vk::S, kCmd, false, Icon::None, "SAVE" },
             { "bounce",    "バウンス",          Cat::File, vk::B, kCmd, false, Icon::None, "BNC" },
+            // Reference Monitor（単体アプリ）への操作
+            { "rmAB",      "A/B 切替",          Cat::RefMon, -1, 0, false, Icon::None, "A/B",  "ab" },
+            { "rmMix",     "自分の曲（A）",      Cat::RefMon, -1, 0, false, Icon::None, "A",    "mix" },
+            { "rmRef",     "参照曲（B）",        Cat::RefMon, -1, 0, false, Icon::None, "B",    "ref" },
+            { "rmPlay",    "再生 / 一時停止",    Cat::RefMon, -1, 0, false, Icon::Play, "",     "play" },
+            { "rmLoop",    "ループ",            Cat::RefMon, -1, 0, false, Icon::None, "LOOP", "loop" },
+            { "rmCue1",    "キュー 1",          Cat::RefMon, -1, 0, false, Icon::None, "Q1",   "cue1" },
+            { "rmCue2",    "キュー 2",          Cat::RefMon, -1, 0, false, Icon::None, "Q2",   "cue2" },
+            { "rmCue3",    "キュー 3",          Cat::RefMon, -1, 0, false, Icon::None, "Q3",   "cue3" },
+            { "rmCue4",    "キュー 4",          Cat::RefMon, -1, 0, false, Icon::None, "Q4",   "cue4" },
+            { "rmCue5",    "キュー 5",          Cat::RefMon, -1, 0, false, Icon::None, "Q5",   "cue5" },
+            { "rmAddCue",  "キューを追加",       Cat::RefMon, -1, 0, false, Icon::None, "+Q",   "addCue" },
+            { "rmSetMix",  "SET MIX",           Cat::RefMon, -1, 0, false, Icon::None, "SET",  "setMix" },
+            { "rmMono",    "モノラル",          Cat::RefMon, -1, 0, false, Icon::None, "MONO", "mono" },
+            { "rmDim",     "DIM",               Cat::RefMon, -1, 0, false, Icon::None, "DIM",  "dim" },
+            { "rmMute",    "ミュート",          Cat::RefMon, -1, 0, false, Icon::None, "MUTE", "mute" },
+            { "rmListen",  "聞こえ方を切替",     Cat::RefMon, -1, 0, false, Icon::None, "EAR",  "listen" },
+            { "rmListenOff","聞こえ方 OFF",     Cat::RefMon, -1, 0, false, Icon::None, "FLAT", "listenOff" },
+            { "rmReset",   "メーターをリセット", Cat::RefMon, -1, 0, false, Icon::None, "RST",  "reset" },
             // どのアプリでも
             { "copy",      "コピー",            Cat::General, vk::C, kCmd,          false, Icon::None, "COPY" },
             { "paste",     "貼り付け",          Cat::General, vk::V, kCmd,          false, Icon::None, "PASTE" },
@@ -113,6 +133,7 @@ namespace numdeck
             case Cat::Track:     return jp ("トラック");
             case Cat::Window:    return jp ("ウィンドウ");
             case Cat::File:      return jp ("ファイル");
+            case Cat::RefMon:    return jp ("Reference Monitor");
             case Cat::General:   return jp ("どのアプリでも");
             case Cat::Browser:   return jp ("ブラウザ");
             case Cat::Custom:    return jp ("自分で決めたキー");
@@ -131,6 +152,7 @@ namespace numdeck
             case Cat::Track:     return juce::Colour (0xff5fe08f);
             case Cat::Window:    return juce::Colour (0xffb58cff);
             case Cat::File:      return juce::Colour (0xffffd34d);
+            case Cat::RefMon:    return juce::Colour (0xffff7f5c);
             case Cat::General:   return juce::Colour (0xff4fd6c8);
             case Cat::Browser:   return juce::Colour (0xff6f9dff);
             case Cat::Custom:    return juce::Colour (0xffff6fae);

@@ -147,6 +147,22 @@ namespace numdeck
         return false;
     }
 
+    bool KeyTap::isRefMonitorFrontmost()
+    {
+        NSRunningApplication* app = [[NSWorkspace sharedWorkspace] frontmostApplication];
+        return app != nil && [app.bundleIdentifier isEqualToString: @"com.myplugins.referencemonitor"];
+    }
+
+    void KeyTap::sendRemote (const std::string& app, const std::string& command)
+    {
+        // 受け取る側（Reference Monitor など）が後ろにいても届くよう、すぐ配達する
+        NSString* name = [NSString stringWithFormat: @"com.myplugins.%s.command", app.c_str()];
+        [[NSDistributedNotificationCenter defaultCenter] postNotificationName: name
+                                                                       object: [NSString stringWithUTF8String: command.c_str()]
+                                                                     userInfo: nil
+                                                           deliverImmediately: YES];
+    }
+
     static pid_t lastFrontPid = 0;
 
     void KeyTap::rememberFrontApp()

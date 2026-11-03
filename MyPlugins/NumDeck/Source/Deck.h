@@ -65,10 +65,10 @@ namespace numdeck
     // 画面と実行に使う、割り当ての中身
     struct Resolved
     {
-        enum Kind { Key, App, Url };
+        enum Kind { Key, App, Url, Remote };
         bool valid = false;
         Kind kind = Key;
-        juce::String name, glyph, path, url;
+        juce::String name, glyph, path, url, remote;
         Cat cat = Cat::Custom;
         Icon icon = Icon::None;
         int keyCode = -1, mods = 0;
@@ -115,7 +115,7 @@ namespace numdeck
 
         static juce::String defaultPageName (int m, int p)
         {
-            static const char* n[kModes][kPages] = { { "再生・録音", "編集", "ウィンドウ", "自由" },
+            static const char* n[kModes][kPages] = { { "再生・録音", "編集", "ウィンドウ", "リファレンス" },
                                                      { "編集", "ブラウザ", "アプリ", "リンク" } };
             return jp (n[juce::jlimit (0, kModes - 1, m)][juce::jlimit (0, kPages - 1, p)]);
         }
@@ -166,6 +166,7 @@ namespace numdeck
                 r.name = jp (a->name); r.glyph = a->glyph;
                 r.cat = a->cat; r.icon = a->icon;
                 r.keyCode = a->keyCode; r.mods = a->mods; r.repeat = a->repeat;
+                if (a->remote != nullptr) { r.kind = Resolved::Remote; r.remote = a->remote; }
             }
             return r;
         }
@@ -177,6 +178,7 @@ namespace numdeck
                 case Resolved::Key: KeyTap::sendKey (r.keyCode, r.mods); break;
                 case Resolved::App: KeyTap::openApp (r.path.toStdString()); break;
                 case Resolved::Url: KeyTap::openURL (r.url.toStdString()); break;
+                case Resolved::Remote: KeyTap::sendRemote ("referencemonitor", r.remote.toStdString()); break;
             }
         }
 
@@ -198,7 +200,8 @@ namespace numdeck
             const bool isSlot = pad >= Pad1 && pad <= Pad9;
             if (! isPageKey && ! isSlot) return false;
 
-            if (logicOnlyActive() && ! KeyTap::isLogicFrontmost())
+            // Reference Monitor を前に出して聴き比べている間も、Logic と同じに扱う
+            if (logicOnlyActive() && ! KeyTap::isLogicFrontmost() && ! KeyTap::isRefMonitorFrontmost())
             {
                 if (down && ! repeat && onIgnored) onIgnored();
                 return false;
@@ -230,7 +233,7 @@ namespace numdeck
                 { "start",  "record",   "capture",  "rewind",   "play",      "forward", "undo",   "cycle",  "metronome" },
                 { "mute",   "solo",     "automation", "join",   "split",     "zoom",    "redo",   "repeat", "delete" },
                 { "newAudio", "newInst", "bounce",  "pianoRoll", "save",     "loops",   "mixer",  "editor", "library" },
-                { "", "", "", "", "", "", "", "", "" },
+                { "rmPlay", "rmMono",   "rmListen", "rmCue1",   "rmCue2",    "rmCue3",  "rmAB",   "rmMix",  "rmRef" },
             };
             static const char* work[kPages][9] = {
                 { "find",   "save",     "screenshot", "cut",    "copy",      "paste",   "undo",   "redo",   "selectAll" },
@@ -312,6 +315,18 @@ namespace numdeck
                         if (props->containsKey (slotKey (m, p, i)))
                             slots[(size_t) m][(size_t) p][(size_t) i] = Slot::fromString (props->getValue (slotKey (m, p, i)));
                 }
+            }
+
+            // 1.3.0: Logic Pro モードの 4 ページ目（空いていた「自由」）に Reference Monitor の操作を入れる
+            if (! props->getBoolValue ("refMonPage", false))
+            {
+                auto& p4 = slots[(size_t) ModeLogic][3];
+                if (std::all_of (p4.begin(), p4.end(), [] (const Slot& s) { return s.actionId.isEmpty(); }))
+                    resetPage (ModeLogic, 3);
+                if (names[(size_t) ModeLogic][3] == jp ("自由"))
+                    names[(size_t) ModeLogic][3] = defaultPageName (ModeLogic, 3);
+                props->setValue ("refMonPage", true);
+                save();
             }
         }
     };

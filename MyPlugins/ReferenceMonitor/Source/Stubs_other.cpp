@@ -1,6 +1,7 @@
 // Mac 以外（テスト用ビルド）の代わりの実装。音の取り込みと Music 操作は何もしない
 #include "Capture.h"
 #include "MusicControl.h"
+#include "RemoteCommands.h"
 
 #if ! JUCE_MAC
 struct CaptureEngine::Impl {};
@@ -24,4 +25,7 @@ void MusicControl::setPosition (double) {}
 void MusicControl::play() {}
 void MusicControl::pause() {}
 void MusicControl::playPause() {}
+struct RemoteCommands::Impl {};
+RemoteCommands::RemoteCommands (std::function<void (const std::string&)>) : impl (std::make_unique<Impl>()) {}
+RemoteCommands::~RemoteCommands() = default;
 #endif

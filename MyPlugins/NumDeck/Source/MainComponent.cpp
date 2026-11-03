@@ -570,7 +570,8 @@ void MainComponent::paintTile (juce::Graphics& g, int index)
     if (res.valid)
     {
         // ショートカット（右上）。アプリ・ページは何を開くか
-        const auto sc = res.kind == Resolved::Key ? shortcutText (res.keyCode, res.mods)
+        const auto sc = res.kind == Resolved::Remote ? juce::String ("RefMon")
+                      : res.kind == Resolved::Key ? shortcutText (res.keyCode, res.mods)
                       : res.kind == Resolved::App ? juce::String::fromUTF8 ("アプリ")
                                                   : juce::URL (res.url).getDomain().replace ("www.", "");
         const auto scShown = sc.isNotEmpty() ? sc : juce::String::fromUTF8 ("リンク");
@@ -877,8 +878,8 @@ void MainComponent::showTileMenu (int index)
     std::map<int, juce::String> ids;
     int id = 1;
     const std::vector<Cat> order = deck.mode == Deck::ModeLogic
-        ? std::vector<Cat> { Cat::Transport, Cat::Edit, Cat::Track, Cat::Window, Cat::File, Cat::General, Cat::Browser }
-        : std::vector<Cat> { Cat::General, Cat::Browser, Cat::Edit, Cat::File };
+        ? std::vector<Cat> { Cat::Transport, Cat::Edit, Cat::Track, Cat::Window, Cat::File, Cat::RefMon, Cat::General, Cat::Browser }
+        : std::vector<Cat> { Cat::General, Cat::Browser, Cat::Edit, Cat::File, Cat::RefMon };
     for (auto cat : order)
     {
         juce::PopupMenu sub;
@@ -888,7 +889,7 @@ void MainComponent::showTileMenu (int index)
             if (a.cat != cat) continue;
             const bool sel = current.actionId == a.id;
             any = any || sel;
-            sub.addItem (id, jp (a.name) + "    " + shortcutText (a.keyCode, a.mods), true, sel);
+            sub.addItem (id, a.remote != nullptr ? jp (a.name) : jp (a.name) + "    " + shortcutText (a.keyCode, a.mods), true, sel);
             ids[id++] = a.id;
         }
         m.addSubMenu (catName (cat), sub, true, nullptr, any);

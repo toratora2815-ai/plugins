@@ -17,6 +17,8 @@ namespace numdeck
     void KeyTap::rememberFrontApp()        {}
     void KeyTap::activateLastApp()         {}
     void KeyTap::sendKey (int, int)        {}
+    void KeyTap::sendRemote (const std::string&, const std::string&) {}
+    bool KeyTap::isRefMonitorFrontmost()   { return false; }
     void KeyTap::openApp (const std::string&) {}
     void KeyTap::openURL (const std::string&) {}
     bool KeyTap::chromeFrontPage (std::string&, std::string&) { return false; }

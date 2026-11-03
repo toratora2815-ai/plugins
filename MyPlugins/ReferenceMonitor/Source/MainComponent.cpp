@@ -187,10 +187,16 @@ MainComponent::MainComponent()
     setWantsKeyboardFocus (true);
     setSize (750, 900);
     startTimerHz (25);
+
+    remote = std::make_unique<RemoteCommands> ([this] (const std::string& c)
+    {
+        remoteCommand (juce::String::fromUTF8 (c.c_str()));
+    });
 }
 
 MainComponent::~MainComponent()
 {
+    remote = nullptr;
     stopTimer();
     saveSettings();
     capture.stop();
@@ -898,6 +904,27 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
     if (c == 't' || c == 'T') { setListenAs ((engine.sim.target.load() + 1) % refdsp::ListenSim::kNumPresets); return true; }
     if (c == '0')             { setListenAs (0); return true; }
     return false;
+}
+
+// Num Deck などからの操作（キーボードのショートカットと同じ動き）
+void MainComponent::remoteCommand (const juce::String& c)
+{
+    if      (c == "ab")        setAB (! engine.ab.load());
+    else if (c == "mix")       setAB (false);
+    else if (c == "ref")       setAB (true);
+    else if (c == "play")      togglePlay();
+    else if (c == "loop")      { loopOn = ! loopOn; updateLoop(); saveSettings(); explainLoop(); }
+    else if (c.startsWith ("cue")) { jumpToCue (c.substring (3).getIntValue() - 1, true); rebuildCueButtons(); }
+    else if (c == "addCue")    addCue();
+    else if (c == "setMix")    setMixPosition (activeCue, false);
+    else if (c == "mono")      { stereoSeg.setIndex (engine.stereo == 1 ? 0 : 1); engine.stereo = stereoSeg.getIndex(); saveSettings(); }
+    else if (c == "dim")       engine.dim = ! engine.dim.load();
+    else if (c == "mute")      engine.mute = ! engine.mute.load();
+    else if (c == "listen")    setListenAs ((engine.sim.target.load() + 1) % refdsp::ListenSim::kNumPresets);
+    else if (c == "listenOff") setListenAs (0);
+    else if (c == "reset")     engine.resetMeters();
+    else return;
+    repaint();
 }
 
 // 波形の上の x 座標 ⇔ 秒

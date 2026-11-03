@@ -101,6 +101,11 @@ Logic のループは、Logic の位置を見ながら「区間の終わりに�
 | T | LISTEN AS を次へ（OFF → PHONE → … → CLUB → OFF） |
 | 0 | LISTEN AS を OFF に |
 
+### Num Deck（テンキー）から操作する（v1.3.0）
+単体アプリ **Num Deck** の Logic Pro モード「リファレンス」ページから、Reference Monitor が後ろにあっても操作できます
+（A/B 切替、MY MIX / REFERENCE、再生、キュー 1〜3、モノ、LISTEN AS など）。
+Logic を前に出したまま、テンキーで聴き比べを切り替えられます。
+
 ---
 
 ## Logic を操作するための設定（曲ごとに1回）

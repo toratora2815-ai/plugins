@@ -5,6 +5,7 @@
 #include "MusicControl.h"
 #include "Library.h"
 #include "LogicLink.h"
+#include "RemoteCommands.h"
 
 // 横並びの切替ボタン
 class Seg : public juce::Component
@@ -103,6 +104,7 @@ private:
     void loadSettings();
     void noFocus (juce::Component&);
     void setListenAs (int idx);
+    void remoteCommand (const juce::String& command);   // Num Deck などからの操作
 
     std::vector<float> toBands (const std::vector<double>& power, double sampleRate) const;
     void updateSpectra();
@@ -117,6 +119,8 @@ private:
     LogicLink logic;
     MusicControl::State musicState;
     Library library;
+
+    std::unique_ptr<RemoteCommands> remote;
 
     // ---- 画面部品 ----
     juce::ListBox refList { "refs", this };
