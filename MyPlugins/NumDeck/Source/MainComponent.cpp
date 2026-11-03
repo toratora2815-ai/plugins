@@ -16,8 +16,8 @@ namespace
 
     // テンキーの並び（上から 7 8 9 / 4 5 6 / 1 2 3）→ キー番号 - 1
     const int kGridOrder[9] = { 6, 7, 8, 3, 4, 5, 0, 1, 2 };
-    // タイルの番号（添字 0〜8 = キー 1〜9、添字 9 = キー 0）
-    juce::String keyNumber (int index) { return juce::String ((index + 1) % 10); }
+    // タイルの番号（添字 0〜8 = キー 1〜9、添字 9 = キー 0、添字 10 = キー .）
+    juce::String keyNumber (int index) { return index == 10 ? juce::String (".") : juce::String ((index + 1) % 10); }
 
     // コントローラーのボタン表示のような、キーキャップ
     int drawKeycap (juce::Graphics& g, int x, int centreY, const juce::String& label, float alpha = 1.0f, float h = 22.0f)
@@ -296,7 +296,7 @@ void MainComponent::resized()
     learnCancel = getLocalBounds().withSizeKeepingCentre (140, 34).translated (0, 70);
 }
 
-// 3×3 のタイルと、その下にテンキーと同じく横長の 0（左 2 列分、高さは半分）
+// 3×3 のタイルと、その下にテンキーと同じく横長の 0（左 2 列分）と .（高さは半分）
 void MainComponent::layoutTiles (int gap)
 {
     const int tw = (gridArea.getWidth() - 2 * gap) / 3;
@@ -305,7 +305,8 @@ void MainComponent::layoutTiles (int gap)
         for (int col = 0; col < 3; ++col)
             tiles[kGridOrder[row * 3 + col]] = { gridArea.getX() + col * (tw + gap), gridArea.getY() + row * (th + gap), tw, th };
     const int y0 = gridArea.getY() + 3 * (th + gap);
-    tiles[9] = { gridArea.getX(), y0, 2 * tw + gap, gridArea.getBottom() - y0 };
+    tiles[9]  = { gridArea.getX(), y0, 2 * tw + gap, gridArea.getBottom() - y0 };
+    tiles[10] = { gridArea.getX() + 2 * (tw + gap), y0, tw, gridArea.getBottom() - y0 };
 }
 
 void MainComponent::layoutCompact()

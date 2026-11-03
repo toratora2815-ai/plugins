@@ -62,6 +62,7 @@ namespace numdeck
             // Logic に最初から割り当てがない操作。Logic のキーコマンドで「トラックのフリーズを切り替え」にこのキーを覚えさせる
             { "freeze",    "トラックをフリーズ", Cat::Track, vk::F, kCmd | kOpt | kCtrl | kShift, false, Icon::None, "FRZ" },
             { "inputMon",  "入力モニタリング",   Cat::Track, vk::I, kCmd | kOpt | kCtrl | kShift, false, Icon::None, "I" },
+            { "lowLatency","低レイテンシモード", Cat::Transport, vk::L, kCmd | kOpt | kCtrl | kShift, false, Icon::None, "LOW" },
             { "newAudio",  "新規オーディオトラック", Cat::Track, vk::A, kCmd | kOpt, false, Icon::None, "+AU" },
             { "newInst",   "新規ソフト音源トラック", Cat::Track, vk::S, kCmd | kOpt, false, Icon::None, "+INST" },
             { "dupTrack",  "トラックを複製",     Cat::Track, vk::D, kCmd,          false, Icon::None, "+DUP" },

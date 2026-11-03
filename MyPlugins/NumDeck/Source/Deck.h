@@ -80,7 +80,7 @@ namespace numdeck
     {
     public:
         static constexpr int kPages = 4;
-        static constexpr int kSlots = 10;  // キー 1〜9 と キー 0（添字 9）
+        static constexpr int kSlots = 11;  // キー 1〜9、キー 0（添字 9）、キー .（添字 10）
         static constexpr int kModes = 2;
         enum Mode { ModeLogic = 0, ModeWork };
         enum ToggleKey { ToggleClear = 0, ToggleEquals, ToggleNone };
@@ -94,7 +94,7 @@ namespace numdeck
         juce::String chromeProfile, chromeProfileName;  // リンクを開く Chrome のアカウント（空 = いつもの）
 
         std::function<void()> onStateChanged;     // ON/OFF やページが変わった
-        std::function<void (int index)> onFired;  // 0..8 = キー 1〜9、9 = キー 0 のタイルが動いた
+        std::function<void (int index)> onFired;  // 0..8 = キー 1〜9、9 = キー 0、10 = キー . のタイルが動いた
         std::function<void()> onIgnored;          // Logic が前面じゃないので送らなかった
 
         Deck()
@@ -204,7 +204,7 @@ namespace numdeck
             if (! enabled) return false;
 
             const bool isPageKey = pad == PadPlus || pad == PadMinus;
-            const bool isSlot = pad >= Pad0 && pad <= Pad9;
+            const bool isSlot = (pad >= Pad0 && pad <= Pad9) || pad == PadDot;
             if (! isPageKey && ! isSlot) return false;
 
             // Reference Monitor を前に出して聴き比べている間も、Logic と同じに扱う
@@ -220,7 +220,7 @@ namespace numdeck
                 return true;
             }
 
-            const int index = pad == Pad0 ? 9 : pad - Pad1;
+            const int index = pad == Pad0 ? 9 : pad == PadDot ? 10 : pad - Pad1;
             const auto r = resolve (page(), index);
             if (! r.valid) return false;  // 「なし」のキーは普通の数字キーとして通す
             if (down && (! repeat || r.repeat))
@@ -236,18 +236,18 @@ namespace numdeck
             auto& page = slots[(size_t) m][(size_t) p];
             for (auto& s : page) s = {};
 
-            // キー 1〜9、最後がキー 0 の順に書く（テンキーの並びは 7 8 9 / 4 5 6 / 1 2 3 / 0）
+            // キー 1〜9、キー 0、キー . の順に書く（テンキーの並びは 7 8 9 / 4 5 6 / 1 2 3 / 0 .）
             static const char* logic[kPages][kSlots] = {
-                { "freeze", "record",   "rmOut",    "rewind",   "play",      "forward", "undo",   "cycle",  "metronome", "inputMon" },
-                { "mute",   "solo",     "automation", "join",   "split",     "zoom",    "redo",   "repeat", "delete",    "" },
-                { "newAudio", "newInst", "bounce",  "pianoRoll", "save",     "loops",   "mixer",  "editor", "library",   "" },
-                { "rmPlay", "rmMono",   "rmListen", "rmCue1",   "rmCue2",    "rmCue3",  "rmAB",   "rmMix",  "rmRef",     "" },
+                { "freeze", "record",   "rmOut",    "rewind",   "play",      "forward", "undo",   "cycle",  "metronome", "inputMon", "lowLatency" },
+                { "mute",   "solo",     "automation", "join",   "split",     "zoom",    "redo",   "repeat", "delete",    "", "" },
+                { "newAudio", "newInst", "bounce",  "pianoRoll", "save",     "loops",   "mixer",  "editor", "library",   "", "" },
+                { "rmPlay", "rmMono",   "rmListen", "rmCue1",   "rmCue2",    "rmCue3",  "rmAB",   "rmMix",  "rmRef",     "", "" },
             };
             static const char* work[kPages][kSlots] = {
-                { "find",   "save",     "screenshot", "cut",    "copy",      "paste",   "undo",   "redo",   "selectAll", "" },
-                { "back",   "address",  "fwd",      "prevTab",  "reload",    "nextTab", "newTab", "closeTab", "reopenTab", "" },
-                { "", "", "", "", "", "", "", "", "", "" },
-                { "", "", "", "", "", "", "", "", "", "" },
+                { "find",   "save",     "screenshot", "cut",    "copy",      "paste",   "undo",   "redo",   "selectAll", "", "" },
+                { "back",   "address",  "fwd",      "prevTab",  "reload",    "nextTab", "newTab", "closeTab", "reopenTab", "", "" },
+                { "", "", "", "", "", "", "", "", "", "", "" },
+                { "", "", "", "", "", "", "", "", "", "", "" },
             };
             for (int i = 0; i < kSlots; ++i)
                 page[(size_t) i] = Slot::fromString (m == ModeLogic ? logic[p][i] : work[p][i]);
@@ -302,7 +302,7 @@ namespace numdeck
 
         // Logic Pro モードは 1.0.0 と同じ名前で保存する
         static juce::String prefix (int m) { return m == ModeLogic ? "" : "work_"; }
-        static juce::String slotKey (int m, int p, int i) { return prefix (m) + "slot" + juce::String (p) + "_" + juce::String ((i + 1) % 10); }
+        static juce::String slotKey (int m, int p, int i) { return prefix (m) + "slot" + juce::String (p) + "_" + (i == 10 ? juce::String ("dot") : juce::String ((i + 1) % 10)); }
 
         void changed() { save(); if (onStateChanged) onStateChanged(); }
 
