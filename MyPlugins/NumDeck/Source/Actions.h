@@ -59,6 +59,8 @@ namespace numdeck
             { "mute",      "トラックをミュート", Cat::Track, vk::M, 0,             false, Icon::None, "M" },
             { "solo",      "トラックをソロ",     Cat::Track, vk::S, 0,             false, Icon::None, "S" },
             { "automation","オートメーション表示", Cat::Track, vk::A, 0,           false, Icon::None, "A" },
+            // Logic に最初から割り当てがない操作。Logic のキーコマンドで「トラックのフリーズを切り替え」にこのキーを覚えさせる
+            { "freeze",    "トラックをフリーズ", Cat::Track, vk::F, kCmd | kOpt | kCtrl | kShift, false, Icon::None, "FRZ" },
             { "newAudio",  "新規オーディオトラック", Cat::Track, vk::A, kCmd | kOpt, false, Icon::None, "+AU" },
             { "newInst",   "新規ソフト音源トラック", Cat::Track, vk::S, kCmd | kOpt, false, Icon::None, "+INST" },
             { "dupTrack",  "トラックを複製",     Cat::Track, vk::D, kCmd,          false, Icon::None, "+DUP" },
