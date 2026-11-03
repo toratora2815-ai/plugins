@@ -93,6 +93,9 @@ namespace numdeck
             { "rmListen",  "聞こえ方を切替",     Cat::RefMon, -1, 0, false, Icon::None, "EAR",  "listen" },
             { "rmListenOff","聞こえ方 OFF",     Cat::RefMon, -1, 0, false, Icon::None, "FLAT", "listenOff" },
             { "rmReset",   "メーターをリセット", Cat::RefMon, -1, 0, false, Icon::None, "RST",  "reset" },
+            { "rmOut",     "出力 A/B 切替",     Cat::RefMon, -1, 0, false, Icon::None, "OUT",  "out" },
+            { "rmOutA",    "出力 A",            Cat::RefMon, -1, 0, false, Icon::None, "OUT A","outA" },
+            { "rmOutB",    "出力 B",            Cat::RefMon, -1, 0, false, Icon::None, "OUT B","outB" },
             // どのアプリでも
             { "copy",      "コピー",            Cat::General, vk::C, kCmd,          false, Icon::None, "COPY" },
             { "paste",     "貼り付け",          Cat::General, vk::V, kCmd,          false, Icon::None, "PASTE" },

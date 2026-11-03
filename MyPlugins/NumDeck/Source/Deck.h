@@ -230,7 +230,7 @@ namespace numdeck
 
             // テンキーの並び（7 8 9 / 4 5 6 / 1 2 3）で、キー 1〜9 の順に書く
             static const char* logic[kPages][9] = {
-                { "start",  "record",   "capture",  "rewind",   "play",      "forward", "undo",   "cycle",  "metronome" },
+                { "start",  "record",   "rmOut",    "rewind",   "play",      "forward", "undo",   "cycle",  "metronome" },
                 { "mute",   "solo",     "automation", "join",   "split",     "zoom",    "redo",   "repeat", "delete" },
                 { "newAudio", "newInst", "bounce",  "pianoRoll", "save",     "loops",   "mixer",  "editor", "library" },
                 { "rmPlay", "rmMono",   "rmListen", "rmCue1",   "rmCue2",    "rmCue3",  "rmAB",   "rmMix",  "rmRef" },
@@ -326,6 +326,14 @@ namespace numdeck
                 if (names[(size_t) ModeLogic][3] == jp ("自由"))
                     names[(size_t) ModeLogic][3] = defaultPageName (ModeLogic, 3);
                 props->setValue ("refMonPage", true);
+                save();
+            }
+            // 1.3.1: 1 ページ目の「キャプチャ録音」を Reference Monitor の出力 A/B 切替に
+            if (! props->getBoolValue ("outSwitch", false))
+            {
+                auto& s3 = slots[(size_t) ModeLogic][0][2];
+                if (s3.actionId == "capture") { s3 = Slot(); s3.actionId = "rmOut"; }
+                props->setValue ("outSwitch", true);
                 save();
             }
         }

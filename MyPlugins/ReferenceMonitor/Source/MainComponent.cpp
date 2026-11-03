@@ -923,6 +923,11 @@ void MainComponent::remoteCommand (const juce::String& c)
     else if (c == "listen")    setListenAs ((engine.sim.target.load() + 1) % refdsp::ListenSim::kNumPresets);
     else if (c == "listenOff") setListenAs (0);
     else if (c == "reset")     engine.resetMeters();
+    else if (c == "out" || c == "outA" || c == "outB")
+    {
+        outSeg.setIndex (c == "outA" ? 0 : c == "outB" ? 1 : 1 - outSeg.getIndex());
+        saveSettings(); captureError.clear(); retryAt = 0;
+    }
     else return;
     repaint();
 }
