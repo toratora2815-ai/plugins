@@ -1,0 +1,146 @@
+#pragma once
+#include <JuceHeader.h>
+#include "KeyTap.h"
+
+// テンキーに割り当てられる動作（Logic Pro の初期設定のキーコマンド）
+namespace numdeck
+{
+    enum class Icon { None, Play, Record, Rewind, Forward, ToStart, Cycle, Metronome, Undo, Redo, Split, Capture };
+    enum class Cat { Transport, Edit, Track, Window, File, Custom };
+
+    struct ActionDef
+    {
+        const char* id;
+        const char* name;   // UTF-8
+        Cat cat;
+        int keyCode;        // Mac の仮想キーコード
+        int mods;
+        bool repeat;        // 押しっぱなしで連打するか
+        Icon icon;
+        const char* glyph;  // アイコンがないときに大きく出す文字
+    };
+
+    // キーコード（US 配列の位置。日本語配列でも英字・記号の位置は同じ）
+    namespace vk
+    {
+        enum { A = 0, S = 1, Z = 6, X = 7, C = 8, B = 11, E = 14, R = 15, Y = 16, T = 17, O = 31, U = 32,
+               I = 34, P = 35, Return = 36, J = 38, K = 40, Comma = 43, M = 46, Period = 47, Space = 49,
+               Delete = 51, G = 5, D = 2, Left = 123, Right = 124 };
+    }
+
+    inline const std::vector<ActionDef>& catalog()
+    {
+        static const std::vector<ActionDef> list = {
+            // 再生・録音
+            { "play",      "再生 / 停止",       Cat::Transport, vk::Space,  0, false, Icon::Play,      "" },
+            { "record",    "録音",              Cat::Transport, vk::R,      0, false, Icon::Record,    "" },
+            { "capture",   "キャプチャ録音",     Cat::Transport, vk::R,      kShift, false, Icon::Capture, "" },
+            { "rewind",    "巻き戻し",          Cat::Transport, vk::Comma,  0, true,  Icon::Rewind,    "" },
+            { "forward",   "早送り",            Cat::Transport, vk::Period, 0, true,  Icon::Forward,   "" },
+            { "start",     "先頭へ",            Cat::Transport, vk::Return, 0, false, Icon::ToStart,   "" },
+            { "cycle",     "サイクル",          Cat::Transport, vk::C,      0, false, Icon::Cycle,     "" },
+            { "metronome", "メトロノーム",       Cat::Transport, vk::K,      0, false, Icon::Metronome, "" },
+            { "locators",  "選択範囲をサイクルに", Cat::Transport, vk::U,    kCmd, false, Icon::None,  "U" },
+            // 編集
+            { "undo",      "元に戻す",          Cat::Edit, vk::Z,      kCmd,          true,  Icon::Undo,  "" },
+            { "redo",      "やり直す",          Cat::Edit, vk::Z,      kCmd | kShift, true,  Icon::Redo,  "" },
+            { "split",     "再生位置で分割",     Cat::Edit, vk::T,      kCmd,          false, Icon::Split, "" },
+            { "join",      "結合",              Cat::Edit, vk::J,      kCmd,          false, Icon::None,  "J" },
+            { "repeat",    "リピート（複製）",   Cat::Edit, vk::R,      kCmd,          false, Icon::None,  "x2" },
+            { "delete",    "削除",              Cat::Edit, vk::Delete, 0,             false, Icon::None,  "DEL" },
+            { "zoom",      "選択をズーム",       Cat::Edit, vk::Z,      0,             false, Icon::None,  "Z" },
+            { "nudgeL",    "少し左へ",          Cat::Edit, vk::Left,   kOpt,          true,  Icon::None,  "<" },
+            { "nudgeR",    "少し右へ",          Cat::Edit, vk::Right,  kOpt,          true,  Icon::None,  ">" },
+            { "regionMute","リージョンをミュート", Cat::Edit, vk::M,    kCtrl,         false, Icon::None,  "RM" },
+            { "bounceIP",  "その場でバウンス",   Cat::Edit, vk::B,      kCtrl,         false, Icon::None,  "BIP" },
+            // トラック
+            { "mute",      "トラックをミュート", Cat::Track, vk::M, 0,             false, Icon::None, "M" },
+            { "solo",      "トラックをソロ",     Cat::Track, vk::S, 0,             false, Icon::None, "S" },
+            { "automation","オートメーション表示", Cat::Track, vk::A, 0,           false, Icon::None, "A" },
+            { "newAudio",  "新規オーディオトラック", Cat::Track, vk::A, kCmd | kOpt, false, Icon::None, "+AU" },
+            { "newInst",   "新規ソフト音源トラック", Cat::Track, vk::S, kCmd | kOpt, false, Icon::None, "+INST" },
+            { "dupTrack",  "トラックを複製",     Cat::Track, vk::D, kCmd,          false, Icon::None, "+DUP" },
+            // ウィンドウ
+            { "mixer",     "ミキサー",          Cat::Window, vk::X, 0, false, Icon::None, "MIX" },
+            { "editor",    "エディタ",          Cat::Window, vk::E, 0, false, Icon::None, "EDIT" },
+            { "pianoRoll", "ピアノロール",       Cat::Window, vk::P, 0, false, Icon::None, "PR" },
+            { "library",   "ライブラリ",        Cat::Window, vk::Y, 0, false, Icon::None, "LIB" },
+            { "loops",     "ループブラウザ",     Cat::Window, vk::O, 0, false, Icon::None, "LOOP" },
+            { "smart",     "スマートコントロール", Cat::Window, vk::B, 0, false, Icon::None, "SC" },
+            { "inspector", "インスペクタ",       Cat::Window, vk::I, 0, false, Icon::None, "INSP" },
+            { "global",    "グローバルトラック", Cat::Window, vk::G, 0, false, Icon::None, "GLB" },
+            // ファイル
+            { "save",      "保存",              Cat::File, vk::S, kCmd, false, Icon::None, "SAVE" },
+            { "bounce",    "バウンス",          Cat::File, vk::B, kCmd, false, Icon::None, "BNC" },
+        };
+        return list;
+    }
+
+    inline const ActionDef* findAction (const juce::String& id)
+    {
+        for (auto& a : catalog())
+            if (id == a.id) return &a;
+        return nullptr;
+    }
+
+    inline juce::String jp (const char* s) { return juce::String::fromUTF8 (s); }
+
+    inline juce::String catName (Cat c)
+    {
+        switch (c)
+        {
+            case Cat::Transport: return jp ("再生・録音");
+            case Cat::Edit:      return jp ("編集");
+            case Cat::Track:     return jp ("トラック");
+            case Cat::Window:    return jp ("ウィンドウ");
+            case Cat::File:      return jp ("ファイル");
+            case Cat::Custom:    return jp ("自分で決めたキー");
+        }
+        return {};
+    }
+
+    inline juce::Colour catColour (Cat c)
+    {
+        switch (c)
+        {
+            case Cat::Transport: return juce::Colour (0xff3aa6ff);
+            case Cat::Edit:      return juce::Colour (0xffff9a3c);
+            case Cat::Track:     return juce::Colour (0xff5fe08f);
+            case Cat::Window:    return juce::Colour (0xffb58cff);
+            case Cat::File:      return juce::Colour (0xffffd34d);
+            case Cat::Custom:    return juce::Colour (0xffff6fae);
+        }
+        return juce::Colours::grey;
+    }
+
+    // キーコード → 表示名
+    inline juce::String keyName (int code)
+    {
+        static const std::map<int, const char*> names = {
+            { 0, "A" }, { 11, "B" }, { 8, "C" }, { 2, "D" }, { 14, "E" }, { 3, "F" }, { 5, "G" }, { 4, "H" },
+            { 34, "I" }, { 38, "J" }, { 40, "K" }, { 37, "L" }, { 46, "M" }, { 45, "N" }, { 31, "O" }, { 35, "P" },
+            { 12, "Q" }, { 15, "R" }, { 1, "S" }, { 17, "T" }, { 32, "U" }, { 9, "V" }, { 13, "W" }, { 7, "X" },
+            { 16, "Y" }, { 6, "Z" },
+            { 18, "1" }, { 19, "2" }, { 20, "3" }, { 21, "4" }, { 23, "5" }, { 22, "6" }, { 26, "7" }, { 28, "8" },
+            { 25, "9" }, { 29, "0" }, { 27, "-" }, { 24, "=" }, { 33, "[" }, { 30, "]" }, { 42, "\\" }, { 41, ";" },
+            { 39, "'" }, { 43, "," }, { 47, "." }, { 44, "/" }, { 50, "`" }, { 93, "\xc2\xa5" }, { 94, "_" },
+            { 49, "Space" }, { 36, "Return" }, { 48, "Tab" }, { 51, "Delete" }, { 117, "Fwd Del" }, { 53, "Esc" },
+            { 123, "\xe2\x86\x90" }, { 124, "\xe2\x86\x92" }, { 125, "\xe2\x86\x93" }, { 126, "\xe2\x86\x91" },
+            { 115, "Home" }, { 119, "End" }, { 116, "PgUp" }, { 121, "PgDn" },
+            { 122, "F1" }, { 120, "F2" }, { 99, "F3" }, { 118, "F4" }, { 96, "F5" }, { 97, "F6" }, { 98, "F7" },
+            { 100, "F8" }, { 101, "F9" }, { 109, "F10" }, { 103, "F11" }, { 111, "F12" },
+        };
+        auto it = names.find (code);
+        return it != names.end() ? jp (it->second) : "#" + juce::String (code);
+    }
+
+    inline juce::String shortcutText (int code, int mods)
+    {
+        juce::String s;
+        if (mods & kCtrl)  s += jp ("\xe2\x8c\x83");  // ⌃
+        if (mods & kOpt)   s += jp ("\xe2\x8c\xa5");  // ⌥
+        if (mods & kShift) s += jp ("\xe2\x87\xa7");  // ⇧
+        if (mods & kCmd)   s += jp ("\xe2\x8c\x98");  // ⌘
+        return s + keyName (code);
+    }
+}
