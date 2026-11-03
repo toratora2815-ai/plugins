@@ -95,6 +95,7 @@
   v1.8.0: ページ切替を / と * に（− と + は通す）
   v1.9.0: リンクを 2 画面で開く（Slot の split: "chrome" か アプリの場所。Chrome --new-window で開き、アクセシビリティで左右半分に並べる）
   v1.10.0: 2 画面は「ウィンドウ→フルスクリーンのタイル表示→画面左側」を AX で押し、相手選びの画面で右半分の真ん中（幅 0.875, 高さ 0.5）をクリックして全画面分割に。アプリのページの 0 = アプリを全部終了（"!quitAll"）
+  v1.11.0: タイルをドラッグで入れ替え（Deck::swapSlots）。2 画面: 全画面のウィンドウは AXFullScreen を外してから並べる、起動待ちは最大 20 秒
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）
 
 ## Claude からの提案（余った利用枠の活用）

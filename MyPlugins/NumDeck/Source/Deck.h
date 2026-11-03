@@ -139,6 +139,12 @@ namespace numdeck
 
         const Slot& slot (int p, int index) const { return slots[(size_t) mode][(size_t) p][(size_t) index]; }
         void setSlot (int p, int index, const Slot& s) { slots[(size_t) mode][(size_t) p][(size_t) index] = s; save(); }
+        void swapSlots (int p, int a, int b)
+        {
+            auto& page = slots[(size_t) mode][(size_t) p];
+            std::swap (page[(size_t) a], page[(size_t) b]);
+            save();
+        }
 
         Resolved resolve (int p, int index) const
         {

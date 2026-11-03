@@ -394,13 +394,42 @@ namespace numdeck
             return (AXUIElementRef) w;
         }
 
-        // before と違うウィンドウが前に出るまで待って（最大 6 秒）、r に置いてから then（置いたウィンドウ、なければ nullptr）。
-        // before は最後に CFRelease する
+        bool axBool (AXUIElementRef e, CFStringRef attr)
+        {
+            CFTypeRef v = nullptr;
+            AXUIElementCopyAttributeValue (e, attr, &v);
+            const bool b = v != nullptr && CFGetTypeID (v) == CFBooleanGetTypeID() && CFBooleanGetValue ((CFBooleanRef) v);
+            if (v != nullptr) CFRelease (v);
+            return b;
+        }
+
+        // 全画面（ほかと左右分割中も含む）なら解除し、しまってあれば出す。解除したら true（落ち着くまで少し待つ）
+        bool bringOutOfFullScreen (AXUIElementRef w)
+        {
+            if (axBool (w, kAXMinimizedAttribute))
+                AXUIElementSetAttributeValue (w, kAXMinimizedAttribute, kCFBooleanFalse);
+            if (! axBool (w, CFSTR ("AXFullScreen"))) return false;
+            AXUIElementSetAttributeValue (w, CFSTR ("AXFullScreen"), kCFBooleanFalse);
+            return true;
+        }
+
+        // before と違うウィンドウが前に出るまで待って（アプリの起動を待つこともあるので最大 20 秒）、
+        // 全画面なら解除してから r に置き、then（置いたウィンドウ、なければ nullptr）。before は最後に CFRelease する
         void waitAndPlace (NSString* bundleId, AXUIElementRef before, CGRect r, int tries, void (^then) (AXUIElementRef))
         {
             AXUIElementRef w = copyFrontWindow (bundleId);
             const bool ready = w != nullptr && (before == nullptr || ! CFEqual (w, before));
-            if (! ready && tries < 60)
+            if (ready && tries < 190 && bringOutOfFullScreen (w))
+            {
+                // 全画面を抜けるアニメーションが終わってから置き直す（同じウィンドウなので before は外す）
+                CFRelease (w);
+                if (before != nullptr) CFRelease (before);
+                dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                    waitAndPlace (bundleId, nullptr, r, tries + 1, then);
+                });
+                return;
+            }
+            if (! ready && tries < 200)
             {
                 if (w != nullptr) CFRelease (w);
                 dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
@@ -505,7 +534,7 @@ namespace numdeck
                 CFRelease (win);
                 if (! pressTileLeft (leftPid)) return;
                 const CGPoint target = CGPointMake (area.origin.x + area.size.width * 0.875, area.origin.y + area.size.height * 0.5);
-                dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1600 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
                     clickAt (target);
                 });
             });

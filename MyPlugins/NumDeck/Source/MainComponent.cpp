@@ -408,6 +408,31 @@ void MainComponent::paint (juce::Graphics& g)
     }
 
     paintFooter (g);
+    // ドラッグ中: 動かしているタイルを薄く、落とす先を枠で示し、マウスの所に名前を出す
+    if (draggingTile && pressTile >= 0)
+    {
+        g.setColour (bg.withAlpha (0.55f));
+        g.fillRoundedRectangle (tiles[pressTile].toFloat(), compact ? 8.0f : 14.0f);
+        if (dropTile >= 0)
+        {
+            g.setColour (modeAccent());
+            g.drawRoundedRectangle (tiles[dropTile].toFloat().reduced (1.0f), compact ? 8.0f : 14.0f, 3.0f);
+        }
+        const auto res = deck.resolve (deck.page(), pressTile);
+        const auto label = keyNumber (pressTile) + "  " + (res.valid ? res.name : juce::String::fromUTF8 ("なし"));
+        const auto m = getMouseXYRelative().toFloat();
+        const float fs = compact ? 11.0f : 14.0f;
+        const float w = (float) juce::GlyphArrangement::getStringWidthInt (font (fs, true), label) + 20.0f;
+        juce::Rectangle<float> ghost (m.x + 10.0f, m.y + 6.0f, w, fs + 14.0f);
+        g.setColour (card.withAlpha (0.95f));
+        g.fillRoundedRectangle (ghost, 6.0f);
+        g.setColour (modeAccent());
+        g.drawRoundedRectangle (ghost, 6.0f, 1.5f);
+        g.setColour (text);
+        g.setFont (font (fs, true));
+        g.drawText (label, ghost, juce::Justification::centred);
+    }
+
     if (learnIndex >= 0) paintLearning (g);
 }
 
@@ -920,8 +945,39 @@ void MainComponent::mouseDown (const juce::MouseEvent& e)
     if (onTopPill.contains (p))     { deck.alwaysOnTop = ! deck.alwaysOnTop; deck.save(); applyOnTop(); done(); return; }
     if (settingsPill.contains (p))  { showSettingsMenu(); return; }
     if (sizePill.contains (p))      { setWindowSize (! compact); done(); return; }
+    // タイルは離したときに決める（そのまま離せばメニュー、ほかのタイルまでドラッグすれば入れ替え）
     for (int i = 0; i < Deck::kSlots; ++i)
-        if (tiles[i].contains (p)) { showTileMenu (i); return; }
+        if (tiles[i].contains (p)) { pressTile = i; dropTile = -1; draggingTile = false; return; }
+}
+
+void MainComponent::mouseDrag (const juce::MouseEvent& e)
+{
+    if (pressTile < 0) return;
+    if (! draggingTile && e.getDistanceFromDragStart() < 8) return;
+    draggingTile = true;
+    dropTile = -1;
+    for (int i = 0; i < Deck::kSlots; ++i)
+        if (tiles[i].contains (e.getPosition()) && i != pressTile) dropTile = i;
+    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    repaint();
+}
+
+void MainComponent::mouseUp (const juce::MouseEvent&)
+{
+    const int from = pressTile, to = dropTile;
+    const bool dragged = draggingTile;
+    pressTile = dropTile = -1;
+    draggingTile = false;
+    if (from < 0) return;
+    if (! dragged) { showTileMenu (from); return; }
+    if (to >= 0)
+    {
+        deck.swapSlots (deck.page(), from, to);
+        flash[(size_t) from] = flash[(size_t) to] = 1.0f;
+        juce::Timer::callAfterDelay (120, [] { KeyTap::activateLastApp(); });
+    }
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    repaint();
 }
 
 // ============================================================================

@@ -13,6 +13,8 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
 
 private:
     void timerCallback() override;
@@ -56,6 +58,9 @@ private:
     bool permitted = false, tapRunning = false, logicRunning = false, logicFront = false;
     std::array<float, numdeck::Deck::kSlots> flash {};
     int hoverTile = -1;
+    // タイルのドラッグで入れ替え: 押したタイル、ドラッグ中か、今どのタイルの上か
+    int pressTile = -1, dropTile = -1;
+    bool draggingTile = false;
     int learnPage = -1, learnIndex = -1;
     float ignoredHint = 0.0f;
     int tick = 0;
