@@ -70,6 +70,7 @@ private:
     void loadFileAsync (const juce::String& path);
     void addFiles (const juce::StringArray& paths);
     void removeSelected();
+    void refreshRefBox();
 
     bool isLive() const { return selectedRow == 0; }
     std::vector<Cue>* currentCues();
@@ -118,7 +119,7 @@ private:
     // ---- 画面部品 ----
     juce::ListBox refList { "refs", this };
     juce::TextButton addButton { "+ ADD" }, removeButton { "REMOVE" };
-    juce::ComboBox liveAppBox;
+    juce::ComboBox liveAppBox, refBox;   // refBox = 参照曲の選択（0 番目がライブ）
     Seg abSeg, levelSeg, bandSeg, stereoSeg, outSeg, listenSeg;
     juce::TextButton playButton { "PLAY" }, loopButton { "LOOP" }, restartButton { "CUE ON SWITCH" }, addCueButton { "+ CUE" }, setMixButton { "SET MIX" };
     juce::OwnedArray<CueButton> cueButtons;
@@ -156,7 +157,7 @@ private:
     bool mixHas = false, refHas = false;
     float displayTop = -20.0f;
     std::vector<double> snapBuf;
-    juce::Rectangle<int> cueRow, headerArea, leftArea, hintArea, timelineArea, specArea, meterArea, labelsRow1, labelsRow2;
+    juce::Rectangle<int> cueRow, headerArea, statusArea, refLabel, liveLabel, hintArea, timelineArea, specArea, meterArea, labelsRow1, labelsRow2;
     juce::Rectangle<int> levelLabel, bandLabel, stereoLabel, trimLabel, outLabel, volLabel, listenLabel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

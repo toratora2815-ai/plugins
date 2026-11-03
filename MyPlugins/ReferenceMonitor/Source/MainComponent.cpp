@@ -89,7 +89,7 @@ MainComponent::MainComponent()
     refList.setOutlineThickness (0);
 
     for (auto* c : std::initializer_list<juce::Component*> {
-             &refList, &addButton, &removeButton, &liveAppBox, &abSeg, &levelSeg, &bandSeg, &stereoSeg, &outSeg, &listenSeg,
+             &refBox, &addButton, &removeButton, &liveAppBox, &abSeg, &levelSeg, &bandSeg, &stereoSeg, &outSeg, &listenSeg,
              &playButton, &loopButton, &restartButton, &addCueButton, &setMixButton, &resetButton, &dimButton, &muteButton,
              &pinButton, &bypassButton, &trimSlider, &volumeSlider, &outABox, &outBBox })
     {
@@ -121,12 +121,20 @@ MainComponent::MainComponent()
     };
     removeButton.onClick = [this] { removeSelected(); };
 
+    refBox.onChange = [this]
+    {
+        const int id = refBox.getSelectedId();
+        if (id > 0 && id - 1 != selectedRow) selectItem (id - 1);
+        grabKeyboardFocus();
+    };
+    refBox.setTooltip ("Reference: Apple Music (or another app) live, or an audio file. Drop files on the window to add them.");
+
     liveAppBox.onChange = [this]
     {
         const int id = liveAppBox.getSelectedId();
         if (id <= 0) return;
         const auto b = liveBundles[id - 1];
-        if (b.isNotEmpty() && b != liveBundle) { liveBundle = b; saveSettings(); retryAt = 0; refList.repaint(); }
+        if (b.isNotEmpty() && b != liveBundle) { liveBundle = b; saveSettings(); retryAt = 0; refreshRefBox(); }
     };
 
     playButton.onClick = [this] { togglePlay(); };
@@ -173,12 +181,11 @@ MainComponent::MainComponent()
     loadSettings();
     refreshOutputs();
     refreshLiveApps();
-    refList.updateContent();
-    refList.selectRow (selectedRow, juce::dontSendNotification);
+    refreshRefBox();
     selectItem (selectedRow);
 
     setWantsKeyboardFocus (true);
-    setSize (1180, 840);
+    setSize (750, 900);
     startTimerHz (25);
 }
 
@@ -305,6 +312,7 @@ void MainComponent::refreshLiveApps()
         liveAppBox.addItem (names[i], i + 1);
         if (bundles[i] == liveBundle) liveAppBox.setSelectedId (i + 1, juce::dontSendNotification);
     }
+    refreshRefBox();
 }
 
 // ----------------------------------------------------------------------------
@@ -336,6 +344,22 @@ void MainComponent::paintListBoxItem (int row, juce::Graphics& g, int w, int h, 
     }
 }
 
+// 参照曲の選択肢を作り直す（0 番目 = ライブのアプリ、その後ろにファイル）
+void MainComponent::refreshRefBox()
+{
+    if (refBox.isPopupActive()) return;
+    refBox.clear (juce::dontSendNotification);
+    const auto live = liveAppBox.getText();
+    refBox.addItem ((live.isNotEmpty() ? live : juce::String ("Apple Music")) + "  (LIVE)", 1);
+    if (! library.files.empty()) refBox.addSeparator();
+    for (int i = 0; i < (int) library.files.size(); ++i)
+    {
+        const auto& f = library.files[(size_t) i];
+        refBox.addItem (f.name + (juce::File (f.path).existsAsFile() ? "" : "  (missing)"), i + 2);
+    }
+    refBox.setSelectedId (selectedRow + 1, juce::dontSendNotification);
+}
+
 void MainComponent::listBoxItemClicked (int row, const juce::MouseEvent&)
 {
     selectItem (row);
@@ -347,7 +371,7 @@ void MainComponent::selectItem (int row)
     row = juce::jlimit (0, (int) library.files.size(), row);
     const bool wasPlaying = engine.player.playing.load();
     selectedRow = row;
-    refList.selectRow (row, juce::dontSendNotification);
+    refBox.setSelectedId (row + 1, juce::dontSendNotification);
     activeCue = -1;
     engine.refSource = isLive() ? Engine::sourceLive : Engine::sourceFile;
     if (! isLive())
@@ -382,7 +406,7 @@ void MainComponent::addFiles (const juce::StringArray& paths)
         library.files.push_back ({ p, f.getFileNameWithoutExtension(), {} });
         if (firstNew < 0) firstNew = (int) library.files.size();
     }
-    refList.updateContent();
+    refreshRefBox();
     if (firstNew > 0) selectItem (firstNew);
     library.save();
 }
@@ -391,7 +415,7 @@ void MainComponent::removeSelected()
 {
     if (isLive()) return;
     library.files.erase (library.files.begin() + (selectedRow - 1));
-    refList.updateContent();
+    refreshRefBox();
     selectItem (juce::jmin (selectedRow, (int) library.files.size()));
 }
 
@@ -1104,22 +1128,20 @@ void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (bg);
 
-    auto h = headerArea;
     g.setColour (text);
-    g.setFont (juce::FontOptions (20.0f, juce::Font::bold));
-    g.drawText ("REFERENCE MONITOR", h.removeFromLeft (240), juce::Justification::centredLeft);
-    g.setFont (juce::FontOptions (13.0f));
-    auto st = h.withTrimmedRight (310);
+    g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+    g.drawText ("REFERENCE MONITOR", headerArea, juce::Justification::centredLeft);
+    g.setFont (juce::FontOptions (12.0f));
+    auto st = statusArea;
     g.setColour (statusMixColour);
     g.drawText ("MIX  " + statusMix, st.removeFromTop (st.getHeight() / 2), juce::Justification::centredLeft);
     g.setColour (statusRefColour);
     g.drawText ("REF  " + statusRef, st, juce::Justification::centredLeft);
 
-    // 左の見出し
     g.setColour (text.withAlpha (0.6f));
-    g.setFont (juce::FontOptions (11.0f));
-    g.drawText ("REFERENCES", leftArea.getX(), leftArea.getY() - 16, 200, 14, juce::Justification::centredLeft);
-    g.drawText ("LIVE APP", liveAppBox.getX(), liveAppBox.getY() - 16, 200, 14, juce::Justification::centredLeft);
+    g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    g.drawText ("REF", refLabel, juce::Justification::centredLeft);
+    g.drawText ("LIVE APP", liveLabel, juce::Justification::centredRight);
 
     if (cueButtons.isEmpty())
     {
@@ -1139,7 +1161,7 @@ void MainComponent::paint (juce::Graphics& g)
     {
         g.setColour (warn);
         g.setFont (juce::FontOptions (12.0f));
-        g.drawFittedText (statusHint, hintArea, juce::Justification::topLeft, 6);
+        g.drawFittedText (statusHint, hintArea, juce::Justification::centredLeft, 2);
     }
 
     g.setColour (text.withAlpha (0.6f));
@@ -1153,8 +1175,9 @@ void MainComponent::paint (juce::Graphics& g)
     g.drawText ("LISTEN AS  (T = next, 0 = off)  -  applies to both songs, loudness kept equal", listenLabel, juce::Justification::centredLeft);
 
     g.setColour (text.withAlpha (0.4f));
-    g.drawText ("Keys: SPACE = A/B   1-9 = cue   P = play   C = add cue   S = set MIX position   L = loop   M = mono   D = dim   T = listen as",
-                specArea.getX(), meterArea.getBottom() + 2, 760, 14, juce::Justification::centredLeft);
+    g.drawFittedText ("Keys: SPACE = A/B   1-9 = cue   P = play   C = add cue   S = set MIX   L = loop   M = mono   D = dim   T = listen as",
+                      juce::Rectangle<int> (specArea.getX(), meterArea.getBottom() + 2, meterArea.getRight() - specArea.getX(), 14),
+                      juce::Justification::centredLeft, 1, 0.8f);
 }
 
 void MainComponent::drawTimeline (juce::Graphics& g, juce::Rectangle<float> r)
@@ -1353,7 +1376,7 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
     };
 
     const int rowH = juce::jmin (26, r.getHeight() / 17);
-    const int colW = 58;
+    const int colW = r.getWidth() < 300 ? 50 : 58;
     const int nameW = r.getWidth() - 3 * colW;
     auto header = r.removeFromTop (rowH);
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
@@ -1393,44 +1416,45 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
 
 void MainComponent::resized()
 {
+    // MacBook の画面の半分（幅 740 前後）に収まるように、上から縦に並べる
     auto area = getLocalBounds().reduced (12);
 
-    headerArea = area.removeFromTop (40);
+    headerArea = area.removeFromTop (32);
     {
         auto h = headerArea;
-        bypassButton.setBounds (h.removeFromRight (90).reduced (0, 5));
+        bypassButton.setBounds (h.removeFromRight (84).reduced (0, 3));
         h.removeFromRight (6);
-        pinButton.setBounds (h.removeFromRight (60).reduced (0, 5));
+        pinButton.setBounds (h.removeFromRight (54).reduced (0, 3));
         h.removeFromRight (6);
-        resetButton.setBounds (h.removeFromRight (130).reduced (0, 5));
+        resetButton.setBounds (h.removeFromRight (120).reduced (0, 3));
     }
-    area.removeFromTop (24);
+    statusArea = area.removeFromTop (34);
+    area.removeFromTop (4);
 
-    // 左: 参照曲リスト
-    auto left = area.removeFromLeft (240);
-    area.removeFromLeft (12);
-    auto liveRow = left.removeFromBottom (28);
-    left.removeFromBottom (22);
-    liveAppBox.setBounds (liveRow);
-    auto btnRow = left.removeFromBottom (30);
-    left.removeFromBottom (6);
-    hintArea = left.removeFromBottom (84);   // 注意書き用
-    left.removeFromBottom (6);
-    addButton.setBounds (btnRow.removeFromLeft (btnRow.getWidth() / 2 - 3));
-    btnRow.removeFromLeft (6);
-    removeButton.setBounds (btnRow);
-    refList.setBounds (left);
-    leftArea = left;
+    // 参照曲の選択（前は左のリストだったもの）
+    {
+        auto r = area.removeFromTop (28);
+        refLabel = r.removeFromLeft (32);
+        removeButton.setBounds (r.removeFromRight (74));
+        r.removeFromRight (6);
+        addButton.setBounds (r.removeFromRight (64));
+        r.removeFromRight (10);
+        liveAppBox.setBounds (r.removeFromRight (juce::jlimit (120, 200, r.getWidth() / 3)));
+        liveLabel = r.removeFromRight (64);
+        r.removeFromRight (6);
+        refBox.setBounds (r);
+    }
+    hintArea = area.removeFromTop (30);   // 注意書き用（2行まで）
+    area.removeFromTop (2);
 
-    // 右: メイン
-    abSeg.setBounds (area.removeFromTop (52));
+    abSeg.setBounds (area.removeFromTop (46));
     area.removeFromTop (8);
 
     auto transport = area.removeFromTop (30);
-    playButton.setBounds (transport.removeFromLeft (120));   transport.removeFromLeft (6);
-    loopButton.setBounds (transport.removeFromLeft (70));    transport.removeFromLeft (6);
-    restartButton.setBounds (transport.removeFromLeft (130)); transport.removeFromLeft (6);
-    addCueButton.setBounds (transport.removeFromLeft (70));  transport.removeFromLeft (6);
+    playButton.setBounds (transport.removeFromLeft (116));   transport.removeFromLeft (6);
+    loopButton.setBounds (transport.removeFromLeft (66));    transport.removeFromLeft (6);
+    restartButton.setBounds (transport.removeFromLeft (124)); transport.removeFromLeft (6);
+    addCueButton.setBounds (transport.removeFromLeft (66));  transport.removeFromLeft (6);
     setMixButton.setBounds (transport.removeFromLeft (80));  transport.removeFromLeft (10);
     area.removeFromTop (6);
     cueRow = area.removeFromTop (30);
@@ -1446,46 +1470,51 @@ void MainComponent::resized()
         }
     }
     area.removeFromTop (8);
-    timelineArea = area.removeFromTop (60);
+    timelineArea = area.removeFromTop (56);
     area.removeFromTop (8);
 
-    // 下の3段
-    auto row2 = area.removeFromBottom (48);
-    area.removeFromBottom (6);
-    auto row1 = area.removeFromBottom (48);
-    area.removeFromBottom (6);
-    auto row0 = area.removeFromBottom (48);
-    area.removeFromBottom (22);
+    // 下の4段
+    auto row3 = area.removeFromBottom (46);
+    area.removeFromBottom (4);
+    auto row2 = area.removeFromBottom (46);
+    area.removeFromBottom (4);
+    auto row1 = area.removeFromBottom (46);
+    area.removeFromBottom (4);
+    auto row0 = area.removeFromBottom (46);
+    area.removeFromBottom (20);
     auto col = [] (juce::Rectangle<int>& row, int w, juce::Rectangle<int>& label)
     {
         auto c = row.removeFromLeft (w);
-        row.removeFromLeft (14);
+        row.removeFromLeft (12);
         label = c.removeFromTop (16);
         return c.reduced (0, 2);
     };
-    stereoSeg.setBounds (col (row0, 200, stereoLabel));
-    listenSeg.setBounds (col (row0, row0.getWidth(), listenLabel));
-    levelSeg.setBounds  (col (row1, 380, levelLabel));
-    bandSeg.setBounds   (col (row1, 230, bandLabel));
-    trimSlider.setBounds (col (row1, juce::jmax (120, row1.getWidth()), trimLabel));
-
+    const int W = row0.getWidth();
+    listenSeg.setBounds (col (row0, W, listenLabel));
+    levelSeg.setBounds  (col (row1, W * 55 / 100, levelLabel));
+    bandSeg.setBounds   (col (row1, row1.getWidth(), bandLabel));
+    stereoSeg.setBounds (col (row2, juce::jmin (260, W * 35 / 100), stereoLabel));
+    trimSlider.setBounds (col (row2, row2.getWidth(), trimLabel));
     {
-        auto o = col (row2, 520, outLabel);
-        outABox.setBounds (o.removeFromLeft (220)); o.removeFromLeft (6);
-        outBBox.setBounds (o.removeFromLeft (220)); o.removeFromLeft (6);
-        outSeg.setBounds (o);
+        auto o = col (row3, W / 2, outLabel);
+        auto segR = o.removeFromRight (64);
+        o.removeFromRight (6);
+        outABox.setBounds (o.removeFromLeft (o.getWidth() / 2 - 3));
+        o.removeFromLeft (6);
+        outBBox.setBounds (o);
+        outSeg.setBounds (segR);
     }
     {
-        auto rb = row2.removeFromRight (150);
+        auto rb = row3.removeFromRight (132);
         auto b = rb.withTrimmedTop (16).reduced (0, 2);
-        dimButton.setBounds (b.removeFromLeft (72));
+        dimButton.setBounds (b.removeFromLeft (63));
         b.removeFromLeft (6);
         muteButton.setBounds (b);
-        row2.removeFromRight (14);
+        row3.removeFromRight (12);
     }
-    volumeSlider.setBounds (col (row2, juce::jmax (120, row2.getWidth()), volLabel));
+    volumeSlider.setBounds (col (row3, row3.getWidth(), volLabel));
 
-    meterArea = area.removeFromRight (360);
+    meterArea = area.removeFromRight (juce::jlimit (290, 360, area.getWidth() * 2 / 5));
     area.removeFromRight (8);
     specArea = area;
 }
