@@ -117,6 +117,16 @@ namespace numdeck
         AXIsProcessTrustedWithOptions ((__bridge CFDictionaryRef) opts);
     }
 
+    void KeyTap::resetPermission()
+    {
+        // 一覧で ON に見えても、前の版のアプリの分で効いていないことがある。いったん消して出し直す
+        NSString* bundleId = [[NSBundle mainBundle] bundleIdentifier];
+        if (bundleId == nil) return;
+        NSTask* task = [NSTask launchedTaskWithLaunchPath: @"/usr/bin/tccutil"
+                                                arguments: @[ @"reset", @"Accessibility", bundleId ]];
+        [task waitUntilExit];
+    }
+
     void KeyTap::openPermissionSettings()
     {
         [[NSWorkspace sharedWorkspace] openURL:

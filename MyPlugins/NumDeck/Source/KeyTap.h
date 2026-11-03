@@ -34,6 +34,7 @@ namespace numdeck
 
         static bool hasPermission();
         static void requestPermission();   // 「アクセシビリティ」の許可ダイアログを出す
+        static void resetPermission();     // 古い許可（前の版の分）を消す。許可されていないときだけ使う
         static void openPermissionSettings();
         static bool isLogicFrontmost();
         static bool isLogicRunning();

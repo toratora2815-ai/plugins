@@ -10,6 +10,7 @@ namespace numdeck
     bool KeyTap::isRunning() const         { return false; }
     bool KeyTap::hasPermission()           { return false; }
     void KeyTap::requestPermission()       {}
+    void KeyTap::resetPermission()         {}
     void KeyTap::openPermissionSettings()  {}
     bool KeyTap::isLogicFrontmost()        { return false; }
     bool KeyTap::isLogicRunning()          { return false; }

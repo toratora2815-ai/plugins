@@ -278,6 +278,8 @@ void MainComponent::resized()
         auto f = footerArea;
         settingsPill = f.removeFromRight (70).withSizeKeepingCentre (70, 28);
         f.removeFromRight (8);
+        sizePill = f.removeFromRight (90).withSizeKeepingCentre (90, 28);
+        f.removeFromRight (8);
         onTopPill = f.removeFromRight (120).withSizeKeepingCentre (120, 28);
         f.removeFromRight (8);
         logicOnlyPill = f.removeFromRight (200).withSizeKeepingCentre (200, 28);
@@ -328,6 +330,8 @@ void MainComponent::layoutCompact()
     {
         auto f = footerArea;
         settingsPill = f.removeFromRight (40).withSizeKeepingCentre (40, 18);
+        f.removeFromRight (4);
+        sizePill = f.removeFromRight (50).withSizeKeepingCentre (50, 18);
         f.removeFromRight (4);
         onTopPill = f.removeFromRight (50).withSizeKeepingCentre (50, 18);
         f.removeFromRight (4);
@@ -510,7 +514,7 @@ void MainComponent::paintBanner (juce::Graphics& g)
                 t.removeFromTop (t.getHeight() / 2), juce::Justification::centredLeft);
     g.setColour (sub);
     g.setFont (font (12.0f));
-    g.drawText (juce::String::fromUTF8 ("システム設定 \xe2\x86\x92 プライバシーとセキュリティ \xe2\x86\x92 アクセシビリティ で「Num Deck」を ON"),
+    g.drawText (juce::String::fromUTF8 ("右のボタン \xe2\x86\x92 開いた一覧で「Num Deck」を ON（一覧で ON に見えていても、もう一度 ON に）"),
                 t, juce::Justification::centredLeft);
 }
 
@@ -675,6 +679,7 @@ void MainComponent::paintFooter (juce::Graphics& g)
         if (logicMode)
             drawPill (g, logicOnlyPill, juce::String::fromUTF8 ("Logicだけ"), deck.logicOnly, logicOnlyPill.contains (mouse), 10.0f);
         drawPill (g, onTopPill, juce::String::fromUTF8 ("手前"), deck.alwaysOnTop, onTopPill.contains (mouse), 10.0f);
+        drawPill (g, sizePill, juce::String::fromUTF8 ("大きく"), false, sizePill.contains (mouse), 10.0f);
         drawPill (g, settingsPill, juce::String::fromUTF8 ("設定"), false, settingsPill.contains (mouse), 10.0f);
         g.setColour (sub);
         g.setFont (font (10.0f));
@@ -692,7 +697,10 @@ void MainComponent::paintFooter (juce::Graphics& g)
     g.drawText (ls, x, cy - 10, 90, 20, juce::Justification::centredLeft);
     x += 96;
 
-    // 操作のヒント
+    // 操作のヒント（場所が足りないときは出さない）
+    const int hintLimit = logicMode ? logicOnlyPill.getX() : onTopPill.getX();
+    if (x + 200 < hintLimit)
+    {
     if (deck.toggleKey != Deck::ToggleNone)
     {
         x += drawKeycap (g, x, cy, deck.toggleKey == Deck::ToggleClear ? "Clear" : "=") + 6;
@@ -703,12 +711,14 @@ void MainComponent::paintFooter (juce::Graphics& g)
     x += drawKeycap (g, x, cy, juce::String::fromUTF8 ("\xe2\x88\x92")) + 4;
     x += drawKeycap (g, x, cy, "+") + 6;
     g.setColour (sub);
-    if (x + 60 < (logicMode ? logicOnlyPill.getX() : onTopPill.getX()))
+    if (x + 60 < hintLimit)
         g.drawText (juce::String::fromUTF8 ("ページ"), x, cy - 10, 60, 20, juce::Justification::centredLeft);
+    }
 
     if (logicMode)
         drawPill (g, logicOnlyPill, juce::String::fromUTF8 ("Logic が前面のときだけ"), deck.logicOnly, logicOnlyPill.contains (mouse));
     drawPill (g, onTopPill, juce::String::fromUTF8 ("いつも手前"), deck.alwaysOnTop, onTopPill.contains (mouse));
+    drawPill (g, sizePill, juce::String::fromUTF8 ("小さく"), false, sizePill.contains (mouse));
     drawPill (g, settingsPill, juce::String::fromUTF8 ("設定"), false, settingsPill.contains (mouse));
 }
 
@@ -780,7 +790,7 @@ void MainComponent::mouseMove (const juce::MouseEvent& e)
     auto any = [&] (auto& rects) { return std::any_of (std::begin (rects), std::end (rects), [&] (auto& r) { return r.contains (p); }); };
     const bool clickable = h >= 0 || statusPill.contains (p) || bannerButton.contains (p)
                         || (deck.mode == Deck::ModeLogic && logicOnlyPill.contains (p))
-                        || onTopPill.contains (p) || settingsPill.contains (p)
+                        || onTopPill.contains (p) || settingsPill.contains (p) || sizePill.contains (p)
                         || prevPage.contains (p) || nextPage.contains (p) || any (pageTabs) || any (modeTabs);
     setMouseCursor (clickable ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
     repaint();
@@ -804,6 +814,7 @@ void MainComponent::mouseDown (const juce::MouseEvent& e)
 
     if (bannerButton.contains (p))
     {
+        KeyTap::resetPermission();
         KeyTap::requestPermission();
         KeyTap::openPermissionSettings();
         return;
@@ -818,11 +829,18 @@ void MainComponent::mouseDown (const juce::MouseEvent& e)
     if (deck.mode == Deck::ModeLogic && logicOnlyPill.contains (p)) { deck.logicOnly = ! deck.logicOnly; deck.save(); repaint(); return; }
     if (onTopPill.contains (p))     { deck.alwaysOnTop = ! deck.alwaysOnTop; deck.save(); applyOnTop(); repaint(); return; }
     if (settingsPill.contains (p))  { showSettingsMenu(); return; }
+    if (sizePill.contains (p))      { setWindowSize (! compact); return; }
     for (int i = 0; i < 9; ++i)
         if (tiles[i].contains (p)) { showTileMenu (i); return; }
 }
 
 // ============================================================================
+void MainComponent::setWindowSize (bool small)
+{
+    if (auto* w = findParentComponentOfClass<juce::ResizableWindow>())
+        w->setContentComponentSize (small ? 430 : 860, small ? 300 : 600);
+}
+
 juce::Colour MainComponent::modeAccent() const
 {
     return deck.mode == Deck::ModeLogic ? accent : juce::Colour (0xff4fd6c8);
@@ -971,9 +989,7 @@ void MainComponent::showSettingsMenu()
                          if (r == 10) d.resetCurrentPage();
                          if (r == 11) d.resetCurrentMode();
                          if (r == 20) KeyTap::openPermissionSettings();
-                         if (r == 30 || r == 31)
-                             if (auto* w = safe->findParentComponentOfClass<juce::ResizableWindow>())
-                                 w->setContentComponentSize (r == 30 ? 860 : 430, r == 30 ? 600 : 300);
+                         if (r == 30 || r == 31) safe->setWindowSize (r == 31);
                          safe->repaint();
                      });
 }
