@@ -176,19 +176,18 @@ MainComponent::MainComponent()
         sl->setScrollWheelEnabled (true);
         sl->setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
         sl->setColour (juce::Slider::backgroundColourId, panel);
+        sl->setColour (juce::Slider::trackColourId, juce::Colours::transparentBlack);   // 値の位置まで塗らない（数字だけ）
         sl->setColour (juce::Slider::textBoxOutlineColourId, grid);
         sl->setColour (juce::Slider::textBoxTextColourId, text);
     }
     trimSlider.setRange (-12.0, 12.0, 0.1);
     trimSlider.setMouseDragSensitivity (240);   // 1 ピクセル = 0.1 dB
-    trimSlider.setColour (juce::Slider::trackColourId, refCol.withAlpha (0.25f));
     trimSlider.setTooltip ("Reference level fine-tune. Drag up/down or scroll. Double-click = 0 dB.");
     trimSlider.onValueChange = [this] { engine.trimDb = (float) trimSlider.getValue(); saveSettings(); };
 
     volumeSlider.setRange (-60.0, 6.0, 0.5);
     volumeSlider.setSkewFactorFromMidPoint (-12.0);
     volumeSlider.setMouseDragSensitivity (300);
-    volumeSlider.setColour (juce::Slider::trackColourId, selCol.withAlpha (0.25f));
     volumeSlider.setTooltip ("Monitor volume. Drag up/down or scroll. Double-click = 0 dB.");
     volumeSlider.onValueChange = [this] { engine.volumeDb = (float) volumeSlider.getValue(); saveSettings(); };
 
