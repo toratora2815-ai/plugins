@@ -278,6 +278,7 @@ namespace numdeck
     namespace
     {
         bool unsplitToFullScreen (NSString* path);  // 下で定義
+        bool leaveFullScreenThenHide (NSRunningApplication* app, NSURL* backURL);  // 下で定義
     }
 
     void KeyTap::openApp (const std::string& path)
@@ -301,6 +302,8 @@ namespace numdeck
                         backURL = b.bundleURL;
             if (backURL == nil)
                 backURL = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier: @"com.apple.finder"];
+            // 全画面（1 枚だけ）なら、全画面を解いてから隠す
+            if (leaveFullScreenThenHide (front, backURL)) return;
             if (backURL != nil)
                 [[NSWorkspace sharedWorkspace] openApplicationAtURL: backURL
                                                       configuration: [NSWorkspaceOpenConfiguration configuration]
@@ -525,6 +528,29 @@ namespace numdeck
             dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
                 AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanTrue);
                 CFRelease (win);
+            });
+            return true;
+        }
+
+        // app の前面のウィンドウが全画面なら、全画面を解いて、落ち着いてから隠して backURL のアプリへ。した場合 true
+        bool leaveFullScreenThenHide (NSRunningApplication* app, NSURL* backURL)
+        {
+            if (app.bundleIdentifier == nil) return false;
+            AXUIElementRef win = copyFrontWindow (app.bundleIdentifier);
+            if (win == nullptr) return false;
+            const bool fs = axBool (win, CFSTR ("AXFullScreen"));
+            if (fs) AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
+            CFRelease (win);
+            if (! fs) return false;
+            const pid_t pid = app.processIdentifier;
+            NSURL* back = [backURL copy];
+            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                if (back != nil)
+                    [[NSWorkspace sharedWorkspace] openApplicationAtURL: back
+                                                          configuration: [NSWorkspaceOpenConfiguration configuration]
+                                                      completionHandler: nil];
+                if (NSRunningApplication* a = [NSRunningApplication runningApplicationWithProcessIdentifier: pid])
+                    [a hide];
             });
             return true;
         }
