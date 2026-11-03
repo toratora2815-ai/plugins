@@ -236,6 +236,7 @@ namespace numdeck
                     break;
                 case Resolved::Remote:
                     if (r.remote == "!quitAll") KeyTap::quitAllApps();
+                    else if (r.remote == "!fullHalf") KeyTap::toggleFullScreenOrSplit();
                     else                        KeyTap::sendRemote ("referencemonitor", r.remote.toStdString());
                     break;
             }
@@ -312,7 +313,7 @@ namespace numdeck
             static const char* work[kPages][kSlots] = {
                 { "find",   "save",     "screenshot", "cut",    "copy",      "paste",   "undo",   "redo",   "selectAll", "", "" },
                 { "back",   "address",  "fwd",      "prevTab",  "reload",    "nextTab", "newTab", "closeTab", "reopenTab", "", "" },
-                { "", "", "", "", "", "", "", "", "", "quitAll", "" },
+                { "", "", "", "", "", "", "", "", "", "quitAll", "fullHalf" },
                 { "", "", "", "", "", "", "", "", "", "", "" },
             };
             for (int i = 0; i < kSlots; ++i)
@@ -438,6 +439,14 @@ namespace numdeck
                 auto& s0 = slots[(size_t) ModeLogic][3][9];
                 if (s0.actionId.isEmpty()) s0.actionId = "rmWidth";
                 props->setValue ("refWidthKey", true);
+                save();
+            }
+            // 1.15.0: 業務モードの「アプリ」ページの .（空いていたら）を全画面 ⇔ 半画面に
+            if (! props->getBoolValue ("fullHalfKey", false))
+            {
+                auto& sd = slots[(size_t) ModeWork][2][10];
+                if (sd.actionId.isEmpty()) sd.actionId = "fullHalf";
+                props->setValue ("fullHalfKey", true);
                 save();
             }
             // 1.10.1: 業務モードの「アプリ」ページの 0（空いていたら）をアプリを全部終了に

@@ -58,6 +58,8 @@ namespace numdeck
         static void openApp (const std::string& path);
         // 開いているアプリを全部終了する（Finder と Num Deck 以外。保存していない書類はアプリが聞いてくる）
         static void quitAllApps();
+        // 前のウィンドウ: 左右分割の片側なら単独の全画面に、（さっき分割から出した）全画面なら元の分割に、普通なら全画面に
+        static void toggleFullScreenOrSplit();
         // Chrome があれば Chrome で。profileDir（例: "Profile 2"）を指定すると、そのアカウントで開く
         static void openURL (const std::string& url, const std::string& profileDir = {});
         // 2 画面で開く: ページを Chrome の新しいウィンドウで左半分に、右半分に split

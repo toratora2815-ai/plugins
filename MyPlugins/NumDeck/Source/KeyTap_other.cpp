@@ -24,6 +24,7 @@ namespace numdeck
     void KeyTap::openURL (const std::string&, const std::string&) {}
     void KeyTap::openURLSplit (const std::string&, const std::string&, const std::string&) {}
     void KeyTap::quitAllApps() {}
+    void KeyTap::toggleFullScreenOrSplit() {}
     std::vector<std::pair<std::string, std::string>> KeyTap::chromeProfiles() { return {}; }
     bool KeyTap::chromeFrontPage (std::string&, std::string&) { return false; }
     std::string KeyTap::appDisplayName (const std::string& path) { return path; }

@@ -627,6 +627,147 @@ namespace numdeck
         }
     }
 
+    namespace
+    {
+        void getFrame (AXUIElementRef w, CGPoint& pos, CGSize& size)
+        {
+            CFTypeRef pv = nullptr, sv = nullptr;
+            AXUIElementCopyAttributeValue (w, kAXPositionAttribute, &pv);
+            AXUIElementCopyAttributeValue (w, kAXSizeAttribute, &sv);
+            if (pv != nullptr) { AXValueGetValue ((AXValueRef) pv, (AXValueType) kAXValueCGPointType, &pos); CFRelease (pv); }
+            if (sv != nullptr) { AXValueGetValue ((AXValueRef) sv, (AXValueType) kAXValueCGSizeType, &size); CFRelease (sv); }
+        }
+
+        // pos がある画面の幅（アクセシビリティの座標から）
+        CGFloat screenWidthAt (CGPoint pos)
+        {
+            const CGFloat primaryH = [NSScreen screens].firstObject.frame.size.height;
+            const NSPoint probe = NSMakePoint (pos.x + 2, primaryH - pos.y - 2);
+            for (NSScreen* s in [NSScreen screens])
+                if (NSPointInRect (probe, s.frame)) return s.frame.size.width;
+            return 0;
+        }
+
+        bool inSplit (AXUIElementRef w)
+        {
+            if (! axBool (w, CFSTR ("AXFullScreen"))) return false;
+            CGPoint pos {}; CGSize size {};
+            getFrame (w, pos, size);
+            const CGFloat sw = screenWidthAt (pos);
+            return sw > 0 && size.width < sw * 0.9;
+        }
+
+        // 半画面 → 全画面にしたときの、元の相手（全画面から戻すときに使う）
+        AXUIElementRef lastSelf = nullptr, lastPartner = nullptr;
+        pid_t lastSelfPid = 0, lastPartnerPid = 0;
+        bool lastSelfWasLeft = true;
+
+        void forgetPair()
+        {
+            if (lastSelf != nullptr) CFRelease (lastSelf);
+            if (lastPartner != nullptr) CFRelease (lastPartner);
+            lastSelf = lastPartner = nullptr;
+        }
+
+        // w と一緒に左右分割に入っている、もう片方のウィンドウ（呼んだ側で CFRelease）
+        AXUIElementRef copySplitPartner (AXUIElementRef w, pid_t& partnerPid)
+        {
+            CGPoint pos {}; CGSize size {};
+            getFrame (w, pos, size);
+            for (NSRunningApplication* a in [[NSWorkspace sharedWorkspace] runningApplications])
+            {
+                if (a.activationPolicy != NSApplicationActivationPolicyRegular) continue;
+                AXUIElementRef app = AXUIElementCreateApplication (a.processIdentifier);
+                CFTypeRef wins = nullptr;
+                AXUIElementCopyAttributeValue (app, kAXWindowsAttribute, &wins);
+                CFRelease (app);
+                if (wins == nullptr) continue;
+                AXUIElementRef found = nullptr;
+                for (id x in (__bridge NSArray*) wins)
+                {
+                    AXUIElementRef o = (__bridge AXUIElementRef) x;
+                    if (CFEqual (o, w) || ! inSplit (o)) continue;
+                    CGPoint p2 {}; CGSize s2 {};
+                    getFrame (o, p2, s2);
+                    // 同じ高さの行で、横にずれている
+                    if (std::abs (p2.y - pos.y) < 40 && std::abs (p2.x - pos.x) > 100) { found = (AXUIElementRef) CFRetain (o); break; }
+                }
+                CFRelease (wins);
+                if (found != nullptr) { partnerPid = a.processIdentifier; return found; }
+            }
+            return nullptr;
+        }
+    }
+
+    void KeyTap::toggleFullScreenOrSplit()
+    {
+        NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+        if (front == nil || front.bundleIdentifier == nil) return;
+        AXUIElementRef win = copyFrontWindow (front.bundleIdentifier);
+        if (win == nullptr) return;
+
+        // 1. 左右分割の片側 → 相手を覚えて、このウィンドウだけの全画面に
+        if (inSplit (win))
+        {
+            pid_t partnerPid = 0;
+            AXUIElementRef partner = copySplitPartner (win, partnerPid);
+            forgetPair();
+            if (partner != nullptr)
+            {
+                CGPoint p1 {}, p2 {}; CGSize s1 {}, s2 {};
+                getFrame (win, p1, s1);
+                getFrame (partner, p2, s2);
+                lastSelf = (AXUIElementRef) CFRetain (win);
+                lastPartner = partner;
+                lastSelfPid = front.processIdentifier;
+                lastPartnerPid = partnerPid;
+                lastSelfWasLeft = p1.x < p2.x;
+            }
+            AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
+            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanTrue);
+                CFRelease (win);
+            });
+            return;
+        }
+
+        // 2. 全画面（1 枚）→ さっき半画面から全画面にしたウィンドウなら、元の相手と左右分割に戻す。そうでなければ全画面をやめる
+        if (axBool (win, CFSTR ("AXFullScreen")))
+        {
+            const bool canRestore = lastSelf != nullptr && CFEqual (lastSelf, win)
+                                 && [NSRunningApplication runningApplicationWithProcessIdentifier: lastPartnerPid] != nil;
+            AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
+            if (! canRestore) { CFRelease (win); return; }
+
+            AXUIElementRef partner = (AXUIElementRef) CFRetain (lastPartner);
+            if (axBool (partner, CFSTR ("AXFullScreen")))
+                AXUIElementSetAttributeValue (partner, CFSTR ("AXFullScreen"), kCFBooleanFalse);
+            const bool selfLeft = lastSelfWasLeft;
+            const pid_t selfPid = lastSelfPid, partnerPid = lastPartnerPid;
+            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                const CGRect area = visibleAreaForAX();
+                const CGFloat half = std::floor (area.size.width / 2);
+                const CGRect left  = CGRectMake (area.origin.x, area.origin.y, half, area.size.height);
+                const CGRect right = CGRectMake (area.origin.x + half, area.origin.y, area.size.width - half, area.size.height);
+                AXUIElementRef l = selfLeft ? win : partner;
+                AXUIElementRef r = selfLeft ? partner : win;
+                placeWindow (l, left);
+                placeWindow (r, right);
+                AXUIElementPerformAction (r, kAXRaiseAction);
+                dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                    makeFullScreenSplit (selfLeft ? selfPid : partnerPid, l, area);
+                    CFRelease (win);
+                    CFRelease (partner);
+                });
+            });
+            return;
+        }
+
+        // 3. 普通のウィンドウ → 全画面に
+        AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanTrue);
+        CFRelease (win);
+    }
+
     void KeyTap::openURLSplit (const std::string& url, const std::string& profileDir, const std::string& split)
     {
         NSString* chromeId = @"com.google.Chrome";
