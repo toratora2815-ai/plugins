@@ -77,10 +77,12 @@ Reference Monitor が後ろにあっても届くので、Logic を前に出し�
 | キュー 1 | キュー 2 | キュー 3 |
 | **1** | **2** | **3** |
 | 再生 / 一時停止 | モノラル | 聞こえ方（LISTEN AS）を切替 |
+| **0**（横長） | | |
+| TONE / WIDTH 切替（v1.12.0、Reference Monitor 1.4.0 以降） | | |
 
 1 ページ目の 3 は **出力 A/B 切替**（v1.3.1）。Reference Monitor の OUTPUT A と B（例: AirPods Pro とオーディオインターフェイスのヘッドホン）をすぐ切り替えます。
 
-タイルのメニュー → **Reference Monitor** から、ループ・DIM・ミュート・出力 A / 出力 B・キュー追加・SET MIX・メーターのリセットなども選べます。
+タイルのメニュー → **Reference Monitor** から、ループ・DIM・ミュート・出力 A / 出力 B・SNAP・キュー追加・SET MIX・メーターのリセットなども選べます。
 Reference Monitor を前に出しているときも「Logic が前面のときだけ」と同じに動きます。
 
 **Logic の操作は Logic にだけ届きます（v1.3.3）**：1〜3 ページ目の再生・録音・巻き戻しなど（Logic のキーを送るタイル）は、

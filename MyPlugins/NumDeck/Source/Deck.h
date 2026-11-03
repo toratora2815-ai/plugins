@@ -265,7 +265,7 @@ namespace numdeck
                 { "freeze", "record",   "rmOut",    "rewind",   "play",      "forward", "undo",   "cycle",  "metronome", "inputMon", "lowLatency" },
                 { "mute",   "solo",     "automation", "join",   "split",     "zoom",    "redo",   "repeat", "delete",    "", "" },
                 { "newAudio", "newInst", "bounce",  "pianoRoll", "save",     "loops",   "mixer",  "editor", "library",   "", "" },
-                { "rmPlay", "rmMono",   "rmListen", "rmCue1",   "rmCue2",    "rmCue3",  "rmAB",   "rmMix",  "rmRef",     "", "" },
+                { "rmPlay", "rmMono",   "rmListen", "rmCue1",   "rmCue2",    "rmCue3",  "rmAB",   "rmMix",  "rmRef",     "rmWidth", "" },
             };
             static const char* work[kPages][kSlots] = {
                 { "find",   "save",     "screenshot", "cut",    "copy",      "paste",   "undo",   "redo",   "selectAll", "", "" },
@@ -372,6 +372,14 @@ namespace numdeck
                 auto& s3 = slots[(size_t) ModeLogic][0][2];
                 if (s3.actionId == "capture") { s3 = Slot(); s3.actionId = "rmOut"; }
                 props->setValue ("outSwitch", true);
+                save();
+            }
+            // 1.12.0: Logic Pro モードの「リファレンス」ページの 0（空いていたら）を TONE / WIDTH 切替に
+            if (! props->getBoolValue ("refWidthKey", false))
+            {
+                auto& s0 = slots[(size_t) ModeLogic][3][9];
+                if (s0.actionId.isEmpty()) s0.actionId = "rmWidth";
+                props->setValue ("refWidthKey", true);
                 save();
             }
             // 1.10.1: 業務モードの「アプリ」ページの 0（空いていたら）をアプリを全部終了に

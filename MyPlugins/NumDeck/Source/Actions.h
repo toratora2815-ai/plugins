@@ -97,6 +97,8 @@ namespace numdeck
             { "rmListen",  "聞こえ方を切替",     Cat::RefMon, -1, 0, false, Icon::None, "EAR",  "listen" },
             { "rmListenOff","聞こえ方 OFF",     Cat::RefMon, -1, 0, false, Icon::None, "FLAT", "listenOff" },
             { "rmReset",   "メーターをリセット", Cat::RefMon, -1, 0, false, Icon::None, "RST",  "reset" },
+            { "rmWidth",   "TONE / WIDTH 切替", Cat::RefMon, -1, 0, false, Icon::None, "T/W",  "width" },
+            { "rmSnap",    "SNAP（今のミックスを覚える）", Cat::RefMon, -1, 0, false, Icon::None, "SNAP", "snap" },
             { "rmOut",     "出力 A/B 切替",     Cat::RefMon, -1, 0, false, Icon::None, "OUT",  "out" },
             { "rmOutA",    "出力 A",            Cat::RefMon, -1, 0, false, Icon::None, "OUT A","outA" },
             { "rmOutB",    "出力 B",            Cat::RefMon, -1, 0, false, Icon::None, "OUT B","outB" },
