@@ -42,6 +42,7 @@ private:
     void paintTile (juce::Graphics&, int index);
     void paintTileCompact (juce::Graphics&, int index, juce::Rectangle<float> r, const numdeck::Resolved&, juce::Colour ac);
     void layoutCompact();
+    void layoutTiles (int gap);
     void setWindowSize (bool small);   // 小さい = 430×300、大きい = 860×600
     void paintFooter (juce::Graphics&);
     void paintBanner (juce::Graphics&);
@@ -52,7 +53,7 @@ private:
 
     // 画面の状態
     bool permitted = false, tapRunning = false, logicRunning = false, logicFront = false;
-    std::array<float, 9> flash {};
+    std::array<float, Deck::kSlots> flash {};
     int hoverTile = -1;
     int learnPage = -1, learnIndex = -1;
     float ignoredHint = 0.0f;
@@ -62,7 +63,7 @@ private:
 
     // クリックできる場所
     juce::Rectangle<int> headerArea, statusPill, modeTabs[numdeck::Deck::kModes], pageTabs[numdeck::Deck::kPages], prevPage, nextPage,
-                         gridArea, tiles[9], footerArea, logicOnlyPill, onTopPill, sizePill, settingsPill,
+                         gridArea, tiles[Deck::kSlots], footerArea, logicOnlyPill, onTopPill, sizePill, settingsPill,
                          bannerArea, bannerButton, learnCancel;
 
     std::unique_ptr<juce::AlertWindow> inputWindow;

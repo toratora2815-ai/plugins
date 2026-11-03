@@ -80,6 +80,7 @@ namespace numdeck
     {
     public:
         static constexpr int kPages = 4;
+        static constexpr int kSlots = 10;  // キー 1〜9 と キー 0（添字 9）
         static constexpr int kModes = 2;
         enum Mode { ModeLogic = 0, ModeWork };
         enum ToggleKey { ToggleClear = 0, ToggleEquals, ToggleNone };
@@ -92,7 +93,7 @@ namespace numdeck
         juce::String windowState;  // ウィンドウの位置と大きさ
 
         std::function<void()> onStateChanged;     // ON/OFF やページが変わった
-        std::function<void (int index)> onFired;  // 0..8 のタイルが動いた
+        std::function<void (int index)> onFired;  // 0..8 = キー 1〜9、9 = キー 0 のタイルが動いた
         std::function<void()> onIgnored;          // Logic が前面じゃないので送らなかった
 
         Deck()
@@ -202,7 +203,7 @@ namespace numdeck
             if (! enabled) return false;
 
             const bool isPageKey = pad == PadPlus || pad == PadMinus;
-            const bool isSlot = pad >= Pad1 && pad <= Pad9;
+            const bool isSlot = pad >= Pad0 && pad <= Pad9;
             if (! isPageKey && ! isSlot) return false;
 
             // Reference Monitor を前に出して聴き比べている間も、Logic と同じに扱う
@@ -218,12 +219,13 @@ namespace numdeck
                 return true;
             }
 
-            const auto r = resolve (page(), pad - Pad1);
+            const int index = pad == Pad0 ? 9 : pad - Pad1;
+            const auto r = resolve (page(), index);
             if (! r.valid) return false;  // 「なし」のキーは普通の数字キーとして通す
             if (down && (! repeat || r.repeat))
             {
                 run (r);
-                if (onFired) onFired (pad - Pad1);
+                if (onFired) onFired (index);
             }
             return true;
         }
@@ -233,20 +235,20 @@ namespace numdeck
             auto& page = slots[(size_t) m][(size_t) p];
             for (auto& s : page) s = {};
 
-            // テンキーの並び（7 8 9 / 4 5 6 / 1 2 3）で、キー 1〜9 の順に書く
-            static const char* logic[kPages][9] = {
-                { "freeze", "record",   "rmOut",    "rewind",   "play",      "forward", "undo",   "cycle",  "metronome" },
-                { "mute",   "solo",     "automation", "join",   "split",     "zoom",    "redo",   "repeat", "delete" },
-                { "newAudio", "newInst", "bounce",  "pianoRoll", "save",     "loops",   "mixer",  "editor", "library" },
-                { "rmPlay", "rmMono",   "rmListen", "rmCue1",   "rmCue2",    "rmCue3",  "rmAB",   "rmMix",  "rmRef" },
+            // キー 1〜9、最後がキー 0 の順に書く（テンキーの並びは 7 8 9 / 4 5 6 / 1 2 3 / 0）
+            static const char* logic[kPages][kSlots] = {
+                { "freeze", "record",   "rmOut",    "rewind",   "play",      "forward", "undo",   "cycle",  "metronome", "inputMon" },
+                { "mute",   "solo",     "automation", "join",   "split",     "zoom",    "redo",   "repeat", "delete",    "" },
+                { "newAudio", "newInst", "bounce",  "pianoRoll", "save",     "loops",   "mixer",  "editor", "library",   "" },
+                { "rmPlay", "rmMono",   "rmListen", "rmCue1",   "rmCue2",    "rmCue3",  "rmAB",   "rmMix",  "rmRef",     "" },
             };
-            static const char* work[kPages][9] = {
-                { "find",   "save",     "screenshot", "cut",    "copy",      "paste",   "undo",   "redo",   "selectAll" },
-                { "back",   "address",  "fwd",      "prevTab",  "reload",    "nextTab", "newTab", "closeTab", "reopenTab" },
-                { "", "", "", "", "", "", "", "", "" },
-                { "", "", "", "", "", "", "", "", "" },
+            static const char* work[kPages][kSlots] = {
+                { "find",   "save",     "screenshot", "cut",    "copy",      "paste",   "undo",   "redo",   "selectAll", "" },
+                { "back",   "address",  "fwd",      "prevTab",  "reload",    "nextTab", "newTab", "closeTab", "reopenTab", "" },
+                { "", "", "", "", "", "", "", "", "", "" },
+                { "", "", "", "", "", "", "", "", "", "" },
             };
-            for (int i = 0; i < 9; ++i)
+            for (int i = 0; i < kSlots; ++i)
                 page[(size_t) i] = Slot::fromString (m == ModeLogic ? logic[p][i] : work[p][i]);
 
             if (m == ModeWork && p == 2)
@@ -282,7 +284,7 @@ namespace numdeck
                 for (int p = 0; p < kPages; ++p)
                 {
                     props->setValue (prefix (m) + "pageName" + juce::String (p), names[(size_t) m][(size_t) p]);
-                    for (int i = 0; i < 9; ++i)
+                    for (int i = 0; i < kSlots; ++i)
                         props->setValue (slotKey (m, p, i), slots[(size_t) m][(size_t) p][(size_t) i].toString());
                 }
             }
@@ -291,13 +293,13 @@ namespace numdeck
 
     private:
         std::unique_ptr<juce::PropertiesFile> props;
-        std::array<std::array<std::array<Slot, 9>, kPages>, kModes> slots;
+        std::array<std::array<std::array<Slot, kSlots>, kPages>, kModes> slots;
         std::array<std::array<juce::String, kPages>, kModes> names;
         std::array<int, kModes> pages {};
 
         // Logic Pro モードは 1.0.0 と同じ名前で保存する
         static juce::String prefix (int m) { return m == ModeLogic ? "" : "work_"; }
-        static juce::String slotKey (int m, int p, int i) { return prefix (m) + "slot" + juce::String (p) + "_" + juce::String (i + 1); }
+        static juce::String slotKey (int m, int p, int i) { return prefix (m) + "slot" + juce::String (p) + "_" + juce::String ((i + 1) % 10); }
 
         void changed() { save(); if (onStateChanged) onStateChanged(); }
 
@@ -316,7 +318,7 @@ namespace numdeck
                 {
                     const auto nk = prefix (m) + "pageName" + juce::String (p);
                     if (props->containsKey (nk)) names[(size_t) m][(size_t) p] = props->getValue (nk);
-                    for (int i = 0; i < 9; ++i)
+                    for (int i = 0; i < kSlots; ++i)
                         if (props->containsKey (slotKey (m, p, i)))
                             slots[(size_t) m][(size_t) p][(size_t) i] = Slot::fromString (props->getValue (slotKey (m, p, i)));
                 }
