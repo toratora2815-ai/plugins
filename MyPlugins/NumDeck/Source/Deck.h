@@ -368,6 +368,14 @@ namespace numdeck
                 props->setValue ("outSwitch", true);
                 save();
             }
+            // 1.10.1: 業務モードの「アプリ」ページの 0（空いていたら）をアプリを全部終了に
+            if (! props->getBoolValue ("quitAllKey", false))
+            {
+                auto& s0 = slots[(size_t) ModeWork][2][9];
+                if (s0.actionId.isEmpty()) s0.actionId = "quitAll";
+                props->setValue ("quitAllKey", true);
+                save();
+            }
             // 1.3.2: 1 ページ目の「先頭へ」（Return で足りる）をトラックのフリーズに
             if (! props->getBoolValue ("freezeKey", false))
             {
