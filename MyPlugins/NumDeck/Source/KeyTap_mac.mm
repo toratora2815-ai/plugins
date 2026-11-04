@@ -404,24 +404,39 @@ namespace numdeck
         return r;
     }
 
-    void KeyTap::setOverFullScreen (void* nativeHandle, bool on)
+    // Num Deck のウィンドウ（本体・メニュー・小窓・マクロの画面）を全部、ほかのアプリの全画面の上にも出られるようにする。
+    // メニューなどは開くたびに新しいウィンドウができるので、アプリの画面が更新されるたびに付け直す
+    static bool overFullScreen = false;
+
+    static void applyOverFullScreen (NSWindow* w)
     {
-        NSView* v = (NSView*) nativeHandle;
-        NSWindow* w = v != nil ? v.window : nil;
-        if (w == nil) return;
-        NSWindowCollectionBehavior b = w.collectionBehavior;
+        if ([w isKindOfClass: [NSPanel class]] && w.level >= NSStatusWindowLevel) return;  // 押したときの表示（HUD）はそのまま
         const NSWindowCollectionBehavior extra = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary;
-        if (on)
+        NSWindowCollectionBehavior b = w.collectionBehavior;
+        if (overFullScreen)
         {
-            b &= ~NSWindowCollectionBehaviorMoveToActiveSpace;
-            w.collectionBehavior = b | extra;
-            w.level = NSStatusWindowLevel;
+            b &= ~(NSWindowCollectionBehaviorMoveToActiveSpace | NSWindowCollectionBehaviorFullScreenPrimary);
+            if ((b & extra) != extra) w.collectionBehavior = b | extra;
+            if (w.level < NSFloatingWindowLevel) w.level = NSFloatingWindowLevel;
         }
-        else
-        {
+        else if ((b & extra) != 0)
             w.collectionBehavior = b & ~extra;
-            w.level = NSNormalWindowLevel;
-        }
+    }
+
+    void KeyTap::setOverFullScreen (void*, bool on)
+    {
+        static id observer = nil;
+        overFullScreen = on;
+        for (NSWindow* w in [NSApp windows]) applyOverFullScreen (w);
+        if (observer != nil) return;
+        observer = [[NSNotificationCenter defaultCenter] addObserverForName: NSApplicationDidUpdateNotification object: nil
+                                                                      queue: nil usingBlock: ^(NSNotification*) {
+            if (! overFullScreen) return;
+            for (NSWindow* w in [NSApp windows]) applyOverFullScreen (w);
+        }];
+       #if ! __has_feature(objc_arc)
+        [observer retain];
+       #endif
     }
 
     // 押した操作の名前を、画面の下に一瞬だけ出す（全画面のアプリの上にも出る。クリックは通り抜ける）

@@ -1598,6 +1598,8 @@ void MainComponent::openMacroEditor (int page, int index)
     w->setResizeLimits (520, 420, 1200, 1200);
     w->centreAroundComponent (this, w->getWidth(), w->getHeight());
     w->setVisible (true);
+    // 本体が「いつも手前」（全画面の上にも出る高さ）のときは、マクロの画面も同じ高さにして本体の後ろに隠れないように
+    if (deck.alwaysOnTop) w->setAlwaysOnTop (true);
     w->toFront (true);
     macroWindow.reset (w);
 }
