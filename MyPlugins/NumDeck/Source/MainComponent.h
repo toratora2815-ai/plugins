@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "Deck.h"
+#include "MacroEditor.h"
 
 class MainComponent : public juce::Component, private juce::Timer
 {
@@ -29,6 +30,7 @@ private:
     juce::String toggleKeyLabel() const;
     void registerChromePage (int page, int index);
     void enterUrl (int page, int index);
+    void openMacroEditor (int page, int index);
     void askText (const juce::String& title, const juce::String& message,
                   const std::vector<std::pair<juce::String, juce::String>>& fields,
                   std::function<void (const juce::StringArray&)> done);
@@ -77,6 +79,8 @@ private:
                          bannerArea, bannerButton, learnCancel;
 
     std::unique_ptr<juce::AlertWindow> inputWindow;
+    std::unique_ptr<juce::DocumentWindow> macroWindow;
+    std::function<void (int, int)> learnOverride;   // マクロの画面で覚えさせている間
     std::unique_ptr<juce::FileChooser> chooser;
     std::map<juce::String, juce::Image> iconCache;
 

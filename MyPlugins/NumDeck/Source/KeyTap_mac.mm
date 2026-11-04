@@ -265,6 +265,34 @@ namespace numdeck
         [logic activateWithOptions: 0];
         sendWhenLogicFront (logic.processIdentifier, backPid, keyCode, mods, 0);
     }
+
+    // マクロ用（Logic を前に出したまま何回も送り、最後に 1 回だけ戻す）
+    static pid_t macroBackPid = 0;
+
+    bool KeyTap::bringLogicFront()
+    {
+        macroBackPid = 0;
+        NSRunningApplication* logic = nil;
+        for (NSRunningApplication* app in [[NSWorkspace sharedWorkspace] runningApplications])
+            if (isLogic (app)) { logic = app; break; }
+        NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+        if (logic == nil || (front != nil && front.processIdentifier == logic.processIdentifier)) return false;
+
+        if (front != nil && front.processIdentifier != [NSRunningApplication currentApplication].processIdentifier)
+            macroBackPid = front.processIdentifier;
+        ++sendGeneration;   // 1 つずつ送ったときの「元に戻す」予約を取り消す
+        [logic activateWithOptions: 0];
+        return true;
+    }
+
+    void KeyTap::returnFromLogic()
+    {
+        const pid_t back = macroBackPid;
+        macroBackPid = 0;
+        if (back == 0) return;
+        if (NSRunningApplication* a = [NSRunningApplication runningApplicationWithProcessIdentifier: back])
+            [a activateWithOptions: 0];
+    }
 }
 
 
@@ -803,6 +831,92 @@ namespace numdeck
                                                   configuration: [NSWorkspaceOpenConfiguration configuration]
                                               completionHandler: nil];
             waitAndPlace (bid, nullptr, right, 0, finish);
+        });
+    }
+
+    std::vector<std::string> KeyTap::screenNames()
+    {
+        std::vector<std::string> names;
+        for (NSScreen* s in [NSScreen screens])
+        {
+            NSString* n = nil;
+            if (@available (macOS 10.15, *)) n = s.localizedName;
+            if (n == nil) n = [NSString stringWithFormat: @"Display %lu", (unsigned long) names.size() + 1];
+            names.push_back (n.UTF8String != nullptr ? n.UTF8String : "Display");
+        }
+        return names;
+    }
+
+    namespace
+    {
+        // 名前の画面の、メニューバーと Dock を除いた範囲（アクセシビリティの座標）。見つからなければマウスのある画面
+        CGRect visibleAreaOfScreen (const std::string& name)
+        {
+            if (! name.empty())
+            {
+                const CGFloat primaryH = [NSScreen screens].firstObject.frame.size.height;
+                for (NSScreen* s in [NSScreen screens])
+                {
+                    NSString* n = nil;
+                    if (@available (macOS 10.15, *)) n = s.localizedName;
+                    if (n != nil && name == n.UTF8String)
+                    {
+                        const NSRect v = s.visibleFrame;
+                        return CGRectMake (v.origin.x, primaryH - (v.origin.y + v.size.height), v.size.width, v.size.height);
+                    }
+                }
+            }
+            return visibleAreaForAX();
+        }
+
+        CGRect regionRect (CGRect a, const std::string& region)
+        {
+            const CGFloat hw = std::floor (a.size.width / 2), hh = std::floor (a.size.height / 2);
+            if (region == "left")   return CGRectMake (a.origin.x, a.origin.y, hw, a.size.height);
+            if (region == "right")  return CGRectMake (a.origin.x + hw, a.origin.y, a.size.width - hw, a.size.height);
+            if (region == "top")    return CGRectMake (a.origin.x, a.origin.y, a.size.width, hh);
+            if (region == "bottom") return CGRectMake (a.origin.x, a.origin.y + hh, a.size.width, a.size.height - hh);
+            return a;
+        }
+    }
+
+    void KeyTap::openURLPlaced (const std::string& url, const std::string& profileDir,
+                                const std::string& screen, const std::string& region)
+    {
+        NSString* chromeId = @"com.google.Chrome";
+        if (region.empty() || [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier: chromeId] == nil)
+        {
+            openURL (url, profileDir);
+            return;
+        }
+        // 新しいウィンドウで開き、出てきたら指定の画面の指定の場所へ動かす
+        // （全画面の左右分割のほうにいても、新しいウィンドウは普通のウィンドウとして出るので、そのまま別の画面へ動かせる）
+        const CGRect r = regionRect (visibleAreaOfScreen (screen), region);
+
+        // 前にいたウィンドウが全画面（左右分割も）なら、置いたあとそちらに戻す。
+        // 新しいウィンドウを開くと、その画面が全画面の外（デスクトップ）に切り替わってしまうため
+        NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+        AXUIElementRef backWin = nullptr;
+        pid_t backPid = 0;
+        if (front != nil && front.bundleIdentifier != nil
+            && front.processIdentifier != [NSRunningApplication currentApplication].processIdentifier)
+        {
+            backWin = copyFrontWindow (front.bundleIdentifier);
+            backPid = front.processIdentifier;
+            if (backWin != nullptr && ! axBool (backWin, CFSTR ("AXFullScreen"))) { CFRelease (backWin); backWin = nullptr; }
+        }
+
+        AXUIElementRef before = copyFrontWindow (chromeId);
+        launchChrome (profileDir, @[ @"--new-window", ns (url) ]);
+        waitAndPlace (chromeId, before, r, 0, ^(AXUIElementRef placed) {
+            if (placed != nullptr) AXUIElementPerformAction (placed, kAXRaiseAction);
+            if (backWin == nullptr) return;
+            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                if (NSRunningApplication* a = [NSRunningApplication runningApplicationWithProcessIdentifier: backPid])
+                    [a activateWithOptions: 0];
+                AXUIElementPerformAction (backWin, kAXRaiseAction);
+                CFRelease (backWin);
+            });
         });
     }
 

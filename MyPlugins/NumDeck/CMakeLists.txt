@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
-project(NumDeck VERSION 1.15.0 LANGUAGES C CXX)
+project(NumDeck VERSION 1.16.0 LANGUAGES C CXX)
 if(APPLE)
     enable_language(OBJCXX)
 endif()
@@ -36,7 +36,8 @@ juce_generate_juce_header(NumDeck)
 
 target_sources(NumDeck PRIVATE
     Source/Main.cpp
-    Source/MainComponent.cpp)
+    Source/MainComponent.cpp
+    Source/MacroEditor.cpp)
 
 if(APPLE)
     # テンキーの横取り（CGEventTap）と、Logic へのショートカット送信

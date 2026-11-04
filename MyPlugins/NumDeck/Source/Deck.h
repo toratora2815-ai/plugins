@@ -4,6 +4,106 @@
 // 割り当てと設定。テンキーが押されたら何をするかもここで決める（すべてメインスレッド）
 namespace numdeck
 {
+    // リンクを開くときの設定（どの Chrome アカウントで、どの画面のどこに）
+    struct LinkPlace
+    {
+        juce::String profile, profileName;  // 空 = 設定の「リンクを開く Chrome のアカウント」のまま
+        juce::String screen;                // 画面の名前（例 "Built-in Retina Display"）。空 = マウスのある画面
+        juce::String region;                // "" = 置き直さない（Chrome にまかせる）、"full" / "left" / "right" / "top" / "bottom"
+
+        bool placed() const { return region.isNotEmpty(); }
+
+        void write (juce::DynamicObject& o) const
+        {
+            if (profile.isNotEmpty()) { o.setProperty ("profile", profile); o.setProperty ("profileName", profileName); }
+            if (region.isNotEmpty())  { o.setProperty ("region", region); o.setProperty ("screen", screen); }
+        }
+        void read (const juce::var& v)
+        {
+            profile     = v.getProperty ("profile", "").toString();
+            profileName = v.getProperty ("profileName", "").toString();
+            screen      = v.getProperty ("screen", "").toString();
+            region      = v.getProperty ("region", "").toString();
+        }
+
+        static juce::String regionName (const juce::String& r)
+        {
+            if (r == "full")   return jp ("全体");
+            if (r == "left")   return jp ("左半分");
+            if (r == "right")  return jp ("右半分");
+            if (r == "top")    return jp ("上半分");
+            if (r == "bottom") return jp ("下半分");
+            return jp ("Chrome にまかせる");
+        }
+        // 例「Built-in Retina Display の右半分」
+        juce::String placeText() const
+        {
+            if (! placed()) return regionName ({});
+            return (screen.isNotEmpty() ? screen : jp ("マウスのある画面")) + jp (" の ") + regionName (region);
+        }
+    };
+
+    // マクロの 1 行
+    struct Step
+    {
+        // "key" = 覚えさせたキー、"action" = 一覧の操作、"wait" = 待つ、"app" = アプリを開く、"url" = ページを開く
+        juce::String kind;
+        int keyCode = -1, mods = 0;   // key
+        juce::String actionId;        // action
+        int ms = 0;                   // wait
+        juce::String path;            // app
+        juce::String url, label;      // url（label は名前）
+        LinkPlace place;              // url
+
+        juce::var toVar() const
+        {
+            auto* o = new juce::DynamicObject();
+            o->setProperty ("kind", kind);
+            if (kind == "key")    { o->setProperty ("keyCode", keyCode); o->setProperty ("mods", mods); }
+            if (kind == "action") o->setProperty ("action", actionId);
+            if (kind == "wait")   o->setProperty ("ms", ms);
+            if (kind == "app")    o->setProperty ("path", path);
+            if (kind == "url")    { o->setProperty ("url", url); o->setProperty ("label", label); place.write (*o); }
+            return juce::var (o);
+        }
+        static Step fromVar (const juce::var& v)
+        {
+            Step s;
+            s.kind     = v.getProperty ("kind", "").toString();
+            s.keyCode  = (int) v.getProperty ("keyCode", -1);
+            s.mods     = (int) v.getProperty ("mods", 0);
+            s.actionId = v.getProperty ("action", "").toString();
+            s.ms       = (int) v.getProperty ("ms", 0);
+            s.path     = v.getProperty ("path", "").toString();
+            s.url      = v.getProperty ("url", "").toString();
+            s.label    = v.getProperty ("label", "").toString();
+            s.place.read (v);
+            return s;
+        }
+
+        // 一覧に出す説明（例「キー ⌘C」「待つ 500 ms」）
+        juce::String describe() const
+        {
+            if (kind == "key")    return jp ("キー  ") + shortcutText (keyCode, mods);
+            if (kind == "action")
+            {
+                if (auto* a = findAction (actionId))
+                    return jp (a->name) + (a->remote == nullptr ? "  " + shortcutText (a->keyCode, a->mods) : juce::String());
+                return actionId;
+            }
+            if (kind == "wait")   return jp ("待つ  ") + juce::String (ms) + " ms";
+            if (kind == "app")    return jp ("アプリを開く  ") + juce::String::fromUTF8 (KeyTap::appDisplayName (path.toStdString()).c_str());
+            if (kind == "url")
+            {
+                juce::String t = jp ("ページを開く  ") + (label.isNotEmpty() ? label : juce::URL (url).getDomain());
+                if (place.profileName.isNotEmpty()) t << jp ("（") << place.profileName << jp ("）");
+                if (place.placed()) t << jp (" → ") << place.placeText();
+                return t;
+            }
+            return {};
+        }
+    };
+
     struct Slot
     {
         // 空 = なし（普通の数字キーのまま）、一覧の id、"custom" = 覚えさせたキー、"app" = アプリを開く、"url" = ページを開く
@@ -13,8 +113,10 @@ namespace numdeck
         juce::String path;          // app のとき
         juce::String url;           // url のとき
         juce::String split;         // url のとき、2 画面で開く右側: "" = しない、"chrome" = Chrome の新しいウィンドウ、それ以外 = アプリの場所
+        LinkPlace place;            // url のとき、どのアカウントで・どこに開くか（v1.16.0）
+        std::vector<Step> steps;    // macro のとき（v1.16.0）
 
-        bool isUser() const { return actionId == "custom" || actionId == "app" || actionId == "url"; }
+        bool isUser() const { return actionId == "custom" || actionId == "app" || actionId == "url" || actionId == "macro"; }
 
         juce::String toString() const
         {
@@ -23,7 +125,13 @@ namespace numdeck
             o->setProperty ("type", actionId);
             if (actionId == "custom") { o->setProperty ("keyCode", keyCode); o->setProperty ("mods", mods); }
             if (actionId == "app")    o->setProperty ("path", path);
-            if (actionId == "url")    { o->setProperty ("url", url); if (split.isNotEmpty()) o->setProperty ("split", split); }
+            if (actionId == "url")    { o->setProperty ("url", url); if (split.isNotEmpty()) o->setProperty ("split", split); place.write (*o); }
+            if (actionId == "macro")
+            {
+                juce::Array<juce::var> arr;
+                for (auto& st : steps) arr.add (st.toVar());
+                o->setProperty ("steps", arr);
+            }
             o->setProperty ("label", label);
             return juce::JSON::toString (juce::var (o), true);
         }
@@ -41,6 +149,9 @@ namespace numdeck
                 slot.path     = v.getProperty ("path", "").toString();
                 slot.url      = v.getProperty ("url", "").toString();
                 slot.split    = v.getProperty ("split", "").toString();
+                slot.place.read (v);
+                if (auto* arr = v.getProperty ("steps", {}).getArray())
+                    for (auto& x : *arr) slot.steps.push_back (Step::fromVar (x));
                 if (! slot.isUser()) slot = {};
             }
             else if (s.startsWith ("custom|")) // 1.0.0 の形式
@@ -67,10 +178,12 @@ namespace numdeck
     // 画面と実行に使う、割り当ての中身
     struct Resolved
     {
-        enum Kind { Key, App, Url, Remote };
+        enum Kind { Key, App, Url, Remote, Macro };
         bool valid = false;
         Kind kind = Key;
         juce::String name, glyph, path, url, remote, split;
+        LinkPlace place;
+        std::vector<Step> steps;
         Cat cat = Cat::Custom;
         Icon icon = Icon::None;
         int keyCode = -1, mods = 0;
@@ -205,9 +318,15 @@ namespace numdeck
             }
             else if (s.actionId == "url" && s.url.isNotEmpty())
             {
-                r.valid = true; r.kind = Resolved::Url; r.cat = Cat::Link; r.url = s.url; r.split = s.split;
+                r.valid = true; r.kind = Resolved::Url; r.cat = Cat::Link; r.url = s.url; r.split = s.split; r.place = s.place;
                 r.name = s.label.isNotEmpty() ? s.label : juce::URL (s.url).getDomain();
                 r.glyph = r.name.substring (0, 4).toUpperCase();
+            }
+            else if (s.actionId == "macro")
+            {
+                r.valid = true; r.kind = Resolved::Macro; r.cat = Cat::Macro; r.steps = s.steps;
+                r.name = s.label.isNotEmpty() ? s.label : jp ("マクロ");
+                r.glyph = "M";
             }
             else if (auto* a = findAction (s.actionId))
             {
@@ -221,7 +340,8 @@ namespace numdeck
             return r;
         }
 
-        void run (const Resolved& r) const
+        // index = どのタイルか（マクロの実行中にタイルを光らせる・もう一度押して止めるのに使う）
+        void run (const Resolved& r, int index = -1)
         {
             switch (r.kind)
             {
@@ -230,17 +350,159 @@ namespace numdeck
                     else           KeyTap::sendKey (r.keyCode, r.mods);
                     break;
                 case Resolved::App: KeyTap::openApp (r.path.toStdString()); break;
-                case Resolved::Url:
-                    if (r.split.isNotEmpty()) KeyTap::openURLSplit (r.url.toStdString(), chromeProfile.toStdString(), r.split.toStdString());
-                    else                      KeyTap::openURL (r.url.toStdString(), chromeProfile.toStdString());
-                    break;
-                case Resolved::Remote:
-                    if (r.remote == "!quitAll") KeyTap::quitAllApps();
-                    else if (r.remote == "!fullHalf") KeyTap::toggleFullScreenOrSplit();
-                    else                        KeyTap::sendRemote ("referencemonitor", r.remote.toStdString());
-                    break;
+                case Resolved::Url: openLink (r.url, r.place, r.split); break;
+                case Resolved::Remote: runRemote (r.remote); break;
+                case Resolved::Macro: macro.start (r.steps, mode == ModeLogic, index); break;
             }
         }
+
+        // リンクを開く。アカウントの指定がなければ設定のアカウント。場所の指定があれば、新しいウィンドウでそこに置く
+        void openLink (const juce::String& url, const LinkPlace& place, const juce::String& split = {}) const
+        {
+            const auto prof = (place.profile.isNotEmpty() ? place.profile : chromeProfile).toStdString();
+            if (split.isNotEmpty())   KeyTap::openURLSplit (url.toStdString(), prof, split.toStdString());
+            else if (place.placed())  KeyTap::openURLPlaced (url.toStdString(), prof, place.screen.toStdString(), place.region.toStdString());
+            else                      KeyTap::openURL (url.toStdString(), prof);
+        }
+
+        static void runRemote (const juce::String& remote)
+        {
+            if (remote == "!quitAll") KeyTap::quitAllApps();
+            else if (remote == "!fullHalf") KeyTap::toggleFullScreenOrSplit();
+            else KeyTap::sendRemote ("referencemonitor", remote.toStdString());
+        }
+
+        //======================================================================
+        // マクロを 1 行ずつ順番に実行する（メインスレッドのタイマー。画面は固まらない）
+        //   ・キーとキーの間は 80 ms あける（Logic が取りこぼさないように）
+        //   ・Logic Pro モードでは、最初に 1 回だけ Logic を前に出し、全部送ってから 1 回だけ元のアプリに戻す
+        //   ・業務モードでは、今前にいるアプリに送る（アプリやページを開いた後は、そのアプリに届く）
+        class MacroRunner : private juce::Timer
+        {
+        public:
+            static constexpr int kGapMs = 80;
+
+            explicit MacroRunner (Deck& d) : deck (d) {}
+            ~MacroRunner() override { stopTimer(); }
+
+            bool isRunning() const { return running; }
+            int tile() const { return tileIndex; }
+
+            void start (const std::vector<Step>& s, bool toLogic, int index)
+            {
+                stop();
+                if (s.empty()) return;
+                steps = s;
+                pos = 0;
+                tileIndex = index;
+                running = true;
+                logicMode = toLogic;
+                broughtLogic = false;
+                if (logicMode && needsLogic())
+                {
+                    broughtLogic = KeyTap::bringLogicFront();
+                    waitedForLogic = 0;
+                    startTimer (10);   // Logic が前に来るのを待ってから始める
+                    phase = WaitLogic;
+                    return;
+                }
+                phase = Running;
+                next (0);
+            }
+
+            void stop()
+            {
+                if (! running) return;
+                stopTimer();
+                running = false;
+                finish();
+            }
+
+            std::function<void()> onChanged;   // 始まった・終わった（画面を描き直す）
+
+        private:
+            enum Phase { WaitLogic, Running, Returning };
+
+            bool needsLogic() const
+            {
+                for (auto& st : steps)
+                {
+                    if (st.kind == "key") return true;
+                    if (st.kind == "action")
+                        if (auto* a = findAction (st.actionId); a != nullptr && a->remote == nullptr) return true;
+                }
+                return false;
+            }
+
+            void next (int delayMs)
+            {
+                if (delayMs <= 0) { step(); return; }
+                startTimer (delayMs);
+            }
+
+            void timerCallback() override
+            {
+                stopTimer();
+                if (phase == WaitLogic)
+                {
+                    if (! KeyTap::isLogicFrontmost() && waitedForLogic < 40) { ++waitedForLogic; startTimer (10); return; }
+                    phase = Running;
+                    if (onChanged) onChanged();
+                    step();
+                    return;
+                }
+                if (phase == Returning)
+                {
+                    KeyTap::returnFromLogic();
+                    phase = Running;
+                    return;
+                }
+                step();
+            }
+
+            void step()
+            {
+                if (! running) return;
+                if (pos >= (int) steps.size()) { running = false; finish(); return; }
+                const auto st = steps[(size_t) pos++];
+                int delay = kGapMs;
+
+                if (st.kind == "key")       KeyTap::sendKey (st.keyCode, st.mods);
+                else if (st.kind == "wait") delay = juce::jlimit (0, 60000, st.ms);
+                else if (st.kind == "app")  KeyTap::openApp (st.path.toStdString());
+                else if (st.kind == "url")  deck.openLink (st.url, st.place);
+                else if (st.kind == "action")
+                {
+                    if (auto* a = findAction (st.actionId))
+                    {
+                        if (a->remote != nullptr) runRemote (a->remote);
+                        else                      KeyTap::sendKey (a->keyCode, a->mods);
+                    }
+                }
+                next (delay);
+            }
+
+            void finish()
+            {
+                // Logic を前に出していたら、最後に 1 回だけ元のアプリに戻す（最後のキーが届いてから）
+                if (broughtLogic)
+                {
+                    broughtLogic = false;
+                    phase = Returning;
+                    startTimer (150);
+                }
+                tileIndex = running ? tileIndex : -1;
+                if (onChanged) onChanged();
+            }
+
+            Deck& deck;
+            std::vector<Step> steps;
+            int pos = 0, tileIndex = -1, waitedForLogic = 0;
+            bool running = false, logicMode = false, broughtLogic = false;
+            Phase phase = Running;
+        };
+
+        MacroRunner macro { *this };
 
         bool logicOnlyActive() const { return mode == ModeLogic && logicOnly; }
 
@@ -277,9 +539,16 @@ namespace numdeck
             const int index = pad == Pad0 ? 9 : pad == PadDot ? 10 : pad - Pad1;
             const auto r = resolve (page(), index);
             if (! r.valid) return false;  // 「なし」のキーは普通の数字キーとして通す
+
+            // マクロの実行中に同じキーをもう一度押したら止める
+            if (r.kind == Resolved::Macro && macro.isRunning() && macro.tile() == index)
+            {
+                if (down && ! repeat) macro.stop();
+                return true;
+            }
             if (down && (! repeat || r.repeat))
             {
-                run (r);
+                run (r, index);
                 if (onFired) onFired (index);
             }
             return true;

@@ -104,6 +104,10 @@
   v1.13.0: ページのタブをドラッグで並べ替え、設定の「出すページ」で隠す（設定キー pageOrder / work_pageOrder、例 "0,1,3"。隠したページの割り当ては残る）
   v1.14.0: ON/OFF のキーも覚えさせられる（toggleKey = ToggleLearned(3) + toggleKeyCode）。本人の設定は Home=ON/OFF、Clear(71)=モード切替
   v1.15.0: アプリのページの . = 全画面 ⇔ 半画面（"!fullHalf"、KeyTap::toggleFullScreenOrSplit。分割の相手は AX の窓一覧から探して覚え、戻すときは makeFullScreenSplit）
+  v1.16.0: マクロ（Slot type "macro"、steps = key / action / wait / app / url。Deck::MacroRunner がタイマーで 1 行ずつ、キーの間 80 ms。
+  Logic Pro モードは KeyTap::bringLogicFront で 1 回だけ前に出し、最後に returnFromLogic。同じキーをもう一度で中止。画面は MacroEditor.cpp の別ウィンドウ）。
+  リンクごとの Chrome アカウントと開く場所（LinkPlace: profile / screen（NSScreen.localizedName）/ region = full・left・right・top・bottom。
+  KeyTap::openURLPlaced が --new-window で開いて AX で置き、前が全画面ならそちらに戻す）
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）
 
 ## Claude からの提案（余った利用枠の活用）

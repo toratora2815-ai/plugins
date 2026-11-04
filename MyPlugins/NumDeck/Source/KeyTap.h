@@ -50,6 +50,9 @@ namespace numdeck
         // Logic に送る。Logic が後ろにいるときは一瞬だけ前に出して送り、元のアプリに戻す
         // （Logic は後ろにいる間のキーを受け付けないため）
         static void sendKeyToLogic (int keyCode, int mods);
+        // マクロ用: Logic を前に出す（後ろにいたら true。そのとき前にいたアプリを覚えておく）／覚えておいたアプリに戻す
+        static bool bringLogicFront();
+        static void returnFromLogic();
         static void sendRemote (const std::string& app, const std::string& command); // 自作アプリへの命令（分散通知）
         static bool isRefMonitorFrontmost();
 
@@ -65,6 +68,12 @@ namespace numdeck
         // 2 画面で開く: ページを Chrome の新しいウィンドウで左半分に、右半分に split
         // （"chrome" = Chrome の新しいウィンドウ、それ以外 = そのアプリ）を並べる。マウスのある画面を使う
         static void openURLSplit (const std::string& url, const std::string& profileDir, const std::string& split);
+        // 場所を決めて開く: Chrome の新しいウィンドウで開き、screen（画面の名前。空 = マウスのある画面）の
+        // region（"full" / "left" / "right" / "top" / "bottom"）に置く。その画面が今つながっていなければマウスのある画面
+        static void openURLPlaced (const std::string& url, const std::string& profileDir,
+                                   const std::string& screen, const std::string& region);
+        // つながっている画面の名前（いちばん最初がメインの画面）
+        static std::vector<std::string> screenNames();
         // Chrome のアカウント一覧（フォルダ名, 表示名）。初回は macOS が「ほかのアプリのデータ」へのアクセスを聞く
         static std::vector<std::pair<std::string, std::string>> chromeProfiles();
         static bool chromeFrontPage (std::string& url, std::string& title); // Chrome の前面のタブ

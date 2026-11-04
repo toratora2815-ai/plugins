@@ -170,6 +170,12 @@ MainComponent::MainComponent()
 
     tap.onLearnKey = [this] (int code, int mods)
     {
+        if (learnOverride)   // マクロの画面: 続けて覚えさせる（Esc で終わるまで learning のまま）
+        {
+            auto fn = learnOverride;
+            fn (code, mods);
+            return true;
+        }
         if (learnIndex == kLearnToggleKey)
         {
             if (! (code == 53 && mods == 0)) { deck.toggleKey = Deck::ToggleLearned; deck.toggleKeyCode = code; deck.save(); }
@@ -197,6 +203,7 @@ MainComponent::MainComponent()
     deck.onFired = [this] (int i) { flash[(size_t) i] = 1.0f; repaint(); };
     deck.onStateChanged = [this] { resized(); repaint(); };
     deck.onIgnored = [this] { ignoredHint = 1.0f; repaint(); };
+    deck.macro.onChanged = [this] { repaint(); };
 
     setSize (860, 600);
     refreshStatus();
@@ -208,6 +215,8 @@ MainComponent::~MainComponent()
     tap.onPadKey = nullptr;
     tap.onAnyKey = nullptr;
     tap.onLearnKey = nullptr;
+    deck.macro.onChanged = nullptr;
+    macroWindow = nullptr;
 }
 
 void MainComponent::refreshStatus()
@@ -240,6 +249,9 @@ void MainComponent::timerCallback()
     if (! onTopApplied) applyOnTop();
 
     bool animating = false;
+    // マクロの実行中は、そのタイルを光らせたままにする
+    if (deck.macro.isRunning() && deck.macro.tile() >= 0 && deck.macro.tile() < Deck::kSlots)
+        flash[(size_t) deck.macro.tile()] = juce::jmax (flash[(size_t) deck.macro.tile()], 0.75f + 0.25f * std::sin ((float) tick * 0.3f));
     for (auto& f : flash)
         if (f > 0.0f) { f = juce::jmax (0.0f, f - 0.07f); animating = true; }
     if (ignoredHint > 0.0f) { ignoredHint = juce::jmax (0.0f, ignoredHint - 0.012f); animating = true; }
@@ -637,6 +649,7 @@ void MainComponent::paintTile (juce::Graphics& g, int index)
         const auto sc = res.kind == Resolved::Remote ? (res.remote.startsWith ("!") ? juce::String() : juce::String ("RefMon"))
                       : res.kind == Resolved::Key ? shortcutText (res.keyCode, res.mods)
                       : res.kind == Resolved::App ? juce::String::fromUTF8 ("アプリ")
+                      : res.kind == Resolved::Macro ? juce::String::fromUTF8 ("マクロ ") + juce::String ((int) res.steps.size()) + juce::String::fromUTF8 (" 手順")
                                                   : juce::URL (res.url).getDomain().replace ("www.", "");
         g.setFont (font (12.0f * scale));
         const float sw = juce::jmin (in.getWidth() * 0.35f,
@@ -693,6 +706,7 @@ void MainComponent::paintTile (juce::Graphics& g, int index)
         const auto sc = res.kind == Resolved::Remote ? (res.remote.startsWith ("!") ? juce::String() : juce::String ("RefMon"))
                       : res.kind == Resolved::Key ? shortcutText (res.keyCode, res.mods)
                       : res.kind == Resolved::App ? juce::String::fromUTF8 ("アプリ")
+                      : res.kind == Resolved::Macro ? juce::String::fromUTF8 ("マクロ ") + juce::String ((int) res.steps.size()) + juce::String::fromUTF8 (" 手順")
                                                   : juce::URL (res.url).getDomain().replace ("www.", "");
         const auto scShown = sc.isNotEmpty() ? sc : juce::String::fromUTF8 ("リンク");
         g.setFont (font (12.0f * scale));
@@ -1135,6 +1149,56 @@ void MainComponent::showTileMenu (int index)
         m.addSubMenu (juce::String::fromUTF8 ("2 画面で開く"), split, true, nullptr, current.split.isNotEmpty());
     }
 
+    // リンクごとの Chrome アカウントと、開く場所（v1.16.0）
+    std::vector<std::pair<std::string, std::string>> profiles;
+    std::vector<std::pair<juce::String, juce::String>> placeIds;   // 1201 から → (画面, 場所)
+    if (current.actionId == "url")
+    {
+        profiles = KeyTap::chromeProfiles();
+        juce::PopupMenu acc;
+        acc.addItem (1100, juce::String::fromUTF8 ("設定のアカウントのまま")
+                             + (deck.chromeProfileName.isNotEmpty() ? juce::String::fromUTF8 ("（") + deck.chromeProfileName + juce::String::fromUTF8 ("）") : juce::String()),
+                     true, current.place.profile.isEmpty());
+        for (size_t i = 0; i < profiles.size(); ++i)
+            acc.addItem (1101 + (int) i, juce::String::fromUTF8 (profiles[i].second.c_str()), true,
+                         current.place.profile == juce::String::fromUTF8 (profiles[i].first.c_str()));
+        if (profiles.empty()) acc.addItem (1099, juce::String::fromUTF8 ("（一覧を読めませんでした）"), false);
+        m.addSubMenu (juce::String::fromUTF8 ("このリンクを開くアカウント")
+                        + (current.place.profileName.isNotEmpty() ? juce::String::fromUTF8 ("：") + current.place.profileName : juce::String()),
+                      acc, true, nullptr, current.place.profile.isNotEmpty());
+
+        juce::PopupMenu where;
+        where.addItem (1200, juce::String::fromUTF8 ("Chrome にまかせる（置き直さない）"), true, ! current.place.placed());
+        static const char* regions[] = { "full", "left", "right", "top", "bottom" };
+        auto addScreen = [&] (const juce::String& screenName, const juce::String& shown)
+        {
+            juce::PopupMenu sub;
+            bool any = false;
+            for (auto* rg : regions)
+            {
+                const bool sel = current.place.placed() && current.place.screen == screenName && current.place.region == rg;
+                any = any || sel;
+                placeIds.push_back ({ screenName, rg });
+                sub.addItem (1200 + (int) placeIds.size(), LinkPlace::regionName (rg), true, sel);
+            }
+            where.addSubMenu (shown, sub, true, nullptr, any);
+        };
+        const auto screens = KeyTap::screenNames();
+        for (size_t i = 0; i < screens.size(); ++i)
+        {
+            const auto n = juce::String::fromUTF8 (screens[i].c_str());
+            addScreen (n, n + (i == 0 ? juce::String::fromUTF8 ("（メイン）") : juce::String()));
+        }
+        addScreen ({}, juce::String::fromUTF8 ("マウスのある画面"));
+        m.addSubMenu (juce::String::fromUTF8 ("開く場所：") + current.place.placeText(), where, current.split.isEmpty(), nullptr, current.place.placed());
+    }
+
+    // マクロ（いくつもの操作を順番に）
+    m.addSeparator();
+    m.addItem (1040, current.actionId == "macro" ? juce::String::fromUTF8 ("マクロを直す\xe2\x80\xa6")
+                                                 : juce::String::fromUTF8 ("マクロを作る（いくつもの操作を順番に）\xe2\x80\xa6"),
+               true, current.actionId == "macro");
+
     m.addSeparator();
     m.addItem (1000, juce::String::fromUTF8 ("ショートカットを覚えさせる\xe2\x80\xa6"), true, current.actionId == "custom");
     if (current.isUser())
@@ -1144,7 +1208,7 @@ void MainComponent::showTileMenu (int index)
     juce::Component::SafePointer<MainComponent> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this)
                                                .withTargetScreenArea (localAreaToGlobal (tiles[index])),
-                     [safe, page, index, ids, appIds] (int r)
+                     [safe, page, index, ids, appIds, profiles, placeIds] (int r)
                      {
                          if (safe == nullptr || r == 0) return;
                          auto& self = *safe;
@@ -1164,6 +1228,28 @@ void MainComponent::showTileMenu (int index)
                              return;
                          }
                          if (r == 1033) { self.chooseSplitApp (page, index); return; }
+                         if (r == 1040) { self.openMacroEditor (page, index); return; }
+                         if (r >= 1100 && r <= 1300)
+                         {
+                             auto s = self.deck.slot (page, index);
+                             if (r == 1100) { s.place.profile = {}; s.place.profileName = {}; }
+                             else if (r < 1200 && r - 1101 < (int) profiles.size())
+                             {
+                                 s.place.profile = juce::String::fromUTF8 (profiles[(size_t) (r - 1101)].first.c_str());
+                                 s.place.profileName = juce::String::fromUTF8 (profiles[(size_t) (r - 1101)].second.c_str());
+                             }
+                             else if (r == 1200) { s.place.region = {}; s.place.screen = {}; }
+                             else if (r > 1200 && r - 1201 < (int) placeIds.size())
+                             {
+                                 s.place.screen = placeIds[(size_t) (r - 1201)].first;
+                                 s.place.region = placeIds[(size_t) (r - 1201)].second;
+                             }
+                             self.deck.setSlot (page, index, s);
+                             self.flash[(size_t) index] = 1.0f;
+                             self.repaint();
+                             juce::Timer::callAfterDelay (120, [] { KeyTap::activateLastApp(); });
+                             return;
+                         }
                          Slot s;
                          if (auto a = appIds.find (r); a != appIds.end())
                              s = Slot::app (a->second);
@@ -1365,6 +1451,78 @@ void MainComponent::enterUrl (int page, int index)
                  safe->flash[(size_t) index] = 1.0f;
                  safe->repaint();
              });
+}
+
+// マクロの画面（別ウィンドウ）
+void MainComponent::openMacroEditor (int page, int index)
+{
+    if (macroWindow != nullptr) { macroWindow->toFront (true); return; }
+
+    struct Window : juce::DocumentWindow
+    {
+        std::function<void()> onClose;
+        Window() : DocumentWindow (juce::String::fromUTF8 ("マクロ"), juce::Colour (0xff0d1218), DocumentWindow::closeButton) {}
+        void closeButtonPressed() override { if (onClose) onClose(); }
+    };
+
+    juce::Component::SafePointer<MainComponent> safe (this);
+    auto closeLater = [safe]
+    {
+        juce::MessageManager::callAsync ([safe]
+        {
+            if (safe == nullptr) return;
+            safe->learnOverride = nullptr;
+            safe->tap.learning = false;
+            safe->macroWindow = nullptr;
+            safe->repaint();
+        });
+    };
+
+    MacroEditor::Host host;
+    host.mode = deck.mode;
+    host.learn = [safe] (std::function<void (int, int)> fn)
+    {
+        if (safe == nullptr) return;
+        if (fn != nullptr && ! safe->tap.isRunning())
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                juce::String::fromUTF8 ("先に許可が必要です"),
+                juce::String::fromUTF8 ("キーを覚えさせるには、「アクセシビリティ」の許可をしてください。"));
+            return;
+        }
+        safe->learnOverride = fn;
+        safe->tap.learnAnyKey = false;
+        safe->tap.learning = fn != nullptr;
+    };
+    host.save = [safe, page, index] (const Slot& s)
+    {
+        if (safe == nullptr) return;
+        safe->deck.setSlot (page, index, s);
+        safe->flash[(size_t) index] = 1.0f;
+        safe->repaint();
+    };
+    host.test = [safe] (const std::vector<Step>& steps)
+    {
+        if (safe == nullptr) return;
+        // 前にいたアプリに戻してから実行する（Num Deck の画面にキーが届かないように）
+        KeyTap::activateLastApp();
+        juce::Timer::callAfterDelay (300, [safe, steps]
+        {
+            if (safe != nullptr) safe->deck.macro.start (steps, safe->deck.mode == Deck::ModeLogic, -1);
+        });
+    };
+    host.close = closeLater;
+
+    auto* w = new Window();
+    w->onClose = closeLater;
+    w->setUsingNativeTitleBar (true);
+    w->setContentOwned (new MacroEditor (deck.slot (page, index), host), true);
+    w->setResizable (true, false);
+    w->setResizeLimits (520, 420, 1200, 1200);
+    w->centreAroundComponent (this, w->getWidth(), w->getHeight());
+    w->setVisible (true);
+    w->toFront (true);
+    macroWindow.reset (w);
 }
 
 void MainComponent::renameSlot (int page, int index)

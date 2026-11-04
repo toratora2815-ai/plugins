@@ -6,7 +6,7 @@
 namespace numdeck
 {
     enum class Icon { None, Play, Record, Rewind, Forward, ToStart, Cycle, Metronome, Undo, Redo, Split, Capture };
-    enum class Cat { Transport, Edit, Track, Window, File, RefMon, General, Browser, Custom, App, Link };
+    enum class Cat { Transport, Edit, Track, Window, File, RefMon, General, Browser, Custom, App, Link, Macro };
 
     struct ActionDef
     {
@@ -150,6 +150,7 @@ namespace numdeck
             case Cat::Custom:    return jp ("自分で決めたキー");
             case Cat::App:       return jp ("アプリを開く");
             case Cat::Link:      return jp ("ページを開く");
+            case Cat::Macro:     return jp ("マクロ");
         }
         return {};
     }
@@ -169,6 +170,7 @@ namespace numdeck
             case Cat::Custom:    return juce::Colour (0xffff6fae);
             case Cat::App:       return juce::Colour (0xffe8eef5);
             case Cat::Link:      return juce::Colour (0xff8fd14f);
+            case Cat::Macro:     return juce::Colour (0xffffb84d);
         }
         return juce::Colours::grey;
     }

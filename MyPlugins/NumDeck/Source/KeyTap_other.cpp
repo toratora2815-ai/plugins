@@ -23,6 +23,10 @@ namespace numdeck
     void KeyTap::openApp (const std::string&) {}
     void KeyTap::openURL (const std::string&, const std::string&) {}
     void KeyTap::openURLSplit (const std::string&, const std::string&, const std::string&) {}
+    void KeyTap::openURLPlaced (const std::string&, const std::string&, const std::string&, const std::string&) {}
+    std::vector<std::string> KeyTap::screenNames() { return {}; }
+    bool KeyTap::bringLogicFront() { return false; }
+    void KeyTap::returnFromLogic() {}
     void KeyTap::quitAllApps() {}
     void KeyTap::toggleFullScreenOrSplit() {}
     std::vector<std::pair<std::string, std::string>> KeyTap::chromeProfiles() { return {}; }
