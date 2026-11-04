@@ -128,8 +128,7 @@ namespace numdeck
         }
     };
 
-    static void trackActivations();
-    KeyTap::KeyTap() : impl (std::make_unique<Impl> (*this)) { trackActivations(); }
+    KeyTap::KeyTap() : impl (std::make_unique<Impl> (*this)) {}
     KeyTap::~KeyTap() = default;
 
     bool KeyTap::start()            { return impl->start(); }
@@ -190,30 +189,6 @@ namespace numdeck
     }
 
     static pid_t lastFrontPid = 0;
-
-    // 前面になったアプリの順番（Num Deck 自身は数えない）。「全画面 ⇔ 半画面」で、全画面から半画面にするときの相手に使う
-    static pid_t curAppPid = 0, prevAppPid = 0;
-
-    static void trackActivations()
-    {
-        static id observer = nil;
-        if (observer != nil) return;
-        const pid_t self = [NSRunningApplication currentApplication].processIdentifier;
-        if (NSRunningApplication* f = [[NSWorkspace sharedWorkspace] frontmostApplication])
-            if (f.processIdentifier != self) curAppPid = f.processIdentifier;
-        observer = [[[NSWorkspace sharedWorkspace] notificationCenter]
-                        addObserverForName: NSWorkspaceDidActivateApplicationNotification object: nil
-                                     queue: [NSOperationQueue mainQueue]
-                                usingBlock: ^(NSNotification* n) {
-                                    NSRunningApplication* a = n.userInfo[NSWorkspaceApplicationKey];
-                                    if (a == nil || a.processIdentifier == self || a.processIdentifier == curAppPid) return;
-                                    prevAppPid = curAppPid;
-                                    curAppPid = a.processIdentifier;
-                                }];
-       #if ! __has_feature(objc_arc)
-        [observer retain];
-       #endif
-    }
 
     void KeyTap::rememberFrontApp()
     {
@@ -901,16 +876,6 @@ namespace numdeck
             return sw > 0 && size.width < sw * 0.9;
         }
 
-        // 半画面 → 全画面にしたときの、元の相手（全画面から戻すときに使う）。最近の 6 組まで覚える
-        struct SplitPair { AXUIElementRef self, partner; pid_t selfPid, partnerPid; bool selfLeft; };
-        std::vector<SplitPair> splitPairs;
-
-        void forgetPairOf (AXUIElementRef w)
-        {
-            for (auto it = splitPairs.begin(); it != splitPairs.end(); ++it)
-                if (CFEqual (it->self, w)) { CFRelease (it->self); CFRelease (it->partner); splitPairs.erase (it); return; }
-        }
-
         bool stillExists (AXUIElementRef w)
         {
             if (w == nullptr) return false;
@@ -946,34 +911,6 @@ namespace numdeck
             });
         }
 
-        // w と一緒に左右分割に入っている、もう片方のウィンドウ（呼んだ側で CFRelease）
-        AXUIElementRef copySplitPartner (AXUIElementRef w, pid_t& partnerPid)
-        {
-            CGPoint pos {}; CGSize size {};
-            getFrame (w, pos, size);
-            for (NSRunningApplication* a in [[NSWorkspace sharedWorkspace] runningApplications])
-            {
-                if (a.activationPolicy != NSApplicationActivationPolicyRegular) continue;
-                AXUIElementRef app = AXUIElementCreateApplication (a.processIdentifier);
-                CFTypeRef wins = nullptr;
-                AXUIElementCopyAttributeValue (app, kAXWindowsAttribute, &wins);
-                CFRelease (app);
-                if (wins == nullptr) continue;
-                AXUIElementRef found = nullptr;
-                for (id x in (__bridge NSArray*) wins)
-                {
-                    AXUIElementRef o = (__bridge AXUIElementRef) x;
-                    if (CFEqual (o, w) || ! inSplit (o)) continue;
-                    CGPoint p2 {}; CGSize s2 {};
-                    getFrame (o, p2, s2);
-                    // 同じ高さの行で、横にずれている
-                    if (std::abs (p2.y - pos.y) < 40 && std::abs (p2.x - pos.x) > 100) { found = (AXUIElementRef) CFRetain (o); break; }
-                }
-                CFRelease (wins);
-                if (found != nullptr) { partnerPid = a.processIdentifier; return found; }
-            }
-            return nullptr;
-        }
     }
 
     void KeyTap::toggleFullScreenOrSplit()
@@ -983,20 +920,9 @@ namespace numdeck
         AXUIElementRef win = copyFrontWindow (front.bundleIdentifier);
         if (win == nullptr) return;
 
-        // 1. 左右分割の片側 → 相手を覚えて、このウィンドウだけの全画面に
+        // 1. 左右分割の片側 → このウィンドウだけの全画面に
         if (inSplit (win))
         {
-            pid_t partnerPid = 0;
-            AXUIElementRef partner = copySplitPartner (win, partnerPid);
-            forgetPairOf (win);
-            if (partner != nullptr)
-            {
-                CGPoint p1 {}, p2 {}; CGSize s1 {}, s2 {};
-                getFrame (win, p1, s1);
-                getFrame (partner, p2, s2);
-                splitPairs.push_back ({ (AXUIElementRef) CFRetain (win), partner, front.processIdentifier, partnerPid, p1.x < p2.x });
-                if (splitPairs.size() > 6) { CFRelease (splitPairs.front().self); CFRelease (splitPairs.front().partner); splitPairs.erase (splitPairs.begin()); }
-            }
             showHUD ("全画面");
             AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
             waitFor (^{ return ! isFullScreen (win); }, 4000, ^(bool) {
@@ -1008,33 +934,10 @@ namespace numdeck
             return;
         }
 
-        // 2. 全画面（1 枚）→ 半画面から全画面にしたウィンドウなら、元の相手と左右分割に戻す。そうでなければ全画面をやめる
-        if (axBool (win, CFSTR ("AXFullScreen")))
+        // 2. 全画面（1 枚）→ 全画面を解除するだけ（2 画面には戻さない）
+        if (isFullScreen (win))
         {
-            for (auto& pr : splitPairs)
-            {
-                if (! CFEqual (pr.self, win)) continue;
-                if (! stillExists (pr.partner)) break;
-                showHUD ("半画面");
-                if (pr.selfLeft) resplit (pr.self, pr.selfPid, pr.partner, pr.partnerPid);
-                else             resplit (pr.partner, pr.partnerPid, pr.self, pr.selfPid);
-                CFRelease (win);
-                return;
-            }
-            // 覚えている相手がいなければ、その前に使っていたアプリのウィンドウを右にして半画面にする
-            const pid_t otherPid = front.processIdentifier == curAppPid ? prevAppPid : curAppPid;
-            NSRunningApplication* other = otherPid != 0 ? [NSRunningApplication runningApplicationWithProcessIdentifier: otherPid] : nil;
-            AXUIElementRef partner = (other != nil && other.bundleIdentifier != nil && otherPid != front.processIdentifier)
-                                       ? copyFrontWindow (other.bundleIdentifier) : nullptr;
-            if (partner != nullptr)
-            {
-                showHUD ("半画面");
-                resplit (win, front.processIdentifier, partner, otherPid);
-                CFRelease (partner);
-                CFRelease (win);
-                return;
-            }
-            showHUD ("全画面をやめる");
+            showHUD ("全画面を解除");
             AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
             CFRelease (win);
             return;
