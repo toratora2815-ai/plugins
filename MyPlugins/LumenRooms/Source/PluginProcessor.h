@@ -51,6 +51,7 @@ public:
     juce::String importPreset (const juce::File&);
     juce::String getImportedName() const { return importedName; }
     static juce::File defaultPresetFolder();
+    static juce::File userPresetFolder();
 
 private:
     void timerCallback() override;

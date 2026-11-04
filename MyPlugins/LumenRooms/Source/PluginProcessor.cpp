@@ -384,9 +384,18 @@ LumenRoomsProcessor::ErView LumenRoomsProcessor::getErView() const
 
 juce::File LumenRoomsProcessor::defaultPresetFolder()
 {
-    // 参考にしたリバーブの工場出荷プリセットが入っている場所（入っていなければホーム）
+    // まずこの Mac に取っておいた控え（参考リバーブを消しても残る）、なければ元の場所
+    const auto backup = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                            .getChildFile ("MyPlugins/LumenRooms/Presets");
+    if (backup.isDirectory()) return backup;
     const juce::File f ("/Library/Application Support/LiquidSonics/Cinematic Rooms Professional/Factory Presets");
     return f.isDirectory() ? f : juce::File::getSpecialLocation (juce::File::userHomeDirectory);
+}
+
+juce::File LumenRoomsProcessor::userPresetFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+        .getChildFile ("LiquidSonics/Cinematic Rooms Professional/User Presets");
 }
 
 void LumenRoomsProcessor::setParam (const char* id, float value)

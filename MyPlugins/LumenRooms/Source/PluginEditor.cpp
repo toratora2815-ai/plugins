@@ -505,8 +505,8 @@ void LumenRoomsEditor::showLoadMenu()
     auto files = std::make_shared<std::vector<juce::File>>();
     juce::PopupMenu menu;
     const auto folder = LumenRoomsProcessor::defaultPresetFolder();
-    if (folder.getFileName() == "Factory Presets") addFolderToMenu (menu, folder, *files, 0);
-    const juce::File user = folder.getParentDirectory().getChildFile ("User Presets");
+    if (folder.getFileName() == "Factory Presets" || folder.getFileName() == "Presets") addFolderToMenu (menu, folder, *files, 0);
+    const juce::File user = LumenRoomsProcessor::userPresetFolder();
     if (user.isDirectory()) { juce::PopupMenu um; addFolderToMenu (um, user, *files, 1); if (um.getNumItems() > 0) menu.addSubMenu ("User Presets", um); }
     menu.addSeparator();
     menu.addItem (100000, "Open file...");
