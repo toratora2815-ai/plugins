@@ -33,7 +33,7 @@ struct ReflParams
 
 struct TailParams
 {
-    float timeSec      = 3.3f;   // 中域の残響時間（>= 60 で無限）
+    float timeSec      = 2.25f;  // 中域の残響時間 RT60（>= 60 で無限）
     float bloom        = 2.5f;   // 0..10 立ち上がりのふくらみ
     float bassFreq     = 290.0f, bassMult = 1.0f;
     float trebFreq     = 4300.0f, trebMult = 1.0f;
@@ -125,10 +125,12 @@ struct Rolloff
     float p = 0, z[4] {}; int slope = 1; bool bypass = false;
     void set (float fc, int sl, float sr)
     {
-        static const float k[5] = { 1.0f, 1.59f, 1.15f, 1.2f, 1.15f };
+        // 本物の効き方に合わせた補正（6 dB/oct は高い周波数ほど少しなだらか、急な傾きはわずかに低め）
         slope = std::clamp (sl, 1, 4);
         bypass = fc >= 0.49f * sr;
-        p = std::exp (-2.0f * (float) kPi * fc * k[slope] / sr);
+        const float khz = fc * 0.001f;
+        const float k = slope == 1 ? 1.1f + 0.025f * khz : std::max (0.82f, 1.02f - 0.011f * khz);
+        p = std::exp (-2.0f * (float) kPi * std::min (fc * k, 0.49f * sr) / sr);
     }
     inline float process (float x)
     {
@@ -137,6 +139,23 @@ struct Rolloff
         return x;
     }
     void reset() { for (auto& v : z) v = 0; }
+};
+
+// 音色の型（COLOR）用のグラフィック EQ。帯域は固定、ゲイン（dB）だけ外から入れる
+struct GraphicEQ
+{
+    static constexpr int B = 11;
+    static const float* freqs() { static const float f[B] = { 31.5f, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 11300, 16000 }; return f; }
+    static constexpr float Q = 1.3f;
+    Biquad b[B]; bool on = false;
+    void set (const float* gainsDb, float sr)
+    {
+        on = gainsDb != nullptr;
+        if (! on) return;
+        for (int i = 0; i < B; ++i) b[i].peak (freqs()[i], Q, gainsDb[i], sr);
+    }
+    inline float process (float x) { if (! on) return x; for (auto& f : b) x = f.process (x); return x; }
+    void reset() { for (auto& f : b) f.reset(); }
 };
 
 // 1 次シェルフ（ループ内の減衰の周波数差に使う。境目の周波数で dB が半分になる形）
@@ -302,6 +321,8 @@ public:
         for (int i = 0; i < 4; ++i) inDiff[i].init ((int) (difMs[i] * 0.001f * sr * (seed & 1 ? 1.07f : 1.0f)), 0.62f);
         for (int k = 0; k < kTaps; ++k) { tapJitter[k] = 0.5f + 0.5f * r.next(); tapSign[k] = r.next() > 0 ? 1.0f : -1.0f; }
         bloomLine.init ((int) (0.45f * sr));
+        static const float bMs[8] = { 7.1f, 11.3f, 17.9f, 23.3f, 31.1f, 41.9f, 53.3f, 67.1f };
+        for (int i = 0; i < 8; ++i) { boostLen[i] = (int) (bMs[i] * 0.001f * sr * (seed & 1 ? 1.06f : 1.0f)); boostLine[i].init (boostLen[i] + 2); }
         pre.init ((int) (0.55f * sr));
         echo.init ((int) (1.6f * sr));
         (void) sc;
@@ -317,6 +338,7 @@ public:
         for (auto& d : inDiff) d.clear();
         bloomLine.clear(); pre.clear(); echo.clear();
         echoLp.reset(); boostLp.reset(); boostLp2.reset();
+        for (auto& b : boostLine) b.clear();
     }
 
     // 調整用の定数（テストプログラムから変えて合わせ込む）
@@ -326,15 +348,16 @@ public:
         float earlyGain = 0.1f;
         float modMaxMs = 0.35f;
         float levelOffsetDb = 12.0f;
-        float bassFc = 1.0f, bassK = 1.0f;
+        float bassFc = 1.0f, bassK = 1.0f, bloomRtPow = 0.5f;
+        float boostGain = 0.5f, boostHz = 110.0f, boostTimeMin = 0.03f, boostTimeMax = 0.5f, boostDirect = 0.0f;
     } tune;
 
     void setParams (const TailParams& p)
     {
         params = p;
         infinite = p.timeSec >= 60.0f;
-        // 表示の残響時間は「90 dB 下がるまで」の時間（ふつうの RT60 の 1.5 倍）
-        const float T = std::max (0.05f, p.timeSec) / 1.5f;
+        // 残響時間 = 60 dB 下がるまでの時間（RT60）
+        const float T = std::max (0.05f, p.timeSec);
         for (int i = 0; i < N; ++i)
         {
             const float dsec = (len[i] + (float) apLen[i] + 0.5f * modSamplesFor (p)) / sr;
@@ -355,12 +378,15 @@ public:
             hi3[i].highShelf (std::pow (10.0f, -0.6f * extra / 20.0f), fcEff * 5.657f, sr);
         }
         // 立ち上がり（BLOOM）：入力を少しずつずらしたタップで FDN に流し込む
-        const float span = tune.tapSpanMs + tune.tapSpanPerBloom * p.bloom;
+        // 立ち上がりの長さは残響時間の平方根に比例して伸び縮みする（本物の測定どおり）
+        const float rtRatio = (infinite ? 40.0f : p.timeSec) / 2.25f;
+        const float rtScale = std::clamp (std::pow (rtRatio, rtRatio < 1.0f ? 1.0f : tune.bloomRtPow), 0.12f, 3.0f);
+        const float span = (tune.tapSpanMs + tune.tapSpanPerBloom * p.bloom) * rtScale;
         double e = 0;
         for (int k = 0; k < kTaps; ++k)
         {
             const float x = ((float) k + tapJitter[k]) / (float) kTaps;
-            tapPos[k] = (int) ((tune.tapMinMs + span * x) * 0.001f * sr);
+            tapPos[k] = (int) ((tune.tapMinMs * std::min (1.0f, rtScale) + span * x) * 0.001f * sr);
             tapGain[k] = tapSign[k] * std::pow (1.0f - 0.999f * x, tune.tapFall) * (0.3f + std::pow (x, tune.tapCurve));
             e += tapGain[k] * tapGain[k];
         }
@@ -370,9 +396,14 @@ public:
         echoSamples = std::clamp (p.echoMs * 0.001f * sr, 1.0f, 1.55f * sr);
         echoGain = p.echoDb <= -99.0f ? 0.0f : std::pow (10.0f, p.echoDb / 20.0f);
         echoLp.setLP (p.echoRollHz, sr);
-        boostGain = p.lowBoostDb <= -99.0f ? 0.0f : std::pow (10.0f, p.lowBoostDb / 20.0f) * (0.08f + 0.2f * p.lowBoostWeight);
-        boostLp.lp (110.0 + 60.0 * p.lowBoostWeight, 0.7071, sr);
-        boostLp2.lp (110.0 + 60.0 * p.lowBoostWeight, 0.7071, sr);
+        // LOW BOOST：出だしに低音のふくらみを足す。WEIGHT はふくらみが続く長さ（Tight 約 50 ms → Heavy 約 250 ms）
+        boostGain = p.lowBoostDb <= -99.0f ? 0.0f : std::pow (10.0f, p.lowBoostDb / 20.0f) * tune.boostGain;
+        boostLp.lp (tune.boostHz, 0.7071, sr);
+        boostLp2.lp (tune.boostHz, 0.7071, sr);
+        {
+            const float tw = tune.boostTimeMin + (tune.boostTimeMax - tune.boostTimeMin) * std::clamp (p.lowBoostWeight, 0.0f, 1.0f);
+            for (int i = 0; i < 8; ++i) boostG[i] = std::pow (10.0f, -3.0f * (float) boostLen[i] / sr / tw);
+        }
 
         modSamples = modSamplesFor (p);
         modInc = 2.0f * (float) kPi * std::max (0.01f, p.modRateHz) / sr;
@@ -383,7 +414,7 @@ public:
         const float Teff = infinite ? 40.0f : p.timeSec;
         const float lt = std::log10 (std::clamp (Teff, 0.2f, 40.0f));
         const float targetDb = interpTarget (lt);
-        outGain = std::pow (10.0f, (targetDb - 10.0f * std::log10 (Teff / 1.5f) + tune.levelOffsetDb) / 20.0f);
+        outGain = std::pow (10.0f, (targetDb - 10.0f * std::log10 (Teff) + tune.levelOffsetDb) / 20.0f);
     }
 
     inline float process (float x)
@@ -397,6 +428,20 @@ public:
         echo.push (in);
         if (echoGain > 0) in += echoGain * echoLp.process (echo.frac (echoSamples));
 
+        float boostOut = 0;
+        if (boostGain > 0)
+        {
+            const float bIn = boostLp2.process (boostLp.process (in));
+            float v[8];
+            for (int i = 0; i < 8; ++i) v[i] = boostLine[i].at (boostLen[i] - 1);
+            boostOut = tune.boostDirect * bIn;
+            for (int i = 0; i < 8; ++i) boostOut += v[i] * (i & 2 ? -0.35f : 0.35f);
+            for (int h = 1; h < 8; h <<= 1)
+                for (int i = 0; i < 8; i += h << 1)
+                    for (int j = i; j < i + h; ++j) { const float a = v[j], b = v[j + h]; v[j] = a + b; v[j + h] = a - b; }
+            const float nrm = 0.35355339f;
+            for (int i = 0; i < 8; ++i) boostLine[i].push (v[i] * nrm * boostG[i] + (i & 1 ? -bIn : bIn));
+        }
         for (auto& d : inDiff) in = d.process (in);
         bloomLine.push (in);
 
@@ -446,7 +491,7 @@ public:
         }
 
         float o = (out * 0.25f + tune.earlyGain * early) * outGain;
-        if (boostGain > 0) o += boostGain * boostLp2.process (boostLp.process (o));
+        o += boostGain * boostOut;
         return o;
     }
 
@@ -454,12 +499,13 @@ private:
     static float interpTarget (float lt)
     {
         // 実測した「残響時間ごとの全体の音量（dB）」。log10(秒) で補間
-        static const float xs[] = { std::log10 (0.3f), std::log10 (1.29f), std::log10 (3.29f), std::log10 (14.7f), std::log10 (40.0f) };
-        static const float ys[] = { -9.0f, -8.7f, -4.95f, -3.4f, -2.8f };
+        static const float xs[] = { std::log10 (0.2f), std::log10 (0.26f), std::log10 (0.47f), std::log10 (0.86f), std::log10 (1.45f), std::log10 (2.26f), std::log10 (4.55f), std::log10 (9.8f), std::log10 (40.0f) };
+        static const float ys[] = { -18.1f, -16.75f, -14.12f, -11.3f, -8.46f, -6.05f, -2.91f, -3.6f, -3.0f };
+        constexpr int n = 9;
         if (lt <= xs[0]) return ys[0];
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < n - 1; ++i)
             if (lt <= xs[i + 1]) { float f = (lt - xs[i]) / (xs[i + 1] - xs[i]); return ys[i] + f * (ys[i + 1] - ys[i]); }
-        return ys[4];
+        return ys[n - 1];
     }
 
     static constexpr int kTaps = 24;
@@ -473,6 +519,7 @@ private:
     int tapPos[kTaps] {}; float tapGain[kTaps] {}, tapJitter[kTaps] {}, tapSign[kTaps] {};
     float preSamples = 0, echoSamples = 1, echoGain = 0, modSamples = 0, modInc = 0, undAmt = 0, undInc = 0, outGain = 1;
     float boostGain = 0, inGain = 1;
+    Delay boostLine[8]; int boostLen[8] {}; float boostG[8] {};
     OnePole echoLp; Biquad boostLp, boostLp2;
 };
 
@@ -543,12 +590,20 @@ public:
     }
     Tail& tailAt (int i) { return tail[i]; }
 
+    // 音色の型（nullptr = なし）。gains は GraphicEQ::B 個の dB
+    void setProfiles (const float* revGains, const float* erGains)
+    {
+        const bool rc = revGains != lastRev, ec = erGains != lastEr;
+        if (rc) { for (auto& e : revEq) { e.set (revGains, sr); e.reset(); } lastRev = revGains; }
+        if (ec) { for (auto& e : erEq) { e.set (erGains, sr); e.reset(); } lastEr = erGains; }
+    }
+
     // io: 入力（上書きで出力）、erL/erR: 反射の畳み込み結果
     void process (float* L, float* R, const float* erL, const float* erR, int n)
     {
         const float reflG = mixLaw (1.0f - mp.reflRev) * dbOrOff (mp.reflTrimDb);
         const float revG = mixLaw (mp.reflRev) * dbOrOff (mp.revTrimDb);
-        const float wet = mixLaw (mp.dryWet) * std::pow (10.0f, mp.masterDb / 20.0f);
+        const float wet = mixLaw (mp.dryWet) * std::pow (10.0f, (mp.masterDb + 0.8f) / 20.0f);   // +0.8 dB: 本物との音量合わせ
         const float dry = mixLaw (1.0f - mp.dryWet);
         for (int i = 0; i < n; ++i)
         {
@@ -558,7 +613,8 @@ public:
             float fromR = xfSamples < 1 ? inR : xf[1].frac (xfSamples);
             const float tl = tail[0].process (inL + xfGain * xfLp[1].process (fromR));
             const float tr = tail[1].process (inR + xfGain * xfLp[0].process (fromL));
-            float rl = lowCut[0].process (roll[0].process (tl)), rr = lowCut[1].process (roll[1].process (tr));
+            float rl = revEq[0].process (lowCut[0].process (roll[0].process (tl)));
+            float rr = revEq[1].process (lowCut[1].process (roll[1].process (tr)));
             // テールの幅
             { float mm = 0.5f * (rl + rr), ss = 0.5f * (rl - rr) * mp.revWidth; rl = mm + ss; rr = mm - ss; }
             float el = erL[i], er = erR[i];
@@ -568,6 +624,7 @@ public:
                 el = erMod[0].frac (base + erDepth * std::sin (erPhase));
                 er = erMod[1].frac (base + erDepth * std::sin (erPhase + 1.9f));
                 erPhase += erInc; if (erPhase > 2 * (float) kPi) erPhase -= 2 * (float) kPi;
+                el = erEq[0].process (el); er = erEq[1].process (er);
             }
             { float mm = 0.5f * (el + er), ss = 0.5f * (el - er) * mp.reflWidth; el = mm + ss; er = mm - ss; }
             float wl = reflG * el + revG * rl, wr = reflG * er + revG * rr;
@@ -590,6 +647,7 @@ private:
     Delay xf[2]; OnePole xfLp[2]; float xfGain = 0.7f, xfSamples = 0;
     Rolloff roll[2]; Biquad lowCut[2];
     Delay erMod[2]; float erDepth = 0, erInc = 0, erPhase = 0;
+    GraphicEQ revEq[2], erEq[2]; const float* lastRev = nullptr; const float* lastEr = nullptr;
     Biquad eq[2][4]; Rolloff eqRoll[2];
     std::vector<float> tmpL, tmpR;
 };

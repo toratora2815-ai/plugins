@@ -1,6 +1,7 @@
 // テスト用：Lumen Rooms のエンジンだけで音を書き出す（JUCE なし）
 // 使い方: render_mine out.wav 秒 L|R|S1000|F:in.wav key=value ...
 #include "../Source/RoomEngine.h"
+#include "../Source/ProfileTable.h"
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -39,13 +40,18 @@ int main (int argc, char** argv)
     ReflParams rp; rp.pattern = (int) get ("pattern", 0); rp.size = get ("size", 0.5f); rp.proximity = (int) get ("prox", 2);
     rp.reflectivity = get ("reflectivity", 0.5f); rp.diffusion = get ("diffusion", 5); rp.rolloffHz = get ("erRoll", 6000); rp.rolloffSlope = (int) get ("erSlope", 1);
     rp.xfeedDb = get ("erXfDb", 0); rp.xfeedMs = get ("erXfMs", 0); rp.xfeedRollHz = get ("erXfRoll", 18000);
-    TailParams tp; tp.timeSec = get ("time", 3.29f); tp.bloom = get ("bloom", 2.5f); tp.bassFreq = get ("bassF", 555); tp.bassMult = get ("bassX", 1.0f);
+    TailParams tp; tp.timeSec = get ("time", 2.25f); tp.bloom = get ("bloom", 2.5f); tp.bassFreq = get ("bassF", 555); tp.bassMult = get ("bassX", 1.0f);
     tp.trebFreq = get ("trebF", 4300); tp.trebMult = get ("trebX", 1.0f); tp.lowBoostDb = get ("boost", -15); tp.lowBoostWeight = get ("weight", 0.5f);
     tp.predelayMs = get ("predelay", 10); tp.echoDb = get ("echo", -100); tp.echoMs = get ("echoMs", 100); tp.echoRollHz = get ("echoRoll", 18000);
-    tp.rolloffHz = get ("roll", 6000); tp.rolloffSlope = (int) get ("slope", 3); tp.lowCutHz = get ("lowcut", 20);
+    tp.rolloffHz = get ("roll", 8000); tp.rolloffSlope = (int) get ("slope", 3); tp.lowCutHz = get ("lowcut", 20);
     tp.undDepth = get ("und", 0.25f); tp.undShape = get ("undShape", 0.25f); tp.modDepth = get ("mod", 0.75f); tp.modRateHz = get ("modRate", 0.7f);
     tp.xfeedDb = get ("xfDb", -3); tp.xfeedMs = get ("xfMs", 10); tp.xfeedRollHz = get ("xfRoll", 18000);
     MixParams mp; mp.dryWet = get ("mix", 1); mp.reflRev = get ("balance", 0.5f); mp.reflWidth = get ("erWidth", 1.125f); mp.revWidth = get ("width", 1);
+    mp.reflTrimDb = get ("erTrim", 0); mp.revTrimDb = get ("revTrim", 0); mp.masterDb = get ("master", 0);
+    mp.erModDepth = get ("erMod", 0.75f); mp.erModRate = get ("erModRate", 0.7f);
+    mp.eqOn = get ("eqOn", 0) > 0.5f; mp.eqLowCut = get ("eqLowCut", 20); mp.eqLsF = get ("eqLsF", 500); mp.eqLsG = get ("eqLsG", 0); mp.eqLsQ = get ("eqLsQ", 0.7f);
+    mp.eqMidF = get ("eqMidF", 3000); mp.eqMidG = get ("eqMidG", 0); mp.eqMidQ = get ("eqMidQ", 0.7f); mp.eqHsF = get ("eqHsF", 8000); mp.eqHsG = get ("eqHsG", 0);
+    mp.eqHsQ = get ("eqHsQ", 0.7f); mp.eqRoll = get ("eqRoll", 18000); mp.eqRollSlope = (int) get ("eqSlope", 1);
 
     RoomEngine eng; eng.prepare (sr, 512);
     for (int s = 0; s < 2; ++s)
@@ -53,9 +59,11 @@ int main (int argc, char** argv)
         auto& t = eng.tailAt (s).tune;
         t.tapMinMs = get ("t_min", t.tapMinMs); t.tapSpanMs = get ("t_span", t.tapSpanMs); t.tapSpanPerBloom = get ("t_spb", t.tapSpanPerBloom);
         t.tapCurve = get ("t_curve", t.tapCurve); t.tapFall = get ("t_fall", t.tapFall); t.earlyGain = get ("t_early", t.earlyGain);
-        t.modMaxMs = get ("t_mod", t.modMaxMs); t.bassFc = get ("t_bfc", t.bassFc); t.bassK = get ("t_bk", t.bassK); t.levelOffsetDb = get ("t_lvl", t.levelOffsetDb);
+        t.modMaxMs = get ("t_mod", t.modMaxMs); t.bassFc = get ("t_bfc", t.bassFc); t.bassK = get ("t_bk", t.bassK); t.bloomRtPow = get ("t_brp", t.bloomRtPow); t.boostGain = get ("t_bg", t.boostGain); t.boostHz = get ("t_bhz", t.boostHz); t.boostTimeMin = get ("t_btmin", t.boostTimeMin); t.boostTimeMax = get ("t_btmax", t.boostTimeMax); t.boostDirect = get ("t_bdir", t.boostDirect); t.levelOffsetDb = get ("t_lvl", t.levelOffsetDb);
     }
     eng.setTail (tp); eng.setMix (mp);
+    static ProfileTable prof; prof.load (ProfileTable::defaultPath());
+    eng.setProfiles (prof.revGains ((int) get ("revColor", 0)), prof.erGains ((int) get ("erColor", 0)));
     std::vector<float> own, cross; buildReflections (rp, sr, own, cross);
 
     size_t n = (size_t) (secs * sr);

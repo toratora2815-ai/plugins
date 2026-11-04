@@ -128,7 +128,8 @@ namespace numdeck
         }
     };
 
-    KeyTap::KeyTap() : impl (std::make_unique<Impl> (*this)) {}
+    static void trackActivations();
+    KeyTap::KeyTap() : impl (std::make_unique<Impl> (*this)) { trackActivations(); }
     KeyTap::~KeyTap() = default;
 
     bool KeyTap::start()            { return impl->start(); }
@@ -189,6 +190,30 @@ namespace numdeck
     }
 
     static pid_t lastFrontPid = 0;
+
+    // 前面になったアプリの順番（Num Deck 自身は数えない）。「全画面 ⇔ 半画面」で、全画面から半画面にするときの相手に使う
+    static pid_t curAppPid = 0, prevAppPid = 0;
+
+    static void trackActivations()
+    {
+        static id observer = nil;
+        if (observer != nil) return;
+        const pid_t self = [NSRunningApplication currentApplication].processIdentifier;
+        if (NSRunningApplication* f = [[NSWorkspace sharedWorkspace] frontmostApplication])
+            if (f.processIdentifier != self) curAppPid = f.processIdentifier;
+        observer = [[[NSWorkspace sharedWorkspace] notificationCenter]
+                        addObserverForName: NSWorkspaceDidActivateApplicationNotification object: nil
+                                     queue: [NSOperationQueue mainQueue]
+                                usingBlock: ^(NSNotification* n) {
+                                    NSRunningApplication* a = n.userInfo[NSWorkspaceApplicationKey];
+                                    if (a == nil || a.processIdentifier == self || a.processIdentifier == curAppPid) return;
+                                    prevAppPid = curAppPid;
+                                    curAppPid = a.processIdentifier;
+                                }];
+       #if ! __has_feature(objc_arc)
+        [observer retain];
+       #endif
+    }
 
     void KeyTap::rememberFrontApp()
     {
@@ -377,6 +402,26 @@ namespace numdeck
             r.push_back ({ a.bundleIdentifier.UTF8String, n.UTF8String != nullptr ? n.UTF8String : a.bundleIdentifier.UTF8String });
         }
         return r;
+    }
+
+    void KeyTap::setOverFullScreen (void* nativeHandle, bool on)
+    {
+        NSView* v = (NSView*) nativeHandle;
+        NSWindow* w = v != nil ? v.window : nil;
+        if (w == nil) return;
+        NSWindowCollectionBehavior b = w.collectionBehavior;
+        const NSWindowCollectionBehavior extra = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary;
+        if (on)
+        {
+            b &= ~NSWindowCollectionBehaviorMoveToActiveSpace;
+            w.collectionBehavior = b | extra;
+            w.level = NSStatusWindowLevel;
+        }
+        else
+        {
+            w.collectionBehavior = b & ~extra;
+            w.level = NSNormalWindowLevel;
+        }
     }
 
     // 押した操作の名前を、画面の下に一瞬だけ出す（全画面のアプリの上にも出る。クリックは通り抜ける）
@@ -961,6 +1006,19 @@ namespace numdeck
                 CFRelease (win);
                 return;
             }
+            // 覚えている相手がいなければ、その前に使っていたアプリのウィンドウを右にして半画面にする
+            const pid_t otherPid = front.processIdentifier == curAppPid ? prevAppPid : curAppPid;
+            NSRunningApplication* other = otherPid != 0 ? [NSRunningApplication runningApplicationWithProcessIdentifier: otherPid] : nil;
+            AXUIElementRef partner = (other != nil && other.bundleIdentifier != nil && otherPid != front.processIdentifier)
+                                       ? copyFrontWindow (other.bundleIdentifier) : nullptr;
+            if (partner != nullptr)
+            {
+                showHUD ("半画面");
+                resplit (win, front.processIdentifier, partner, otherPid);
+                CFRelease (partner);
+                CFRelease (win);
+                return;
+            }
             showHUD ("全画面をやめる");
             AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
             CFRelease (win);
@@ -988,34 +1046,49 @@ namespace numdeck
         }
     }
 
+    namespace
+    {
+        // Chrome のウィンドウの中から、host のページのタブがあるものを探し、そのタブを選んで前に出す（AppleScript）。
+        // 全画面（左右分割も）の別の画面にあっても、そこへ移る。見つかったら true
+        bool raiseChromeWindowWithHost (const std::string& host)
+        {
+            if (host.empty()) return false;
+            NSString* src = [NSString stringWithFormat:
+                @"tell application \"Google Chrome\"\n"
+                 "repeat with w in windows\n"
+                 "set n to count of tabs of w\n"
+                 "repeat with i from 1 to n\n"
+                 "if URL of tab i of w contains \"%@\" then\n"
+                 "set active tab index of w to i\n"
+                 "set index of w to 1\n"
+                 "activate\n"
+                 "return \"found\"\n"
+                 "end if\n"
+                 "end repeat\n"
+                 "end repeat\n"
+                 "return \"\"\n"
+                 "end tell", ns (host)];
+            NSAppleScript* script = [[NSAppleScript alloc] initWithSource: src];
+            NSDictionary* err = nil;
+            NSAppleEventDescriptor* r = [script executeAndReturnError: &err];
+            const bool found = r != nil && [[r stringValue] isEqualToString: @"found"];
+           #if ! __has_feature(objc_arc)
+            [script release];
+           #endif
+            return found;
+        }
+
+        std::string hostOf (const std::string& url)
+        {
+            NSURL* u = [NSURL URLWithString: ns (url)];
+            return u != nil && u.host != nil ? std::string (u.host.UTF8String) : std::string();
+        }
+    }
+
     void KeyTap::openURLSplit (const std::string& url, const std::string& profileDir, const std::string& split)
     {
         NSString* chromeId = @"com.google.Chrome";
         if ([[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier: chromeId] == nil) { openURL (url, profileDir); return; }
-
-        // 前にこのリンクで開いた 2 つが残っていれば使い回す。
-        // ちゃんと分割できていればその画面へ移るだけ、崩れていれば並べ直す
-        auto it = linkWindows.find (url);
-        if (it != linkWindows.end() && stillExists (it->second.left) && stillExists (it->second.right))
-        {
-            auto& e = it->second;
-            bool paired = false;
-            if (inSplit (e.left) && inSplit (e.right))
-            {
-                pid_t pp = 0;
-                AXUIElementRef partner = copySplitPartner (e.left, pp);
-                paired = partner != nullptr && CFEqual (partner, e.right);
-                if (partner != nullptr) CFRelease (partner);
-            }
-            if (paired)
-            {
-                bringAppForward (e.leftPid);
-                focusWindow (e.left);
-            }
-            else
-                resplit (e.left, e.leftPid, e.right, e.rightPid);
-            return;
-        }
 
         const CGRect area = visibleAreaForAX();
         const CGFloat half = std::floor (area.size.width / 2);
@@ -1023,11 +1096,8 @@ namespace numdeck
         const CGRect right = CGRectMake (area.origin.x + half, area.origin.y, area.size.width - half, area.size.height);
         const std::string rightSide = split, key = url;
 
-        // 1. ページを新しいウィンドウで開いて左半分へ → 2. 右半分 → 3. 全画面の左右分割にする
-        AXUIElementRef before = copyFrontWindow (chromeId);
-        launchChrome (profileDir, @[ @"--new-window", ns (url) ]);
-        waitAndPlace (chromeId, before, left, 0, ^(AXUIElementRef placedLeft) {
-            if (placedLeft == nullptr) return;
+        // 左のウィンドウが決まったあと: 右を用意して、全画面の左右分割にする
+        auto withLeft = ^(AXUIElementRef placedLeft, bool reuseRight) {
             AXUIElementRef leftWin = (AXUIElementRef) CFRetain (placedLeft);
             const pid_t chromePid = runningPid (chromeId);
             auto finish = ^(AXUIElementRef placedRight) {
@@ -1040,6 +1110,18 @@ namespace numdeck
                 }
                 CFRelease (leftWin);
             };
+            // 前にこのリンクで使った右のウィンドウが残っていれば、それを使う
+            auto it = linkWindows.find (key);
+            if (reuseRight && it != linkWindows.end() && stillExists (it->second.right) && ! CFEqual (it->second.right, leftWin))
+            {
+                AXUIElementRef rw = (AXUIElementRef) CFRetain (it->second.right);
+                const pid_t rp = it->second.rightPid;
+                rememberLink (key, leftWin, chromePid, rw, rp);
+                resplit (leftWin, chromePid, rw, rp);
+                CFRelease (rw);
+                CFRelease (leftWin);
+                return;
+            }
             if (rightSide == "chrome")
             {
                 launchChrome (profileDir, @[ @"--new-window" ]);
@@ -1053,6 +1135,39 @@ namespace numdeck
                                                   configuration: [NSWorkspaceOpenConfiguration configuration]
                                               completionHandler: nil];
             waitAndPlace (bid, nullptr, right, 0, finish);
+        };
+
+        // 新しいウィンドウで開く
+        auto openNew = ^{
+            AXUIElementRef before = copyFrontWindow (chromeId);
+            launchChrome (profileDir, @[ @"--new-window", ns (key) ]);
+            waitAndPlace (chromeId, before, left, 0, ^(AXUIElementRef placedLeft) {
+                if (placedLeft != nullptr) withLeft (placedLeft, false);
+            });
+        };
+
+        // このページのタブがある Chrome のウィンドウがあれば、それを使い回す（Num Deck を入れ直したあとでも見つかる）。
+        // そのウィンドウがもう左右分割に入っていれば、その画面へ移るだけ。普通のウィンドウなら左に置いて分割し直す
+        if (! raiseChromeWindowWithHost (hostOf (url))) { openNew(); return; }
+        waitFor (^{ NSRunningApplication* f = [[NSWorkspace sharedWorkspace] frontmostApplication];
+                    return f != nil && [f.bundleIdentifier isEqualToString: chromeId]; }, 3000, ^(bool) {
+            later (500, ^{
+                AXUIElementRef w = copyFocusedWindowOf (runningPid (chromeId));
+                if (w == nullptr) { openNew(); return; }
+                if (inSplit (w)) { CFRelease (w); return; }
+                auto placeAndGo = ^{
+                    placeWindow (w, left);
+                    withLeft (w, true);
+                    CFRelease (w);
+                };
+                if (isFullScreen (w))
+                {
+                    AXUIElementSetAttributeValue (w, CFSTR ("AXFullScreen"), kCFBooleanFalse);
+                    waitFor (^{ return ! isFullScreen (w); }, 4000, ^(bool) { later (400, placeAndGo); });
+                }
+                else
+                    placeAndGo();
+            });
         });
     }
 

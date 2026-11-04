@@ -20,8 +20,35 @@ const juce::StringArray& LumenRoomsProcessor::slopeNames()
     return n;
 }
 
+const juce::StringArray& LumenRoomsProcessor::noteNames()
+{
+    static const juce::StringArray n { "1/64 T", "1/64", "1/64 D", "1/32 T", "1/32", "1/32 D", "1/16 T", "1/16", "1/16 D",
+                                       "1/8 T", "1/8", "1/8 D", "1/4 T", "1/4", "1/4 D", "1/2 T", "1/2", "1/2 D" };
+    return n;
+}
+
+const juce::StringArray& LumenRoomsProcessor::colorNames()
+{
+    static const juce::StringArray n = [] {
+        juce::StringArray a { "Off" };
+        for (int g = 0; g < 8; ++g)
+            for (int i = 1; i <= 10; ++i) a.add (juce::String::charToString ((juce::juce_wchar) ('A' + g)) + juce::String (i));
+        return a;
+    }();
+    return n;
+}
+
 namespace
 {
+// 音符の長さ（4 分音符 = 1）
+double noteQuarters (int i)
+{
+    i = juce::jlimit (0, 17, i);
+    const double base = 4.0 / (64.0 / (double) (1 << (i / 3)));
+    const int kind = i % 3;
+    return base * (kind == 0 ? 2.0 / 3.0 : (kind == 2 ? 1.5 : 1.0));
+}
+
 juce::NormalisableRange<float> freqRange (float lo, float hi, float centre)
 {
     juce::NormalisableRange<float> r (lo, hi, 1.0f);
@@ -103,17 +130,19 @@ APVTS::ParameterLayout LumenRoomsProcessor::createLayout()
     v.push_back (fp ("erModRate", "Refl Mod Rate", { 0.2f, 2.0f, 0.01f }, 0.7f, "Hz", 2));
     // テール
     { juce::NormalisableRange<float> r (0.2f, 42.5f, 0.01f); r.setSkewForCentre (4.0f);
-      v.push_back (fp ("time", "Reverb Time", r, 3.29f, "s", 2)); }
+      v.push_back (fp ("time", "Reverb Time", r, 2.25f, "s", 2)); }
     v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "infinite", 1 }, "Freeze", false));
     v.push_back (fp ("bloom", "Bloom", { 0.0f, 10.0f, 0.01f }, 2.5f));
     { juce::NormalisableRange<float> r (0.0f, 500.0f, 0.1f); r.setSkewForCentre (60.0f);
       v.push_back (fp ("predelay", "Pre-delay", r, 10.0f, "ms")); }
+    v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "preSync", 1 }, "Pre-delay Sync", false));
+    v.push_back (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "preNote", 1 }, "Pre-delay Note", noteNames(), 7));
     v.push_back (fp ("revWidth", "Reverb Width", { 0.0f, 100.0f, 0.1f }, 100.0f, "%", 0));
     v.push_back (fp ("bassFreq", "Bass Freq", freqRange (20.0f, 4000.0f, 500.0f), 796.0f, "Hz", 0));
     v.push_back (fp ("bassMult", "Bass Mult", { 0.2f, 2.5f, 0.01f }, 1.0f, "x", 2));
     v.push_back (fp ("trebFreq", "Treble Freq", freqRange (500.0f, 18000.0f, 4000.0f), 6000.0f, "Hz", 0));
     v.push_back (fp ("trebMult", "Treble Mult", { 0.2f, 1.0f, 0.01f }, 1.0f, "x", 2));
-    v.push_back (fp ("revRoll", "Reverb Roll-off", freqRange (500.0f, 18000.0f, 4000.0f), 6010.0f, "Hz", 0));
+    v.push_back (fp ("revRoll", "Reverb Roll-off", freqRange (500.0f, 18000.0f, 4000.0f), 8000.0f, "Hz", 0));
     v.push_back (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "revSlope", 1 }, "Reverb Slope", slopeNames(), 2));
     v.push_back (fp ("lowCut", "Low Cut", freqRange (20.0f, 750.0f, 150.0f), 20.0f, "Hz", 0));
     v.push_back (dbOff ("lowBoost", "Low Boost", -20.0f, 3.0f, -17.3f));
@@ -125,10 +154,15 @@ APVTS::ParameterLayout LumenRoomsProcessor::createLayout()
     v.push_back (dbOff ("echoLevel", "Echo Level", -20.0f, 0.0f, -20.0f));
     { juce::NormalisableRange<float> r (100.0f, 1500.0f, 1.0f); r.setSkewForCentre (400.0f);
       v.push_back (fp ("echoTime", "Echo Time", r, 100.0f, "ms", 0)); }
+    v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "echoSync", 1 }, "Echo Sync", false));
+    v.push_back (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "echoNote", 1 }, "Echo Note", noteNames(), 9));
     v.push_back (fp ("echoRoll", "Echo Roll-off", freqRange (500.0f, 18000.0f, 4000.0f), 18000.0f, "Hz", 0));
     v.push_back (fp ("revXfLevel", "Reverb XFeed", { -20.0f, 0.0f, 0.1f }, -3.0f, "dB"));
     v.push_back (fp ("revXfDelay", "Reverb XFeed Delay", { 0.0f, 100.0f, 0.1f }, 10.0f, "ms"));
     v.push_back (fp ("revXfRoll", "Reverb XFeed Roll-off", freqRange (500.0f, 18000.0f, 4000.0f), 18000.0f, "Hz", 0));
+    // 音色の型
+    v.push_back (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "revColor", 1 }, "Reverb Color", colorNames(), 0));
+    v.push_back (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "erColor", 1 }, "Refl Color", colorNames(), 0));
     // ポスト EQ
     v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "eqOn", 1 }, "EQ", false));
     v.push_back (fp ("eqLowCut", "EQ Low Cut", freqRange (20.0f, 1500.0f, 200.0f), 20.0f, "Hz", 0));
@@ -152,6 +186,7 @@ LumenRoomsProcessor::LumenRoomsProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
+    profiles.load (lumen::ProfileTable::defaultPath());
     startTimerHz (20);
 }
 
@@ -190,9 +225,11 @@ lumen::TailParams LumenRoomsProcessor::readTail() const
     t.trebFreq = p ("trebFreq"); t.trebMult = p ("trebMult");
     t.lowBoostDb = p ("lowBoost") <= -19.95f ? -100.0f : p ("lowBoost");
     t.lowBoostWeight = p ("boostWeight") / 10.0f;
-    t.predelayMs = p ("predelay");
+    const double qMs = 60000.0 / juce::jlimit (20.0, 400.0, hostBpm.load());
+    t.predelayMs = p ("preSync") > 0.5f ? (float) juce::jmin (500.0, qMs * noteQuarters ((int) p ("preNote"))) : p ("predelay");
     t.echoDb = p ("echoLevel") <= -19.95f ? -100.0f : p ("echoLevel");
-    t.echoMs = p ("echoTime"); t.echoRollHz = p ("echoRoll");
+    t.echoMs = p ("echoSync") > 0.5f ? (float) juce::jlimit (5.0, 1500.0, qMs * noteQuarters ((int) p ("echoNote"))) : p ("echoTime");
+    t.echoRollHz = p ("echoRoll");
     t.rolloffHz = p ("revRoll"); t.rolloffSlope = (int) p ("revSlope") + 1;
     t.lowCutHz = p ("lowCut");
     t.undDepth = p ("undDepth") / 10.0f; t.undShape = p ("undShape") / 10.0f;
@@ -271,11 +308,15 @@ void LumenRoomsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
+    if (auto* ph = getPlayHead())
+        if (auto pos = ph->getPosition())
+            if (auto bpm = pos->getBpm()) hostBpm.store (*bpm);
     if (getTotalNumInputChannels() == 1 && buffer.getNumChannels() > 1)
         buffer.copyFrom (1, 0, buffer, 0, 0, n);
 
     engine.setTail (readTail());
     engine.setMix (readMix());
+    engine.setProfiles (profiles.revGains ((int) p ("revColor")), profiles.erGains ((int) p ("erColor")));
 
     float* L = buffer.getWritePointer (0);
     float* R = buffer.getWritePointer (1);
@@ -311,6 +352,7 @@ void LumenRoomsProcessor::setCurrentProgram (int i)
 {
     if (! juce::isPositiveAndBelow (i, (int) presets().size())) return;
     currentProgram = i;
+    importedName = {};
     // まず全部を初期値に戻してから、プリセットの値を入れる
     for (auto* prm : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm))
@@ -340,10 +382,95 @@ LumenRoomsProcessor::ErView LumenRoomsProcessor::getErView() const
     return v;
 }
 
+juce::File LumenRoomsProcessor::defaultPresetFolder()
+{
+    // 参考にしたリバーブの工場出荷プリセットが入っている場所（入っていなければホーム）
+    const juce::File f ("/Library/Application Support/LiquidSonics/Cinematic Rooms Professional/Factory Presets");
+    return f.isDirectory() ? f : juce::File::getSpecialLocation (juce::File::userHomeDirectory);
+}
+
+void LumenRoomsProcessor::setParam (const char* id, float value)
+{
+    if (auto* rp = apvts.getParameter (id))
+        rp->setValueNotifyingHost (rp->convertTo0to1 (rp->getNormalisableRange().snapToLegalValue (value)));
+}
+
+juce::String LumenRoomsProcessor::importPreset (const juce::File& file)
+{
+    juce::MemoryBlock mb;
+    if (! file.loadFileAsData (mb)) return "ファイルを読めませんでした";
+    auto root = juce::ValueTree::readFromData (mb.getData(), mb.getSize());
+    if (! root.isValid()) return "形式が違います";
+    const auto ver = root.getProperty ("written_by_version__string").toString();
+    if (ver.isNotEmpty() && ver.compareNatural ("0.3") < 0) return "古い形式（" + ver + "）のプリセットには対応していません";
+    auto st = root.getChildWithName ("CRP_StateVT");
+    if (! st.isValid()) st = root.getChildWithName ("CRP_PartialStateVT").getChildWithName ("CRP_StateVT");
+    if (! st.isValid()) return "中にプリセットが見つかりません";
+
+    std::map<int, double> v;
+    for (auto c : st)
+        if (c.hasType ("PARAM") && c.hasProperty ("value"))
+            v[(int) c.getProperty ("id")] = (double) c.getProperty ("value");
+    if (v.size() < 40) return "中身が足りません";
+    auto has = [&] (int id) { return v.count (id) > 0; };
+    auto get = [&] (int id, double def) { return has (id) ? v[id] : def; };
+
+    // まず全部（DRY/WET と OUTPUT 以外）を初期値に戻す
+    for (auto* prm : getParameters())
+        if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm))
+            if (rp->getParameterID() != "mix" && rp->getParameterID() != "master")
+                rp->setValueNotifyingHost (rp->getDefaultValue());
+
+    struct Map { int id; const char* param; double scale; };
+    static const Map direct[] = {
+        { 58, "balance", 100.0 }, { 64, "revTrim", 1 }, { 186, "erTrim", 1 },
+        { 6, "revXfLevel", 1 }, { 12, "revXfDelay", 1 }, { 18, "revXfRoll", 1 },
+        { 27, "erXfLevel", 1 }, { 33, "erXfDelay", 1 }, { 39, "erXfRoll", 1 },
+        { 24, "modDepth", 1 }, { 25, "modRate", 1 }, { 26, "boostWeight", 1 }, { 45, "erModDepth", 1 }, { 46, "erModRate", 1 },
+        { 76, "bloom", 1 }, { 82, "revWidth", 10.0 }, { 88, "bassFreq", 1 }, { 94, "bassMult", 1 }, { 100, "trebFreq", 1 },
+        { 106, "trebMult", 1 }, { 112, "lowBoost", 1 }, { 118, "predelay", 1 }, { 131, "echoLevel", 1 }, { 137, "echoTime", 1 },
+        { 150, "echoRoll", 1 }, { 156, "revRoll", 1 }, { 168, "lowCut", 1 }, { 174, "undDepth", 1 }, { 180, "undShape", 1 },
+        { 199, "erSize", 1 }, { 205, "reflectivity", 1 }, { 211, "diffusion", 1 }, { 223, "erRoll", 1 },
+        { 236, "eqLowCut", 1 }, { 247, "eqLsFreq", 1 }, { 258, "eqLsGain", 1 }, { 264, "eqLsQ", 1 }, { 270, "eqMidFreq", 1 },
+        { 281, "eqMidGain", 1 }, { 287, "eqMidQ", 1 }, { 293, "eqHsFreq", 1 }, { 304, "eqHsGain", 1 }, { 310, "eqHsQ", 1 },
+        { 316, "eqRoll", 1 } };
+    for (auto& m : direct)
+        if (has (m.id)) setParam (m.param, (float) (v[m.id] * m.scale));
+
+    static const std::pair<int, const char*> choices[] = { { 192, "pattern" }, { 193, "proximity" }, { 162, "revSlope" },
+                                                           { 229, "erSlope" }, { 327, "eqSlope" }, { 124, "preNote" }, { 143, "echoNote" } };
+    for (auto& c : choices)
+        if (has (c.first)) setParam (c.second, (float) juce::roundToInt (v[c.first]));
+    if (has (333) && has (334)) setParam ("revColor", (float) lumen::ProfileTable::indexOf (juce::roundToInt (v[333]), juce::roundToInt (v[334])));
+    if (has (335) && has (336)) setParam ("erColor", (float) lumen::ProfileTable::indexOf (juce::roundToInt (v[335]), juce::roundToInt (v[336])));
+    static const std::pair<int, const char*> bools[] = { { 235, "eqOn" }, { 130, "preSync" }, { 149, "echoSync" } };
+    for (auto& b : bools)
+        if (has (b.first)) setParam (b.second, v[b.first] > 0.5 ? 1.0f : 0.0f);
+
+    if (has (70))
+    {
+        const double t = v[70];
+        setParam ("infinite", t >= 44.9 ? 1.0f : 0.0f);
+        setParam ("time", (float) juce::jmin (42.5, t));
+    }
+    if (has (217))   // 反射の幅：0..7.5 が 0..100%、7.5..10 が 100..150%
+    {
+        const double w = v[217];
+        setParam ("erWidth", (float) (w <= 7.5 ? w / 7.5 * 100.0 : 100.0 + (w - 7.5) * 20.0));
+    }
+    if (has (168) && v[168] < 20.0) setParam ("lowCut", 20.0f);
+    (void) get;
+
+    importedName = st.getProperty ("preset_name", "").toString();
+    if (importedName.isEmpty()) importedName = file.getFileNameWithoutExtension();
+    return {};
+}
+
 void LumenRoomsProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     auto state = apvts.copyState();
     state.setProperty ("program", currentProgram, nullptr);
+    state.setProperty ("imported", importedName, nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
 }
 
@@ -354,6 +481,7 @@ void LumenRoomsProcessor::setStateInformation (const void* data, int size)
         {
             auto st = juce::ValueTree::fromXml (*xml);
             currentProgram = (int) st.getProperty ("program", 0);
+            importedName = st.getProperty ("imported", "").toString();
             apvts.replaceState (st);
         }
 }

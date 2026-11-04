@@ -143,13 +143,16 @@ LumenRoomsEditor::LumenRoomsEditor (LumenRoomsProcessor& p) : AudioProcessorEdit
     panels.push_back (mod);
 
     Panel echo { "ECHO  /  LOW BOOST" };
-    echo.page = 1; echo.columns = 2;
+    echo.page = 1; echo.columns = 3;
+    echo.choices = { choice ("echoNote", "ECHO NOTE"), choice ("preNote", "PRE-DELAY NOTE") };
+    echo.toggles = { &echoSync.button, &preSync.button };
     echo.knobs = { knob ("echoLevel", "ECHO LEVEL"), knob ("echoTime", "ECHO TIME"), knob ("echoRoll", "ECHO ROLL-OFF"),
                    knob ("lowBoost", "LOW BOOST"), knob ("boostWeight", "BOOST WEIGHT") };
     panels.push_back (echo);
 
-    Panel xf { "CROSSFEED" };
+    Panel xf { "CROSSFEED  /  COLOR" };
     xf.page = 1; xf.columns = 3;
+    xf.choices = { choice ("revColor", "REVERB COLOR"), choice ("erColor", "REFL COLOR") };
     xf.knobs = { knob ("revXfLevel", "REVERB LEVEL"), knob ("revXfDelay", "REVERB DELAY"), knob ("revXfRoll", "REVERB ROLL-OFF"),
                  knob ("erXfLevel", "REFL LEVEL"), knob ("erXfDelay", "REFL DELAY"), knob ("erXfRoll", "REFL ROLL-OFF") };
     for (int i = 3; i < 6; ++i) xf.knobs[(size_t) i]->slider.getProperties().set ("teal", true);
@@ -172,6 +175,24 @@ LumenRoomsEditor::LumenRoomsEditor (LumenRoomsProcessor& p) : AudioProcessorEdit
     eqOn.button.setClickingTogglesState (true);
     eqOn.att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "eqOn", eqOn.button);
     addAndMakeVisible (eqOn.button);
+
+    for (auto* t : { &echoSync, &preSync })
+    {
+        t->button.setClickingTogglesState (true);
+        addAndMakeVisible (t->button);
+    }
+    echoSync.button.setButtonText ("ECHO SYNC");
+    echoSync.att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "echoSync", echoSync.button);
+    preSync.button.setButtonText ("PRE SYNC");
+    preSync.att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "preSync", preSync.button);
+
+    loadButton.setTooltip ("Load a .crp_preset file");
+    loadButton.onClick = [this] { showLoadMenu(); };
+    addAndMakeVisible (loadButton);
+    importedLabel.setFont (juce::FontOptions (12.0f));
+    importedLabel.setColour (juce::Label::textColourId, amber);
+    importedLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (importedLabel);
 
     const char* tabNames[3] = { "MAIN", "DETAIL", "EQ" };
     for (int i = 0; i < 3; ++i)
@@ -209,6 +230,7 @@ void LumenRoomsEditor::showPage (int pg)
         const bool vis = pn.page == -1 || pn.page == pg;
         for (auto* k : pn.knobs) if (k) { k->slider.setVisible (vis); k->label.setVisible (vis); }
         for (auto* c : pn.choices) { c->box.setVisible (vis); c->label.setVisible (vis); }
+        for (auto* t : pn.toggles) t->setVisible (vis);
     }
     freeze.button.setVisible (pg == 0);
     eqOn.button.setVisible (pg == 2);
@@ -221,15 +243,22 @@ void LumenRoomsEditor::layoutPanel (Panel& pn)
     auto r = pn.bounds.reduced (12, 8);
     r.removeFromTop (24);   // タイトル
     if (pn.extraHeight > 0) { pn.extra = r.removeFromTop (pn.extraHeight); r.removeFromTop (6); }
-    if (! pn.choices.empty())
+    if (! pn.choices.empty() || ! pn.toggles.empty())
     {
         auto row = r.removeFromTop (44);
-        const int w = row.getWidth() / juce::jmax (1, (int) pn.choices.size());
+        const int n = (int) (pn.choices.size() + pn.toggles.size());
+        const int w = row.getWidth() / juce::jmax (1, n);
         for (auto* c : pn.choices)
         {
             auto cell = row.removeFromLeft (w).reduced (4, 0);
             c->label.setBounds (cell.removeFromTop (16));
             c->box.setBounds (cell.removeFromTop (24));
+        }
+        for (auto* t : pn.toggles)
+        {
+            auto cell = row.removeFromLeft (w).reduced (4, 0);
+            cell.removeFromTop (16);
+            t->setBounds (cell.removeFromTop (24));
         }
         r.removeFromTop (6);
     }
@@ -257,9 +286,12 @@ void LumenRoomsEditor::resized()
     auto area = getLocalBounds();
     auto head = area.removeFromTop (58).reduced (16, 12);
     head.removeFromLeft (220);
-    presetBox.setBounds (head.removeFromRight (200));
-    head.removeFromRight (16);
-    for (int i = 2; i >= 0; --i) { tabs[i].setBounds (head.removeFromRight (84)); head.removeFromRight (6); }
+    presetBox.setBounds (head.removeFromRight (180));
+    head.removeFromRight (6);
+    loadButton.setBounds (head.removeFromRight (64));
+    head.removeFromRight (10);
+    for (int i = 2; i >= 0; --i) { tabs[i].setBounds (head.removeFromRight (78)); head.removeFromRight (6); }
+    importedLabel.setBounds (head.reduced (6, 0));
 
     area.reduce (12, 4);
     area.removeFromBottom (8);
@@ -285,7 +317,7 @@ void LumenRoomsEditor::resized()
         setB ("MODULATION", modB);
         setB ("ECHO  /  LOW BOOST", top);
         a.removeFromTop (10);
-        setB ("CROSSFEED", a);
+        setB ("CROSSFEED  /  COLOR", a);
     }
     else
         setB ("POST EQ", area);
@@ -449,8 +481,58 @@ void LumenRoomsEditor::drawMeter (juce::Graphics& g, juce::Rectangle<float> r)
     }
 }
 
+void LumenRoomsEditor::addFolderToMenu (juce::PopupMenu& menu, const juce::File& dir, std::vector<juce::File>& files, int depth)
+{
+    auto subs = dir.findChildFiles (juce::File::findDirectories, false);
+    subs.sort();
+    for (auto& d : subs)
+    {
+        juce::PopupMenu sub;
+        if (depth < 3) addFolderToMenu (sub, d, files, depth + 1);
+        if (sub.getNumItems() > 0) menu.addSubMenu (d.getFileName(), sub);
+    }
+    auto ps = dir.findChildFiles (juce::File::findFiles, false, "*.crp_preset");
+    ps.sort();
+    for (auto& f : ps)
+    {
+        files.push_back (f);
+        menu.addItem ((int) files.size(), f.getFileNameWithoutExtension());
+    }
+}
+
+void LumenRoomsEditor::showLoadMenu()
+{
+    auto files = std::make_shared<std::vector<juce::File>>();
+    juce::PopupMenu menu;
+    const auto folder = LumenRoomsProcessor::defaultPresetFolder();
+    if (folder.getFileName() == "Factory Presets") addFolderToMenu (menu, folder, *files, 0);
+    const juce::File user = folder.getParentDirectory().getChildFile ("User Presets");
+    if (user.isDirectory()) { juce::PopupMenu um; addFolderToMenu (um, user, *files, 1); if (um.getNumItems() > 0) menu.addSubMenu ("User Presets", um); }
+    menu.addSeparator();
+    menu.addItem (100000, "Open file...");
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&loadButton), [this, files, folder] (int r)
+    {
+        auto load = [this] (const juce::File& f)
+        {
+            const auto err = proc.importPreset (f);
+            if (err.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "LOAD", f.getFileName() + "\n" + err);
+        };
+        if (r == 100000)
+        {
+            chooser = std::make_unique<juce::FileChooser> ("Load preset", folder, "*.crp_preset");
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                  [load] (const juce::FileChooser& fc) { if (fc.getResult().existsAsFile()) load (fc.getResult()); });
+        }
+        else if (r > 0 && r <= (int) files->size())
+            load ((*files)[(size_t) r - 1]);
+    });
+}
+
 void LumenRoomsEditor::timerCallback()
 {
+    const auto imp = proc.getImportedName();
+    if (importedLabel.getText() != imp) importedLabel.setText (imp, juce::dontSendNotification);
     for (int c = 0; c < 2; ++c) meter[c] = proc.getOutputLevel (c);
     if (presetBox.getSelectedId() != proc.getCurrentProgram() + 1)
         presetBox.setSelectedId (proc.getCurrentProgram() + 1, juce::dontSendNotification);

@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "RoomEngine.h"
+#include "ProfileTable.h"
 
 class LumenRoomsProcessor : public juce::AudioProcessor, private juce::Timer
 {
@@ -42,6 +43,14 @@ public:
     static const juce::StringArray& patternNames();
     static const juce::StringArray& proximityNames();
     static const juce::StringArray& slopeNames();
+    static const juce::StringArray& noteNames();
+    static const juce::StringArray& colorNames();
+    const lumen::ProfileTable& getProfiles() const { return profiles; }
+
+    // よその .crp_preset ファイル（JUCE の ValueTree 形式）を読み込む。失敗したら理由を返す
+    juce::String importPreset (const juce::File&);
+    juce::String getImportedName() const { return importedName; }
+    static juce::File defaultPresetFolder();
 
 private:
     void timerCallback() override;
@@ -52,6 +61,7 @@ private:
     float p (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
 
     lumen::RoomEngine engine;
+    lumen::ProfileTable profiles;
     juce::dsp::Convolution convFromL, convFromR;
     juce::AudioBuffer<float> bufL, bufR;
     double sr = 48000.0;
@@ -62,6 +72,9 @@ private:
     std::atomic<bool> needRebuild { true };
     std::atomic<float> outLevel[2] { { 0.0f }, { 0.0f } };
     int currentProgram = 0;
+    juce::String importedName;
+    std::atomic<double> hostBpm { 120.0 };
+    void setParam (const char* id, float value);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LumenRoomsProcessor)
 };

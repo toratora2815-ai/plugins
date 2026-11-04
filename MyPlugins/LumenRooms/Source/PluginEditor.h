@@ -48,6 +48,7 @@ private:
         int page = 0;
         std::vector<Knob*> knobs;
         std::vector<Choice*> choices;
+        std::vector<juce::Button*> toggles;
         int columns = 3;
         juce::Rectangle<int> extra;   // 絵を描く場所など
         int extraHeight = 0;
@@ -67,7 +68,12 @@ private:
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<std::unique_ptr<Choice>> choices;
     std::vector<Panel> panels;
-    Toggle freeze, eqOn;
+    Toggle freeze, eqOn, echoSync, preSync;
+    juce::TextButton loadButton { "LOAD" };
+    juce::Label importedLabel;
+    void showLoadMenu();
+    void addFolderToMenu (juce::PopupMenu&, const juce::File&, std::vector<juce::File>&, int depth);
+    std::unique_ptr<juce::FileChooser> chooser;
     juce::TextButton tabs[3];
     juce::ComboBox presetBox;
     int page = 0;

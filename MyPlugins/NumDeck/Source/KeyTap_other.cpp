@@ -30,6 +30,7 @@ namespace numdeck
     void KeyTap::quitAllApps (const std::vector<std::string>&) {}
     std::vector<std::pair<std::string, std::string>> KeyTap::runningApps() { return {}; }
     void KeyTap::showHUD (const std::string&) {}
+    void KeyTap::setOverFullScreen (void*, bool) {}
     void KeyTap::toggleFullScreenOrSplit() {}
     std::vector<std::pair<std::string, std::string>> KeyTap::chromeProfiles() { return {}; }
     bool KeyTap::chromeFrontPage (std::string&, std::string&) { return false; }

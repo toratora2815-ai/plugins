@@ -240,7 +240,16 @@ void MainComponent::refreshStatus()
 void MainComponent::applyOnTop()
 {
     if (auto* w = getTopLevelComponent())
-        if (w != this) { w->setAlwaysOnTop (deck.alwaysOnTop); onTopApplied = true; }
+        if (w != this)
+        {
+            w->setAlwaysOnTop (deck.alwaysOnTop);
+            // いつも手前のときは、ほかのアプリの全画面（左右分割も）の上にも出す
+            if (auto* peer = w->getPeer())
+            {
+                KeyTap::setOverFullScreen (peer->getNativeHandle(), deck.alwaysOnTop);
+                onTopApplied = true;
+            }
+        }
 }
 
 void MainComponent::timerCallback()
