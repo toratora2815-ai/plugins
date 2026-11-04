@@ -13,6 +13,23 @@ namespace numdeck
 {
     using win::ns;
 
+    // 動きの記録（~/Library/Logs/Num Deck.log）。うまく並ばなかったときに、どこで止まったかを後から見るため
+    static void wlog (NSString* fmt, ...)
+    {
+        va_list ap;
+        va_start (ap, fmt);
+        NSString* msg = [[NSString alloc] initWithFormat: fmt arguments: ap];
+        va_end (ap);
+        NSString* path = [NSHomeDirectory() stringByAppendingPathComponent: @"Library/Logs/Num Deck.log"];
+        NSString* line = [NSString stringWithFormat: @"%@  %@\n", [NSDate date], msg];
+        NSFileHandle* h = [NSFileHandle fileHandleForWritingAtPath: path];
+        if (h == nil) { [line writeToFile: path atomically: NO encoding: NSUTF8StringEncoding error: nil]; }
+        else { [h seekToEndOfFile]; [h writeData: [line dataUsingEncoding: NSUTF8StringEncoding]]; [h closeFile]; }
+       #if ! __has_feature(objc_arc)
+        [msg release];
+       #endif
+    }
+
     namespace
     {
         // マウスのある画面の、メニューバーと Dock を除いた範囲（アクセシビリティの座標＝いちばん左上が原点）
@@ -87,6 +104,28 @@ namespace numdeck
 
         bool isFullScreen (AXUIElementRef w) { return axBool (w, CFSTR ("AXFullScreen")); }
 
+        // 全画面に入れる・出す。切り替えのアニメーション中に頼むと macOS に無視されるので、
+        // 本当に切り替わったかを確かめ、だめなら少し待って頼み直す（最大 tries 回）
+        void setFullScreenSurely (AXUIElementRef w, bool on, int tries, void (^then) (bool))
+        {
+            AXUIElementSetAttributeValue (w, CFSTR ("AXFullScreen"), on ? kCFBooleanTrue : kCFBooleanFalse);
+            waitFor (^{ return isFullScreen (w) == on; }, 1500, ^(bool ok) {
+                if (ok || tries <= 1) { if (then != nil) then (ok); return; }
+                later (600, ^{ setFullScreenSurely (w, on, tries - 1, then); });
+            });
+        }
+
+        // 全画面を抜けきって（アニメーションも終わって）から、もう一度全画面に入れる
+        void refullScreen (AXUIElementRef w)
+        {
+            AXUIElementRef win = (AXUIElementRef) CFRetain (w);
+            setFullScreenSurely (win, false, 3, ^(bool) {
+                later (700, ^{
+                    setFullScreenSurely (win, true, 5, ^(bool) { CFRelease (win); });
+                });
+            });
+        }
+
         // アプリを前に出す（activateWithOptions は後ろにいる Num Deck からだと断られることがあるので、開き直す）
         void bringAppForward (pid_t pid)
         {
@@ -160,6 +199,7 @@ namespace numdeck
                 return;
             }
             if (ready) placeWindow (w, r);
+            wlog (@"place %@: ready=%d tries=%d", bundleId, ready, tries);
             if (before != nullptr) CFRelease (before);
             if (then != nil) then (ready ? w : nullptr);
             if (w != nullptr) CFRelease (w);
@@ -227,13 +267,8 @@ namespace numdeck
             [[NSWorkspace sharedWorkspace] openApplicationAtURL: app.bundleURL
                                                   configuration: [NSWorkspaceOpenConfiguration configuration]
                                               completionHandler: nil];
-            AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
-            waitFor (^{ return ! isFullScreen (win); }, 4000, ^(bool) {
-                later (400, ^{
-                    AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanTrue);
-                    CFRelease (win);
-                });
-            });
+            refullScreen (win);
+            CFRelease (win);
             return true;
         }
 
@@ -335,17 +370,23 @@ namespace numdeck
             //    （向く前に「画面左側」を押すと、同じアプリの別のウィンドウ（研修の画面など）が分割されてしまう）
             bringAppForward (leftPid);
             focusWindow (win);
+            wlog (@"split: start left=%d right=%d hidden=%lu", leftPid, rightPid, (unsigned long) hidden.count);
             waitFor (^{ if (! isFocused (leftPid, win)) focusWindow (win); return isFocused (leftPid, win); }, 3000, ^(bool focused) {
+                wlog (@"split: left focused=%d", focused);
                 if (! focused) { finish ("うまく並べられませんでした（もう一度押してください）"); return; }
                 // 2. 「ウィンドウ」→「フルスクリーンのタイル表示」→「画面左側」
-                if (! pressTileLeft (leftPid)) { finish ("この画面では 2 分割にできませんでした"); return; }
+                const bool pressed = pressTileLeft (leftPid);
+                wlog (@"split: tile-left pressed=%d", pressed);
+                if (! pressed) { finish ("この画面では 2 分割にできませんでした"); return; }
                 // 3. 左が全画面に入る（＝右に置く相手を選ぶ画面が出た）のを待ってから、右半分の真ん中をクリック
                 waitFor (^{ return isFullScreen (win); }, 4000, ^(bool entered) {
+                    wlog (@"split: left entered=%d", entered);
                     if (! entered) { finish ("うまく並べられませんでした（もう一度押してください）"); return; }
                     later (600, ^{
                         clickAt (CGPointMake (area.origin.x + area.size.width * 0.875, area.origin.y + area.size.height * 0.5));
                         // 4. 右に入ったか確かめる。入っていなければ、選ぶ画面で自分で選んでもらう
                         waitFor (^{ return isFullScreen (rwin); }, 3000, ^(bool ok) {
+                            wlog (@"split: right entered=%d", ok);
                             finish (ok ? nullptr : "右に置くウィンドウをクリックしてください");
                         });
                     });
@@ -387,6 +428,26 @@ namespace numdeck
             for (NSScreen* s in [NSScreen screens])
                 if (NSPointInRect (probe, s.frame)) return s.frame.size.width;
             return 0;
+        }
+
+        // w が今のデスクトップ（画面に出ている）にあるか。ウィンドウの一覧（画面に出ている分だけ）で、持ち主と位置・大きさが合うものを探す
+        bool onCurrentSpace (pid_t pid, AXUIElementRef w)
+        {
+            CGPoint pos {}; CGSize size {};
+            getFrame (w, pos, size);
+            CFArrayRef list = CGWindowListCopyWindowInfo (kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+            if (list == nullptr) return false;
+            bool found = false;
+            for (NSDictionary* d in (__bridge NSArray*) list)
+            {
+                if ([d[(__bridge NSString*) kCGWindowOwnerPID] intValue] != pid) continue;
+                CGRect r {};
+                if (! CGRectMakeWithDictionaryRepresentation ((__bridge CFDictionaryRef) d[(__bridge NSString*) kCGWindowBounds], &r)) continue;
+                if (std::abs (r.origin.x - pos.x) < 4 && std::abs (r.origin.y - pos.y) < 4
+                    && std::abs (r.size.width - size.width) < 4 && std::abs (r.size.height - size.height) < 4) { found = true; break; }
+            }
+            CFRelease (list);
+            return found;
         }
 
         bool inSplit (AXUIElementRef w)
@@ -446,13 +507,8 @@ namespace numdeck
         if (inSplit (win))
         {
             showHUD ("全画面");
-            AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
-            waitFor (^{ return ! isFullScreen (win); }, 4000, ^(bool) {
-                later (400, ^{
-                    AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanTrue);
-                    CFRelease (win);
-                });
-            });
+            refullScreen (win);
+            CFRelease (win);
             return;
         }
 
@@ -494,7 +550,8 @@ namespace numdeck
         {
             if (host.empty()) return false;
             NSString* src = [NSString stringWithFormat:
-                @"tell application \"Google Chrome\"\n"
+                @"with timeout of 3 seconds\n"
+                 "tell application \"Google Chrome\"\n"
                  "repeat with w in windows\n"
                  "set n to count of tabs of w\n"
                  "repeat with i from 1 to n\n"
@@ -507,7 +564,8 @@ namespace numdeck
                  "end repeat\n"
                  "end repeat\n"
                  "return \"\"\n"
-                 "end tell", ns (host)];
+                 "end tell\n"
+                 "end timeout", ns (host)];
             NSAppleScript* script = [[NSAppleScript alloc] initWithSource: src];
             NSDictionary* err = nil;
             NSAppleEventDescriptor* r = [script executeAndReturnError: &err];
@@ -586,25 +644,64 @@ namespace numdeck
             });
         };
 
+        // 右がアプリ（Claude など）のとき: 先にそのアプリを前に出して、そのウィンドウがあるデスクトップに移る。
+        // 左のページのウィンドウがそのデスクトップに無ければ、そこに新しく開く。
+        // （2 画面の相手を選ぶ画面には、今のデスクトップにあるウィンドウしか出ないため。2 つが別々のデスクトップだと分割できない）
+        auto appRight = ^(AXUIElementRef reuseLeft) {
+            NSString* path = ns (rightSide);
+            NSString* bid = [NSBundle bundleWithPath: path].bundleIdentifier;
+            if (bid == nil) { openNew(); return; }
+            AXUIElementRef cand = reuseLeft != nullptr ? (AXUIElementRef) CFRetain (reuseLeft) : nullptr;
+            [[NSWorkspace sharedWorkspace] openApplicationAtURL: [NSURL fileURLWithPath: path]
+                                                  configuration: [NSWorkspaceOpenConfiguration configuration]
+                                              completionHandler: nil];
+            waitAndPlace (bid, nullptr, right, 0, ^(AXUIElementRef placedRight) {
+                if (placedRight == nullptr) { if (cand != nullptr) CFRelease (cand); return; }
+                AXUIElementRef rw = (AXUIElementRef) CFRetain (placedRight);
+                pid_t rp = 0;
+                AXUIElementGetPid (rw, &rp);
+                const pid_t chromePid = runningPid (chromeId);
+                auto go = ^(AXUIElementRef lw) {
+                    rememberLink (key, lw, chromePid, rw, rp);
+                    makeFullScreenSplit (chromePid, lw, rp, rw, area);
+                };
+                const bool here = cand != nullptr && onCurrentSpace (chromePid, cand);
+                wlog (@"app-right: right placed, reuse-left here=%d", here);
+                if (here)
+                {
+                    placeWindow (cand, left);
+                    later (300, ^{ go (cand); CFRelease (cand); CFRelease (rw); });
+                    return;
+                }
+                if (cand != nullptr) CFRelease (cand);
+                AXUIElementRef before = copyFrontWindow (chromeId);
+                launchChrome (profileDir, @[ @"--new-window", ns (key) ]);
+                waitAndPlace (chromeId, before, left, 0, ^(AXUIElementRef placedLeft) {
+                    if (placedLeft != nullptr) go (placedLeft);
+                    CFRelease (rw);
+                });
+            });
+        };
+
         // このページのタブがある Chrome のウィンドウがあれば、それを使い回す（Num Deck を入れ直したあとでも見つかる）。
         // そのウィンドウがもう左右分割に入っていれば、その画面へ移るだけ。普通のウィンドウなら左に置いて分割し直す
-        if (! raiseChromeWindowWithHost (hostOf (url))) { openNew(); return; }
+        const bool foundTab = raiseChromeWindowWithHost (hostOf (url));
+        wlog (@"link split: %s found-tab=%d right=%s", url.c_str(), foundTab, split.c_str());
+        if (! foundTab) { if (rightSide == "chrome") openNew(); else appRight (nullptr); return; }
         waitFor (^{ NSRunningApplication* f = [[NSWorkspace sharedWorkspace] frontmostApplication];
                     return f != nil && [f.bundleIdentifier isEqualToString: chromeId]; }, 3000, ^(bool) {
             later (500, ^{
                 AXUIElementRef w = copyFocusedWindowOf (runningPid (chromeId));
-                if (w == nullptr) { openNew(); return; }
+                if (w == nullptr) { if (rightSide == "chrome") openNew(); else appRight (nullptr); return; }
                 if (inSplit (w)) { CFRelease (w); return; }
+                if (rightSide != "chrome") { appRight (w); CFRelease (w); return; }
                 auto placeAndGo = ^{
                     placeWindow (w, left);
                     withLeft (w, true);
                     CFRelease (w);
                 };
                 if (isFullScreen (w))
-                {
-                    AXUIElementSetAttributeValue (w, CFSTR ("AXFullScreen"), kCFBooleanFalse);
-                    waitFor (^{ return ! isFullScreen (w); }, 4000, ^(bool) { later (400, placeAndGo); });
-                }
+                    setFullScreenSurely (w, false, 3, ^(bool) { later (500, placeAndGo); });
                 else
                     placeAndGo();
             });

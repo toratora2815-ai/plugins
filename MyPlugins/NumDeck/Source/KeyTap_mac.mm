@@ -584,11 +584,13 @@ namespace numdeck
 
     bool KeyTap::chromeFrontPage (std::string& url, std::string& title)
     {
-        NSString* src = @"tell application \"Google Chrome\"\n"
+        NSString* src = @"with timeout of 3 seconds\n"
+                         "tell application \"Google Chrome\"\n"
                          "if (count of windows) is 0 then return \"\"\n"
                          "set t to active tab of front window\n"
                          "return (URL of t) & linefeed & (title of t)\n"
-                         "end tell";
+                         "end tell\n"
+                         "end timeout";
         NSAppleScript* script = [[NSAppleScript alloc] initWithSource: src];
         NSDictionary* err = nil;
         NSAppleEventDescriptor* r = [script executeAndReturnError: &err];
