@@ -27,7 +27,9 @@ namespace numdeck
     std::vector<std::string> KeyTap::screenNames() { return {}; }
     bool KeyTap::bringLogicFront() { return false; }
     void KeyTap::returnFromLogic() {}
-    void KeyTap::quitAllApps() {}
+    void KeyTap::quitAllApps (const std::vector<std::string>&) {}
+    std::vector<std::pair<std::string, std::string>> KeyTap::runningApps() { return {}; }
+    void KeyTap::showHUD (const std::string&) {}
     void KeyTap::toggleFullScreenOrSplit() {}
     std::vector<std::pair<std::string, std::string>> KeyTap::chromeProfiles() { return {}; }
     bool KeyTap::chromeFrontPage (std::string&, std::string&) { return false; }

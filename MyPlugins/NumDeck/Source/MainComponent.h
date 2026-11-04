@@ -28,6 +28,8 @@ private:
     void chooseOtherApp (int page, int index);
     void chooseSplitApp (int page, int index);
     juce::String toggleKeyLabel() const;
+    void exportSettings();
+    void importSettings();
     void registerChromePage (int page, int index);
     void enterUrl (int page, int index);
     void openMacroEditor (int page, int index);

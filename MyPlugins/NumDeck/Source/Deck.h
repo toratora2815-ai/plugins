@@ -203,6 +203,8 @@ namespace numdeck
         bool enabled = true;
         bool logicOnly = true;     // Logic Pro モードだけに効く
         bool alwaysOnTop = false;
+        bool showHud = true;  // 押した操作の名前を画面の下に一瞬出す
+        juce::StringArray keepApps { "com.anthropic.claudefordesktop", "com.apple.logic" };  // 全部終了で残すアプリ（バンドル ID の前方一致）
         int mode = ModeLogic;      // 画面のクリックでだけ切り替える（テンキーでは変わらない）
         int toggleKey = ToggleClear;
         int toggleKeyCode = -1;  // ToggleLearned のときのキー（Home など）
@@ -365,9 +367,14 @@ namespace numdeck
             else                      KeyTap::openURL (url.toStdString(), prof);
         }
 
-        static void runRemote (const juce::String& remote)
+        void runRemote (const juce::String& remote) const
         {
-            if (remote == "!quitAll") KeyTap::quitAllApps();
+            if (remote == "!quitAll")
+            {
+                std::vector<std::string> keep;
+                for (auto& k : keepApps) keep.push_back (k.toStdString());
+                KeyTap::quitAllApps (keep);
+            }
             else if (remote == "!fullHalf") KeyTap::toggleFullScreenOrSplit();
             else KeyTap::sendRemote ("referencemonitor", remote.toStdString());
         }
@@ -475,7 +482,7 @@ namespace numdeck
                 {
                     if (auto* a = findAction (st.actionId))
                     {
-                        if (a->remote != nullptr) runRemote (a->remote);
+                        if (a->remote != nullptr) deck.runRemote (a->remote);
                         else                      KeyTap::sendKey (a->keyCode, a->mods);
                     }
                 }
@@ -513,7 +520,7 @@ namespace numdeck
                                || (toggleKey == ToggleEquals && pad == PadEquals);
             if (isToggle)
             {
-                if (down && ! repeat) { enabled = ! enabled; changed(); }
+                if (down && ! repeat) { enabled = ! enabled; hud (enabled ? "ON" : "OFF"); changed(); }
                 return true;
             }
             if (! enabled) return false;
@@ -532,7 +539,7 @@ namespace numdeck
 
             if (isPageKey)
             {
-                if (down && ! repeat) { stepPage (pad == PadMultiply ? 1 : -1); changed(); }
+                if (down && ! repeat) { stepPage (pad == PadMultiply ? 1 : -1); hud (pageName (page())); changed(); }
                 return true;
             }
 
@@ -549,6 +556,7 @@ namespace numdeck
             if (down && (! repeat || r.repeat))
             {
                 run (r, index);
+                if (! repeat && r.remote != "!fullHalf") hud (r.name);
                 if (onFired) onFired (index);
             }
             return true;
@@ -559,11 +567,11 @@ namespace numdeck
         {
             if (toggleKey == ToggleLearned && keyCode == toggleKeyCode)
             {
-                if (down && ! repeat) { enabled = ! enabled; changed(); }
+                if (down && ! repeat) { enabled = ! enabled; hud (enabled ? "ON" : "OFF"); changed(); }
                 return true;
             }
             if (modeKey < 0 || keyCode != modeKey) return false;
-            if (down && ! repeat) { setMode (mode == ModeLogic ? ModeWork : ModeLogic); changed(); }
+            if (down && ! repeat) { setMode (mode == ModeLogic ? ModeWork : ModeLogic); hud (modeName (mode) + " / " + pageName (page())); changed(); }
             return true;
         }
 
@@ -604,6 +612,20 @@ namespace numdeck
             }
         }
 
+        void hud (const juce::String& text) const { if (showHud) KeyTap::showHUD (text.toStdString()); }
+
+        // 設定ファイルの書き出し・読み込み（バックアップ）
+        juce::File settingsFile() const { return props->getFile(); }
+        bool exportSettings (const juce::File& to) { save(); return settingsFile().copyFileTo (to); }
+        bool importSettings (const juce::File& from)
+        {
+            if (! from.existsAsFile() || ! from.loadFileAsString().contains ("<PROPERTIES")) return false;
+            if (! from.copyFileTo (settingsFile())) return false;
+            props->reload();
+            load();
+            return true;
+        }
+
         void resetCurrentPage() { resetPage (mode, page()); save(); }
         void resetCurrentMode() { for (int p = 0; p < kPages; ++p) resetPage (mode, p); save(); }
 
@@ -612,6 +634,8 @@ namespace numdeck
             props->setValue ("enabled", enabled);
             props->setValue ("logicOnly", logicOnly);
             props->setValue ("alwaysOnTop", alwaysOnTop);
+            props->setValue ("showHud", showHud);
+            props->setValue ("keepApps", keepApps.joinIntoString (","));
             props->setValue ("mode", mode);
             props->setValue ("toggleKey", toggleKey);
             props->setValue ("toggleKeyCode", toggleKeyCode);
@@ -653,6 +677,10 @@ namespace numdeck
             enabled     = props->getBoolValue ("enabled", true);
             logicOnly   = props->getBoolValue ("logicOnly", true);
             alwaysOnTop = props->getBoolValue ("alwaysOnTop", false);
+            showHud     = props->getBoolValue ("showHud", true);
+            if (props->containsKey ("keepApps"))
+                keepApps = juce::StringArray::fromTokens (props->getValue ("keepApps"), ",", "");
+            keepApps.removeEmptyStrings();
             mode        = juce::jlimit (0, kModes - 1, props->getIntValue ("mode", ModeLogic));
             toggleKey   = juce::jlimit (0, (int) ToggleLearned, props->getIntValue ("toggleKey", ToggleClear));
             toggleKeyCode = props->getIntValue ("toggleKeyCode", -1);

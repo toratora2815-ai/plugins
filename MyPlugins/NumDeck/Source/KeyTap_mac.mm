@@ -2,6 +2,8 @@
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #include <cmath>
+#include <map>
+#include <vector>
 
 namespace numdeck
 {
@@ -349,15 +351,83 @@ namespace numdeck
                                           completionHandler: nil];
     }
 
-    void KeyTap::quitAllApps()
+    void KeyTap::quitAllApps (const std::vector<std::string>& keep)
     {
         const pid_t self = [NSRunningApplication currentApplication].processIdentifier;
         for (NSRunningApplication* a in [[NSWorkspace sharedWorkspace] runningApplications])
         {
             if (a.activationPolicy != NSApplicationActivationPolicyRegular || a.processIdentifier == self) continue;
-            if ([a.bundleIdentifier isEqualToString: @"com.apple.finder"]) continue;
-            [a terminate];
+            NSString* bid = a.bundleIdentifier;
+            if (bid == nil || [bid isEqualToString: @"com.apple.finder"]) continue;
+            bool kept = false;
+            for (auto& k : keep)  // 前方一致（"com.apple.logic" で Logic Pro のどの版も）
+                if (! k.empty() && [bid hasPrefix: ns (k)]) kept = true;
+            if (! kept) [a terminate];
         }
+    }
+
+    std::vector<std::pair<std::string, std::string>> KeyTap::runningApps()
+    {
+        std::vector<std::pair<std::string, std::string>> r;
+        const pid_t self = [NSRunningApplication currentApplication].processIdentifier;
+        for (NSRunningApplication* a in [[NSWorkspace sharedWorkspace] runningApplications])
+        {
+            if (a.activationPolicy != NSApplicationActivationPolicyRegular || a.processIdentifier == self || a.bundleIdentifier == nil) continue;
+            NSString* n = a.localizedName != nil ? a.localizedName : a.bundleIdentifier;
+            r.push_back ({ a.bundleIdentifier.UTF8String, n.UTF8String != nullptr ? n.UTF8String : a.bundleIdentifier.UTF8String });
+        }
+        return r;
+    }
+
+    // 押した操作の名前を、画面の下に一瞬だけ出す（全画面のアプリの上にも出る。クリックは通り抜ける）
+    void KeyTap::showHUD (const std::string& text)
+    {
+        static NSPanel* panel = nil;
+        static NSTextField* label = nil;
+        static int generation = 0;
+        if (panel == nil)
+        {
+            panel = [[NSPanel alloc] initWithContentRect: NSMakeRect (0, 0, 300, 52)
+                                               styleMask: NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+                                                 backing: NSBackingStoreBuffered defer: NO];
+            panel.level = NSStatusWindowLevel;
+            panel.opaque = NO;
+            panel.backgroundColor = [NSColor clearColor];
+            panel.ignoresMouseEvents = YES;
+            panel.hasShadow = YES;
+            panel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary
+                                     | NSWindowCollectionBehaviorStationary | NSWindowCollectionBehaviorIgnoresCycle;
+            NSView* v = [[NSView alloc] initWithFrame: NSMakeRect (0, 0, 300, 52)];
+            v.wantsLayer = YES;
+            v.layer.backgroundColor = [NSColor colorWithCalibratedRed: 0.08 green: 0.10 blue: 0.13 alpha: 0.92].CGColor;
+            v.layer.cornerRadius = 14;
+            v.layer.borderWidth = 1.5;
+            v.layer.borderColor = [NSColor colorWithCalibratedRed: 1.0 green: 0.55 blue: 0.25 alpha: 0.9].CGColor;
+            label = [NSTextField labelWithString: @""];
+            label.font = [NSFont boldSystemFontOfSize: 19];
+            label.textColor = [NSColor whiteColor];
+            label.alignment = NSTextAlignmentCenter;
+            [v addSubview: label];
+            panel.contentView = v;
+        }
+        label.stringValue = ns (text);
+        [label sizeToFit];
+        const CGFloat w = std::max<CGFloat> (160, label.frame.size.width + 48), h = 52;
+        const NSPoint m = [NSEvent mouseLocation];
+        NSScreen* scr = [NSScreen mainScreen];
+        for (NSScreen* s in [NSScreen screens])
+            if (NSPointInRect (m, s.frame)) { scr = s; break; }
+        const NSRect vf = scr.visibleFrame;
+        [panel setFrame: NSMakeRect (NSMidX (vf) - w / 2, vf.origin.y + 70, w, h) display: NO];
+        label.frame = NSMakeRect (0, (h - label.frame.size.height) / 2, w, label.frame.size.height);
+        panel.alphaValue = 1.0;
+        [panel orderFrontRegardless];
+        const int gen = ++generation;
+        dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 900 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            if (gen != generation) return;
+            [NSAnimationContext runAnimationGroup: ^(NSAnimationContext* ctx) { ctx.duration = 0.25; panel.animator.alphaValue = 0.0; }
+                                completionHandler: ^{ if (gen == generation) [panel orderOut: nil]; }];
+        });
     }
 
     void KeyTap::openURL (const std::string& url, const std::string& profileDir)
@@ -621,21 +691,48 @@ namespace numdeck
         // 左右に並べた 2 つを、macOS の全画面の左右分割にする。
         // 左のウィンドウを「画面左側」にすると、右に置く相手を選ぶ画面が出る。
         // そこでは各ウィンドウが元の位置を縮めた所に並ぶので、右半分に置いた相手の所（右半分の真ん中）をクリックする
-        void makeFullScreenSplit (pid_t leftPid, AXUIElementRef leftWin, CGRect area)
+        // 相手を選ぶ画面には、今の画面にあるほかのアプリのウィンドウも並ぶ。違うものを選ばないよう、
+        // 左右の 2 つのアプリ以外（Num Deck も）をいったん隠し、分割できたら元に戻す
+        void makeFullScreenSplit (pid_t leftPid, AXUIElementRef leftWin, pid_t rightPid, AXUIElementRef rightWin, CGRect area)
         {
+            NSMutableArray<NSRunningApplication*>* hidden = [NSMutableArray array];
+            for (NSRunningApplication* a in [[NSWorkspace sharedWorkspace] runningApplications])
+            {
+                if (a.activationPolicy != NSApplicationActivationPolicyRegular || a.hidden) continue;
+                if (a.processIdentifier == leftPid || a.processIdentifier == rightPid) continue;
+                if ([a hide]) [hidden addObject: a];
+            }
+           #if ! __has_feature(objc_arc)
+            [hidden retain];
+           #endif
+
             if (NSRunningApplication* a = [NSRunningApplication runningApplicationWithProcessIdentifier: leftPid])
                 if (a.bundleURL != nil)
                     [[NSWorkspace sharedWorkspace] openApplicationAtURL: a.bundleURL
                                                           configuration: [NSWorkspaceOpenConfiguration configuration]
                                                       completionHandler: nil];
             AXUIElementRef win = (AXUIElementRef) CFRetain (leftWin);
-            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            AXUIElementRef rwin = (AXUIElementRef) CFRetain (rightWin);
+            auto restore = ^{
+                for (NSRunningApplication* a in hidden) [a unhide];
+               #if ! __has_feature(objc_arc)
+                [hidden release];
+               #endif
+            };
+            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
                 AXUIElementPerformAction (win, kAXRaiseAction);
                 CFRelease (win);
-                if (! pressTileLeft (leftPid)) return;
+                if (! pressTileLeft (leftPid)) { CFRelease (rwin); restore(); return; }
                 const CGPoint target = CGPointMake (area.origin.x + area.size.width * 0.875, area.origin.y + area.size.height * 0.5);
                 dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1600 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
                     clickAt (target);
+                    dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 2000 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                        // 右に入ったか確かめる。入っていなければ、選ぶ画面で自分で選んでもらう
+                        if (! axBool (rwin, CFSTR ("AXFullScreen")))
+                            KeyTap::showHUD ("右に置くウィンドウをクリックしてください");
+                        CFRelease (rwin);
+                        restore();
+                    });
                 });
             });
         }
@@ -685,16 +782,45 @@ namespace numdeck
             return sw > 0 && size.width < sw * 0.9;
         }
 
-        // 半画面 → 全画面にしたときの、元の相手（全画面から戻すときに使う）
-        AXUIElementRef lastSelf = nullptr, lastPartner = nullptr;
-        pid_t lastSelfPid = 0, lastPartnerPid = 0;
-        bool lastSelfWasLeft = true;
+        // 半画面 → 全画面にしたときの、元の相手（全画面から戻すときに使う）。最近の 6 組まで覚える
+        struct SplitPair { AXUIElementRef self, partner; pid_t selfPid, partnerPid; bool selfLeft; };
+        std::vector<SplitPair> splitPairs;
 
-        void forgetPair()
+        void forgetPairOf (AXUIElementRef w)
         {
-            if (lastSelf != nullptr) CFRelease (lastSelf);
-            if (lastPartner != nullptr) CFRelease (lastPartner);
-            lastSelf = lastPartner = nullptr;
+            for (auto it = splitPairs.begin(); it != splitPairs.end(); ++it)
+                if (CFEqual (it->self, w)) { CFRelease (it->self); CFRelease (it->partner); splitPairs.erase (it); return; }
+        }
+
+        bool stillExists (AXUIElementRef w)
+        {
+            if (w == nullptr) return false;
+            CFTypeRef role = nullptr;
+            const bool ok = AXUIElementCopyAttributeValue (w, kAXRoleAttribute, &role) == kAXErrorSuccess;
+            if (role != nullptr) CFRelease (role);
+            return ok;
+        }
+
+        // l を左、r を右にして全画面の左右分割にする（どちらかが全画面なら先に解除して待つ）
+        void resplit (AXUIElementRef l, pid_t lPid, AXUIElementRef r, pid_t rPid)
+        {
+            bool waited = false;
+            for (AXUIElementRef w : { l, r })
+                if (axBool (w, CFSTR ("AXFullScreen"))) { AXUIElementSetAttributeValue (w, CFSTR ("AXFullScreen"), kCFBooleanFalse); waited = true; }
+            AXUIElementRef lw = (AXUIElementRef) CFRetain (l);
+            AXUIElementRef rw = (AXUIElementRef) CFRetain (r);
+            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, (waited ? 1500 : 100) * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                const CGRect area = visibleAreaForAX();
+                const CGFloat half = std::floor (area.size.width / 2);
+                placeWindow (lw, CGRectMake (area.origin.x, area.origin.y, half, area.size.height));
+                placeWindow (rw, CGRectMake (area.origin.x + half, area.origin.y, area.size.width - half, area.size.height));
+                AXUIElementPerformAction (rw, kAXRaiseAction);
+                dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                    makeFullScreenSplit (lPid, lw, rPid, rw, area);
+                    CFRelease (lw);
+                    CFRelease (rw);
+                });
+            });
         }
 
         // w と一緒に左右分割に入っている、もう片方のウィンドウ（呼んだ側で CFRelease）
@@ -739,18 +865,16 @@ namespace numdeck
         {
             pid_t partnerPid = 0;
             AXUIElementRef partner = copySplitPartner (win, partnerPid);
-            forgetPair();
+            forgetPairOf (win);
             if (partner != nullptr)
             {
                 CGPoint p1 {}, p2 {}; CGSize s1 {}, s2 {};
                 getFrame (win, p1, s1);
                 getFrame (partner, p2, s2);
-                lastSelf = (AXUIElementRef) CFRetain (win);
-                lastPartner = partner;
-                lastSelfPid = front.processIdentifier;
-                lastPartnerPid = partnerPid;
-                lastSelfWasLeft = p1.x < p2.x;
+                splitPairs.push_back ({ (AXUIElementRef) CFRetain (win), partner, front.processIdentifier, partnerPid, p1.x < p2.x });
+                if (splitPairs.size() > 6) { CFRelease (splitPairs.front().self); CFRelease (splitPairs.front().partner); splitPairs.erase (splitPairs.begin()); }
             }
+            showHUD ("全画面");
             AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
             dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
                 AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanTrue);
@@ -759,41 +883,44 @@ namespace numdeck
             return;
         }
 
-        // 2. 全画面（1 枚）→ さっき半画面から全画面にしたウィンドウなら、元の相手と左右分割に戻す。そうでなければ全画面をやめる
+        // 2. 全画面（1 枚）→ 半画面から全画面にしたウィンドウなら、元の相手と左右分割に戻す。そうでなければ全画面をやめる
         if (axBool (win, CFSTR ("AXFullScreen")))
         {
-            const bool canRestore = lastSelf != nullptr && CFEqual (lastSelf, win)
-                                 && [NSRunningApplication runningApplicationWithProcessIdentifier: lastPartnerPid] != nil;
+            for (auto& pr : splitPairs)
+            {
+                if (! CFEqual (pr.self, win)) continue;
+                if (! stillExists (pr.partner)) break;
+                showHUD ("半画面");
+                if (pr.selfLeft) resplit (pr.self, pr.selfPid, pr.partner, pr.partnerPid);
+                else             resplit (pr.partner, pr.partnerPid, pr.self, pr.selfPid);
+                CFRelease (win);
+                return;
+            }
+            showHUD ("全画面をやめる");
             AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
-            if (! canRestore) { CFRelease (win); return; }
-
-            AXUIElementRef partner = (AXUIElementRef) CFRetain (lastPartner);
-            if (axBool (partner, CFSTR ("AXFullScreen")))
-                AXUIElementSetAttributeValue (partner, CFSTR ("AXFullScreen"), kCFBooleanFalse);
-            const bool selfLeft = lastSelfWasLeft;
-            const pid_t selfPid = lastSelfPid, partnerPid = lastPartnerPid;
-            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                const CGRect area = visibleAreaForAX();
-                const CGFloat half = std::floor (area.size.width / 2);
-                const CGRect left  = CGRectMake (area.origin.x, area.origin.y, half, area.size.height);
-                const CGRect right = CGRectMake (area.origin.x + half, area.origin.y, area.size.width - half, area.size.height);
-                AXUIElementRef l = selfLeft ? win : partner;
-                AXUIElementRef r = selfLeft ? partner : win;
-                placeWindow (l, left);
-                placeWindow (r, right);
-                AXUIElementPerformAction (r, kAXRaiseAction);
-                dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                    makeFullScreenSplit (selfLeft ? selfPid : partnerPid, l, area);
-                    CFRelease (win);
-                    CFRelease (partner);
-                });
-            });
+            CFRelease (win);
             return;
         }
 
         // 3. 普通のウィンドウ → 全画面に
+        showHUD ("全画面");
         AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanTrue);
         CFRelease (win);
+    }
+
+    namespace
+    {
+        // 2 画面で開いたリンクごとの、左右のウィンドウ（もう一度押したとき、残っていれば使い回す）
+        struct LinkWindows { AXUIElementRef left = nullptr, right = nullptr; pid_t leftPid = 0, rightPid = 0; };
+        std::map<std::string, LinkWindows> linkWindows;
+
+        void rememberLink (const std::string& url, AXUIElementRef l, pid_t lp, AXUIElementRef r, pid_t rp)
+        {
+            auto& e = linkWindows[url];
+            if (e.left != nullptr) CFRelease (e.left);
+            if (e.right != nullptr) CFRelease (e.right);
+            e = { (AXUIElementRef) CFRetain (l), (AXUIElementRef) CFRetain (r), lp, rp };
+        }
     }
 
     void KeyTap::openURLSplit (const std::string& url, const std::string& profileDir, const std::string& split)
@@ -801,11 +928,35 @@ namespace numdeck
         NSString* chromeId = @"com.google.Chrome";
         if ([[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier: chromeId] == nil) { openURL (url, profileDir); return; }
 
+        // 前にこのリンクで開いた 2 つが残っていれば使い回す。
+        // ちゃんと分割できていればその画面へ移るだけ、崩れていれば並べ直す
+        auto it = linkWindows.find (url);
+        if (it != linkWindows.end() && stillExists (it->second.left) && stillExists (it->second.right))
+        {
+            auto& e = it->second;
+            if (inSplit (e.left) && inSplit (e.right))
+            {
+                if (NSRunningApplication* a = [NSRunningApplication runningApplicationWithProcessIdentifier: e.leftPid])
+                    if (a.bundleURL != nil)
+                        [[NSWorkspace sharedWorkspace] openApplicationAtURL: a.bundleURL
+                                                              configuration: [NSWorkspaceOpenConfiguration configuration]
+                                                          completionHandler: nil];
+                AXUIElementPerformAction (e.left, kAXRaiseAction);
+            }
+            else
+            {
+                if (axBool (e.left, kAXMinimizedAttribute))  AXUIElementSetAttributeValue (e.left, kAXMinimizedAttribute, kCFBooleanFalse);
+                if (axBool (e.right, kAXMinimizedAttribute)) AXUIElementSetAttributeValue (e.right, kAXMinimizedAttribute, kCFBooleanFalse);
+                resplit (e.left, e.leftPid, e.right, e.rightPid);
+            }
+            return;
+        }
+
         const CGRect area = visibleAreaForAX();
         const CGFloat half = std::floor (area.size.width / 2);
         const CGRect left  = CGRectMake (area.origin.x, area.origin.y, half, area.size.height);
         const CGRect right = CGRectMake (area.origin.x + half, area.origin.y, area.size.width - half, area.size.height);
-        const std::string rightSide = split;
+        const std::string rightSide = split, key = url;
 
         // 1. ページを新しいウィンドウで開いて左半分へ → 2. 右半分 → 3. 全画面の左右分割にする
         AXUIElementRef before = copyFrontWindow (chromeId);
@@ -815,7 +966,13 @@ namespace numdeck
             AXUIElementRef leftWin = (AXUIElementRef) CFRetain (placedLeft);
             const pid_t chromePid = runningPid (chromeId);
             auto finish = ^(AXUIElementRef placedRight) {
-                if (placedRight != nullptr) makeFullScreenSplit (chromePid, leftWin, area);
+                if (placedRight != nullptr)
+                {
+                    pid_t rp = 0;
+                    AXUIElementGetPid (placedRight, &rp);
+                    rememberLink (key, leftWin, chromePid, placedRight, rp);
+                    makeFullScreenSplit (chromePid, leftWin, rp, placedRight, area);
+                }
                 CFRelease (leftWin);
             };
             if (rightSide == "chrome")

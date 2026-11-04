@@ -1304,6 +1304,31 @@ void MainComponent::showSettingsMenu()
                     + (deck.chromeProfileName.isNotEmpty() ? juce::String::fromUTF8 ("：") + deck.chromeProfileName : juce::String()),
                   prof);
     m.addSeparator();
+    m.addItem (32, juce::String::fromUTF8 ("押したとき画面の下に名前を出す"), true, deck.showHud);
+    // 全部終了で残すアプリ（チェック付き = 残す）。今開いているアプリも並べて、クリックで切り替え
+    juce::StringArray keepIds, keepNames;
+    for (auto& k : deck.keepApps)
+    {
+        keepIds.add (k);
+        keepNames.add (k == "com.anthropic.claudefordesktop" ? juce::String ("Claude")
+                     : k == "com.apple.logic" ? juce::String ("Logic Pro") : k);
+    }
+    for (auto& [bid, name] : KeyTap::runningApps())
+    {
+        const juce::String b = juce::String::fromUTF8 (bid.c_str());
+        bool covered = false;
+        for (auto& k : deck.keepApps) if (b.startsWith (k)) covered = true;
+        if (! covered && ! keepIds.contains (b)) { keepIds.add (b); keepNames.add (juce::String::fromUTF8 (name.c_str())); }
+    }
+    {
+        juce::PopupMenu keep;
+        for (int i = 0; i < keepIds.size() && i < 60; ++i)
+            keep.addItem (200 + i, keepNames[i], true, deck.keepApps.contains (keepIds[i]));
+        m.addSubMenu (juce::String::fromUTF8 ("「アプリを全部終了」で残すアプリ"), keep);
+    }
+    m.addItem (33, juce::String::fromUTF8 ("設定を書き出す（バックアップ）\xe2\x80\xa6"));
+    m.addItem (34, juce::String::fromUTF8 ("設定を読み込む\xe2\x80\xa6"));
+    m.addSeparator();
     m.addItem (30, juce::String::fromUTF8 ("大きい画面にする"), true, ! compact);
     m.addItem (31, juce::String::fromUTF8 ("小さい画面にする（4 分の 1）"), true, compact);
     m.addSeparator();
@@ -1312,7 +1337,7 @@ void MainComponent::showSettingsMenu()
     juce::Component::SafePointer<MainComponent> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this)
                                                .withTargetScreenArea (localAreaToGlobal (settingsPill)),
-                     [safe, profiles] (int r)
+                     [safe, profiles, keepIds] (int r)
                      {
                          if (safe == nullptr || r == 0) return;
                          auto& d = safe->deck;
@@ -1325,6 +1350,16 @@ void MainComponent::showSettingsMenu()
                              safe->resized();
                          }
                          if (r == 6) safe->startLearning (0, kLearnModeKey);
+                         if (r == 32) { d.showHud = ! d.showHud; d.save(); }
+                         if (r >= 200 && r - 200 < keepIds.size())
+                         {
+                             const auto id = keepIds[r - 200];
+                             if (d.keepApps.contains (id)) d.keepApps.removeString (id);
+                             else                          d.keepApps.add (id);
+                             d.save();
+                         }
+                         if (r == 33) safe->exportSettings();
+                         if (r == 34) safe->importSettings();
                          if (r == 7) { d.modeKey = -1; d.save(); }
                          if (r == 40) { d.chromeProfile.clear(); d.chromeProfileName.clear(); d.save(); }
                          if (r > 40 && r - 41 < (int) profiles.size())
@@ -1365,6 +1400,39 @@ void MainComponent::startLearning (int page, int index)
     tap.learnAnyKey = index >= kLearnModeKey;
     tap.learning = true;
     repaint();
+}
+
+// 設定のバックアップ（書き出し・読み込み）
+void MainComponent::exportSettings()
+{
+    chooser = std::make_unique<juce::FileChooser> (juce::String::fromUTF8 ("設定の書き出し先"),
+                                                   juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                                                       .getChildFile ("Num Deck 設定 " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d") + ".settings"),
+                                                   "*.settings");
+    juce::Component::SafePointer<MainComponent> safe (this);
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
+                          [safe] (const juce::FileChooser& fc)
+                          {
+                              if (safe == nullptr || fc.getResult() == juce::File()) return;
+                              const bool ok = safe->deck.exportSettings (fc.getResult());
+                              KeyTap::showHUD (ok ? "設定を書き出しました" : "書き出せませんでした");
+                          });
+}
+
+void MainComponent::importSettings()
+{
+    chooser = std::make_unique<juce::FileChooser> (juce::String::fromUTF8 ("読み込む設定ファイル"),
+                                                   juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), "*.settings");
+    juce::Component::SafePointer<MainComponent> safe (this);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [safe] (const juce::FileChooser& fc)
+                          {
+                              if (safe == nullptr || fc.getResult() == juce::File()) return;
+                              const bool ok = safe->deck.importSettings (fc.getResult());
+                              KeyTap::showHUD (ok ? "設定を読み込みました" : "読み込めませんでした");
+                              safe->resized();
+                              safe->repaint();
+                          });
 }
 
 // 2 画面で開くときに右に置くアプリを選ぶ
