@@ -512,6 +512,62 @@ namespace numdeck
             return b;
         }
 
+        // cond が true になるまで 0.1 秒ごとに確かめて待つ（最大 timeoutMs）。then には間に合ったかを渡す。
+        // 決め打ちの待ち時間だと、Mac が忙しいときに全画面の切り替えが終わる前に次へ進んでずれるため
+        void waitFor (bool (^cond) (void), int timeoutMs, void (^then) (bool))
+        {
+            if (cond()) { then (true); return; }
+            if (timeoutMs <= 0) { then (false); return; }
+            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                waitFor (cond, timeoutMs - 100, then);
+            });
+        }
+
+        void later (int ms, void (^block) (void))
+        {
+            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, (int64_t) ms * (int64_t) NSEC_PER_MSEC), dispatch_get_main_queue(), block);
+        }
+
+        bool isFullScreen (AXUIElementRef w) { return axBool (w, CFSTR ("AXFullScreen")); }
+
+        // アプリを前に出す（activateWithOptions は後ろにいる Num Deck からだと断られることがあるので、開き直す）
+        void bringAppForward (pid_t pid)
+        {
+            if (NSRunningApplication* a = [NSRunningApplication runningApplicationWithProcessIdentifier: pid])
+                if (a.bundleURL != nil)
+                    [[NSWorkspace sharedWorkspace] openApplicationAtURL: a.bundleURL
+                                                          configuration: [NSWorkspaceOpenConfiguration configuration]
+                                                      completionHandler: nil];
+        }
+
+        // そのアプリの、今キーボードが向いているウィンドウ（呼んだ側で CFRelease）
+        AXUIElementRef copyFocusedWindowOf (pid_t pid)
+        {
+            AXUIElementRef app = AXUIElementCreateApplication (pid);
+            CFTypeRef w = nullptr;
+            AXUIElementCopyAttributeValue (app, kAXFocusedWindowAttribute, &w);
+            CFRelease (app);
+            return (AXUIElementRef) w;
+        }
+
+        // win を、そのアプリの前面（キーボードが向く）ウィンドウにする
+        void focusWindow (AXUIElementRef win)
+        {
+            AXUIElementSetAttributeValue (win, kAXMainAttribute, kCFBooleanTrue);
+            AXUIElementPerformAction (win, kAXRaiseAction);
+        }
+
+        // pid のアプリが前面で、そのキーボードが win を向いているか
+        bool isFocused (pid_t pid, AXUIElementRef win)
+        {
+            NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+            if (front == nil || front.processIdentifier != pid) return false;
+            AXUIElementRef f = copyFocusedWindowOf (pid);
+            const bool ok = f != nullptr && CFEqual (f, win);
+            if (f != nullptr) CFRelease (f);
+            return ok;
+        }
+
         // 全画面（ほかと左右分割中も含む）なら解除し、しまってあれば出す。解除したら true（落ち着くまで少し待つ）
         bool bringOutOfFullScreen (AXUIElementRef w)
         {
@@ -530,11 +586,11 @@ namespace numdeck
             const bool ready = w != nullptr && (before == nullptr || ! CFEqual (w, before));
             if (ready && tries < 190 && bringOutOfFullScreen (w))
             {
-                // 全画面を抜けるアニメーションが終わってから置き直す（同じウィンドウなので before は外す）
-                CFRelease (w);
+                // 全画面を抜けきってから置き直す（同じウィンドウなので before は外す）
                 if (before != nullptr) CFRelease (before);
-                dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                    waitAndPlace (bundleId, nullptr, r, tries + 1, then);
+                waitFor (^{ return ! isFullScreen (w); }, 4000, ^(bool) {
+                    CFRelease (w);
+                    later (300, ^{ waitAndPlace (bundleId, nullptr, r, tries + 1, then); });
                 });
                 return;
             }
@@ -615,9 +671,11 @@ namespace numdeck
                                                   configuration: [NSWorkspaceOpenConfiguration configuration]
                                               completionHandler: nil];
             AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
-            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanTrue);
-                CFRelease (win);
+            waitFor (^{ return ! isFullScreen (win); }, 4000, ^(bool) {
+                later (400, ^{
+                    AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanTrue);
+                    CFRelease (win);
+                });
             });
             return true;
         }
@@ -629,19 +687,18 @@ namespace numdeck
             AXUIElementRef win = copyFrontWindow (app.bundleIdentifier);
             if (win == nullptr) return false;
             const bool fs = axBool (win, CFSTR ("AXFullScreen"));
-            if (fs) AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
-            CFRelease (win);
-            if (! fs) return false;
+            if (! fs) { CFRelease (win); return false; }
+            AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
             const pid_t pid = app.processIdentifier;
             NSURL* back = [backURL copy];
-            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            waitFor (^{ return ! isFullScreen (win); }, 4000, ^(bool) { CFRelease (win); later (300, ^{
                 if (back != nil)
                     [[NSWorkspace sharedWorkspace] openApplicationAtURL: back
                                                           configuration: [NSWorkspaceOpenConfiguration configuration]
                                                       completionHandler: nil];
                 if (NSRunningApplication* a = [NSRunningApplication runningApplicationWithProcessIdentifier: pid])
                     [a hide];
-            });
+            }); });
             return true;
         }
 
@@ -705,33 +762,35 @@ namespace numdeck
            #if ! __has_feature(objc_arc)
             [hidden retain];
            #endif
-
-            if (NSRunningApplication* a = [NSRunningApplication runningApplicationWithProcessIdentifier: leftPid])
-                if (a.bundleURL != nil)
-                    [[NSWorkspace sharedWorkspace] openApplicationAtURL: a.bundleURL
-                                                          configuration: [NSWorkspaceOpenConfiguration configuration]
-                                                      completionHandler: nil];
             AXUIElementRef win = (AXUIElementRef) CFRetain (leftWin);
             AXUIElementRef rwin = (AXUIElementRef) CFRetain (rightWin);
-            auto restore = ^{
+            auto finish = ^(const char* message) {
+                if (message != nullptr) KeyTap::showHUD (message);
                 for (NSRunningApplication* a in hidden) [a unhide];
                #if ! __has_feature(objc_arc)
                 [hidden release];
                #endif
-            };
-            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                AXUIElementPerformAction (win, kAXRaiseAction);
                 CFRelease (win);
-                if (! pressTileLeft (leftPid)) { CFRelease (rwin); restore(); return; }
-                const CGPoint target = CGPointMake (area.origin.x + area.size.width * 0.875, area.origin.y + area.size.height * 0.5);
-                dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1600 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                    clickAt (target);
-                    dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 2000 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                        // 右に入ったか確かめる。入っていなければ、選ぶ画面で自分で選んでもらう
-                        if (! axBool (rwin, CFSTR ("AXFullScreen")))
-                            KeyTap::showHUD ("右に置くウィンドウをクリックしてください");
-                        CFRelease (rwin);
-                        restore();
+                CFRelease (rwin);
+            };
+
+            // 1. 左のウィンドウのアプリを前に出し、キーボードが左のウィンドウを向くまで待つ
+            //    （向く前に「画面左側」を押すと、同じアプリの別のウィンドウ（研修の画面など）が分割されてしまう）
+            bringAppForward (leftPid);
+            focusWindow (win);
+            waitFor (^{ if (! isFocused (leftPid, win)) focusWindow (win); return isFocused (leftPid, win); }, 3000, ^(bool focused) {
+                if (! focused) { finish ("うまく並べられませんでした（もう一度押してください）"); return; }
+                // 2. 「ウィンドウ」→「フルスクリーンのタイル表示」→「画面左側」
+                if (! pressTileLeft (leftPid)) { finish ("この画面では 2 分割にできませんでした"); return; }
+                // 3. 左が全画面に入る（＝右に置く相手を選ぶ画面が出た）のを待ってから、右半分の真ん中をクリック
+                waitFor (^{ return isFullScreen (win); }, 4000, ^(bool entered) {
+                    if (! entered) { finish ("うまく並べられませんでした（もう一度押してください）"); return; }
+                    later (600, ^{
+                        clickAt (CGPointMake (area.origin.x + area.size.width * 0.875, area.origin.y + area.size.height * 0.5));
+                        // 4. 右に入ったか確かめる。入っていなければ、選ぶ画面で自分で選んでもらう
+                        waitFor (^{ return isFullScreen (rwin); }, 3000, ^(bool ok) {
+                            finish (ok ? nullptr : "右に置くウィンドウをクリックしてください");
+                        });
                     });
                 });
             });
@@ -804,21 +863,25 @@ namespace numdeck
         // l を左、r を右にして全画面の左右分割にする（どちらかが全画面なら先に解除して待つ）
         void resplit (AXUIElementRef l, pid_t lPid, AXUIElementRef r, pid_t rPid)
         {
-            bool waited = false;
             for (AXUIElementRef w : { l, r })
-                if (axBool (w, CFSTR ("AXFullScreen"))) { AXUIElementSetAttributeValue (w, CFSTR ("AXFullScreen"), kCFBooleanFalse); waited = true; }
+            {
+                if (axBool (w, kAXMinimizedAttribute)) AXUIElementSetAttributeValue (w, kAXMinimizedAttribute, kCFBooleanFalse);
+                if (isFullScreen (w)) AXUIElementSetAttributeValue (w, CFSTR ("AXFullScreen"), kCFBooleanFalse);
+            }
             AXUIElementRef lw = (AXUIElementRef) CFRetain (l);
             AXUIElementRef rw = (AXUIElementRef) CFRetain (r);
-            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, (waited ? 1500 : 100) * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                const CGRect area = visibleAreaForAX();
-                const CGFloat half = std::floor (area.size.width / 2);
-                placeWindow (lw, CGRectMake (area.origin.x, area.origin.y, half, area.size.height));
-                placeWindow (rw, CGRectMake (area.origin.x + half, area.origin.y, area.size.width - half, area.size.height));
-                AXUIElementPerformAction (rw, kAXRaiseAction);
-                dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                    makeFullScreenSplit (lPid, lw, rPid, rw, area);
-                    CFRelease (lw);
-                    CFRelease (rw);
+            waitFor (^{ return ! isFullScreen (lw) && ! isFullScreen (rw); }, 5000, ^(bool) {
+                later (400, ^{
+                    const CGRect area = visibleAreaForAX();
+                    const CGFloat half = std::floor (area.size.width / 2);
+                    placeWindow (lw, CGRectMake (area.origin.x, area.origin.y, half, area.size.height));
+                    placeWindow (rw, CGRectMake (area.origin.x + half, area.origin.y, area.size.width - half, area.size.height));
+                    AXUIElementPerformAction (rw, kAXRaiseAction);
+                    later (300, ^{
+                        makeFullScreenSplit (lPid, lw, rPid, rw, area);
+                        CFRelease (lw);
+                        CFRelease (rw);
+                    });
                 });
             });
         }
@@ -876,9 +939,11 @@ namespace numdeck
             }
             showHUD ("全画面");
             AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanFalse);
-            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 1400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanTrue);
-                CFRelease (win);
+            waitFor (^{ return ! isFullScreen (win); }, 4000, ^(bool) {
+                later (400, ^{
+                    AXUIElementSetAttributeValue (win, CFSTR ("AXFullScreen"), kCFBooleanTrue);
+                    CFRelease (win);
+                });
             });
             return;
         }
@@ -934,21 +999,21 @@ namespace numdeck
         if (it != linkWindows.end() && stillExists (it->second.left) && stillExists (it->second.right))
         {
             auto& e = it->second;
+            bool paired = false;
             if (inSplit (e.left) && inSplit (e.right))
             {
-                if (NSRunningApplication* a = [NSRunningApplication runningApplicationWithProcessIdentifier: e.leftPid])
-                    if (a.bundleURL != nil)
-                        [[NSWorkspace sharedWorkspace] openApplicationAtURL: a.bundleURL
-                                                              configuration: [NSWorkspaceOpenConfiguration configuration]
-                                                          completionHandler: nil];
-                AXUIElementPerformAction (e.left, kAXRaiseAction);
+                pid_t pp = 0;
+                AXUIElementRef partner = copySplitPartner (e.left, pp);
+                paired = partner != nullptr && CFEqual (partner, e.right);
+                if (partner != nullptr) CFRelease (partner);
+            }
+            if (paired)
+            {
+                bringAppForward (e.leftPid);
+                focusWindow (e.left);
             }
             else
-            {
-                if (axBool (e.left, kAXMinimizedAttribute))  AXUIElementSetAttributeValue (e.left, kAXMinimizedAttribute, kCFBooleanFalse);
-                if (axBool (e.right, kAXMinimizedAttribute)) AXUIElementSetAttributeValue (e.right, kAXMinimizedAttribute, kCFBooleanFalse);
                 resplit (e.left, e.leftPid, e.right, e.rightPid);
-            }
             return;
         }
 
@@ -1069,9 +1134,8 @@ namespace numdeck
             if (placed != nullptr) AXUIElementPerformAction (placed, kAXRaiseAction);
             if (backWin == nullptr) return;
             dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                if (NSRunningApplication* a = [NSRunningApplication runningApplicationWithProcessIdentifier: backPid])
-                    [a activateWithOptions: 0];
-                AXUIElementPerformAction (backWin, kAXRaiseAction);
+                bringAppForward (backPid);
+                focusWindow (backWin);
                 CFRelease (backWin);
             });
         });

@@ -111,6 +111,7 @@
   リンクごとの Chrome アカウントと開く場所（LinkPlace: profile / screen（NSScreen.localizedName）/ region = full・left・right・top・bottom。
   KeyTap::openURLPlaced が --new-window で開いて AX で置き、前が全画面ならそちらに戻す）
   v1.17.0: 押した操作の HUD（KeyTap::showHUD、設定 showHud）。2 画面は左右の 2 アプリ以外を一時的に隠してから相手選び、入らなければ HUD で案内。リンクごとに左右のウィンドウを覚えて使い回す（linkWindows）。全部終了で残すアプリ（keepApps、前方一致、最初は Claude と com.apple.logic）。全画面⇔半画面の相手は 6 組まで。設定の書き出し・読み込み
+  v1.17.1: 全画面まわりの決め打ちの待ち時間をやめ、waitFor で状態（AXFullScreen・前面のウィンドウ）を確かめてから次へ。2 分割の前に左のウィンドウへキーボードを向け（focusWindow / isFocused）、別のウィンドウを分割しないように。リンクの使い回しは 2 つがお互いと分割されているときだけ「移るだけ」。アプリを前に出すのは bringAppForward（activateWithOptions は断られることがある）
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）
 
 ## Claude からの提案（余った利用枠の活用）
