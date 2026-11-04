@@ -7,6 +7,7 @@ const juce::Colour txt (0xffdfe3ea), dim (0xff8a92a2), faint (0xff4b5262);
 const juce::Colour teal (0xff4fd1c5), amber (0xfff2a65a), pearl (0xffd9dde6);
 constexpr int W = 1180, H = 740;
 }
+static void drawHint (juce::Graphics&, juce::Rectangle<float>, const juce::String&);
 
 //==============================================================================
 LumenLook::LumenLook()
@@ -150,6 +151,8 @@ LumenRoomsEditor::Knob& LumenRoomsEditor::knob (const char* id, const char* name
     k->label.setFont (juce::FontOptions (size == Size::big ? 12.0f : 11.0f, juce::Font::bold));
     k->label.setColour (juce::Label::textColourId, dim);
     k->att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, id, k->slider);
+    if (auto* prm = proc.apvts.getParameter (id))   // ダブルクリックで初期値に戻す
+        k->slider.setDoubleClickReturnValue (true, prm->convertFrom0to1 (prm->getDefaultValue()));
     addAndMakeVisible (k->slider);
     addAndMakeVisible (k->label);
     auto& ref = *k;
@@ -247,6 +250,20 @@ LumenRoomsEditor::LumenRoomsEditor (LumenRoomsProcessor& p) : AudioProcessorEdit
 
     loadButton.onClick = [this] { showLoadMenu(); };
     addAndMakeVisible (loadButton);
+    saveButton.onClick = [this] { showSaveDialog(); };
+    addAndMakeVisible (saveButton);
+    for (auto* b : { &shapeButton, &liveButton })
+    {
+        b->setClickingTogglesState (false);
+        b->getProperties().set ("accent", (juce::int64) amber.getARGB());
+        addAndMakeVisible (b);
+    }
+    shapeButton.onClick = [this] { setMapMode (0); };
+    liveButton.onClick = [this] { setMapMode (1); };
+    shapeButton.setTooltip ("Reverb shape from the current settings");
+    liveButton.setTooltip ("What is playing now: teal = dry input, warm = reverb");
+    liveImage.clear (liveImage.getBounds(), juce::Colour (0xff0b0e14));
+    setMapMode (juce::SystemStats::getEnvironmentVariable ("LUMEN_MAP", juce::String (proc.mapMode)).getIntValue() == 1 ? 1 : 0);
     for (int i = 0; i < proc.getNumPrograms(); ++i) presetBox.addItem (proc.getProgramName (i), i + 1);
     presetBox.setSelectedId (proc.getCurrentProgram() + 1, juce::dontSendNotification);
     presetBox.onChange = [this] { if (presetBox.getSelectedId() > 0) proc.setCurrentProgram (presetBox.getSelectedId() - 1); };
@@ -265,6 +282,7 @@ LumenRoomsEditor::LumenRoomsEditor (LumenRoomsProcessor& p) : AudioProcessorEdit
 LumenRoomsEditor::~LumenRoomsEditor()
 {
     stopTimer();
+    proc.liveWanted.store (false);
     for (auto& k : knobs) k.second->slider.setLookAndFeel (nullptr);
     for (auto& c : choices) c.second->box.setLookAndFeel (nullptr);
     for (auto& t : toggles) t.second->button.setLookAndFeel (nullptr);
@@ -328,14 +346,23 @@ void LumenRoomsEditor::resized()
     head.removeFromRight (14);
     presetBox.setBounds (head.removeFromRight (200));
     head.removeFromRight (6);
-    loadButton.setBounds (head.removeFromRight (62));
+    saveButton.setBounds (head.removeFromRight (58));
+    head.removeFromRight (6);
+    loadButton.setBounds (head.removeFromRight (58));
     head.removeFromRight (10);
-    importedLabel.setBounds (head.removeFromRight (180));
+    importedLabel.setBounds (head.removeFromRight (170));
     for (int i = 0; i < 3; ++i) tabs[i].setBounds (430 + i * 80, head.getY(), 74, head.getHeight());
 
     // 2 つの表示
     erArea = { 16, 66, 500, 228 };
     mapArea = { 528, 66, W - 16 - 528, 228 };
+    {
+        auto row = mapArea.reduced (14, 10).removeFromTop (22);
+        auto bb = row.removeFromLeft (row.getWidth()).withTrimmedLeft (row.getWidth() / 2 - 160).removeFromLeft (128).reduced (0, 1);
+        shapeButton.setBounds (bb.removeFromLeft (62));
+        bb.removeFromLeft (4);
+        liveButton.setBounds (bb.removeFromLeft (62));
+    }
 
     // カード
     const int top = 306, hgt = H - 14 - top;
@@ -546,13 +573,37 @@ void LumenRoomsEditor::drawReflections (juce::Graphics& g, juce::Rectangle<float
     g.setColour (dim);
     g.drawText ("L", (int) plot.getRight() - 14, (int) plot.getY() + 4, 12, 12, juce::Justification::right);
     g.drawText ("R", (int) plot.getRight() - 14, (int) plot.getBottom() - 16, 12, 12, juce::Justification::right);
+    if (hoverTarget == 1 || dragTarget == 1)
+        drawHint (g, plot, "drag  left/right = SIZE   up/down = DIFFUSION   double-click = reset");
+}
+
+juce::Rectangle<float> LumenRoomsEditor::erPlot() const
+{
+    return erArea.toFloat().reduced (14, 10).withTrimmedTop (28).withTrimmedBottom (14);
+}
+
+juce::Rectangle<float> LumenRoomsEditor::mapPlot() const
+{
+    return mapArea.toFloat().reduced (14, 10).withTrimmedTop (28).withTrimmedBottom (14).withTrimmedLeft (28);
+}
+
+static void drawHint (juce::Graphics& g, juce::Rectangle<float> plot, const juce::String& text)
+{
+    g.setFont (juce::FontOptions (11.0f));
+    const float w = (float) juce::GlyphArrangement::getStringWidthInt (juce::Font (juce::FontOptions (11.0f)), text) + 16.0f;
+    auto b = juce::Rectangle<float> (plot.getX() + 6, plot.getBottom() - 24, w, 18);
+    g.setColour (juce::Colour (0xcc0c0f14));
+    g.fillRoundedRectangle (b, 4.0f);
+    g.setColour (juce::Colour (0xffdfe3ea));
+    g.drawText (text, b, juce::Justification::centred);
 }
 
 void LumenRoomsEditor::drawReverbMap (juce::Graphics& g, juce::Rectangle<float> r)
 {
+    if (proc.mapMode == 1) { drawLiveMap (g, r); return; }
     const auto tp = proc.readTail();
     const bool inf = tp.timeSec >= 60.0f;
-    drawCaption (g, r, "REVERB   TIME x FREQUENCY", amber,
+    drawCaption (g, r, "REVERB", amber,
                  (inf ? juce::String ("freeze") : juce::String (tp.timeSec, 2) + " s") + "   bloom " + juce::String (tp.bloom, 1)
                      + "   pre " + juce::String (tp.predelayMs, 0) + " ms");
     auto plot = r.reduced (14, 10).withTrimmedTop (28).withTrimmedBottom (14).withTrimmedLeft (28);
@@ -606,6 +657,8 @@ void LumenRoomsEditor::drawReverbMap (juce::Graphics& g, juce::Rectangle<float> 
         g.setColour (juce::Colours::white.withAlpha (0.85f));
         g.strokePath (p, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved));
     }
+    if (hoverTarget == 2 || dragTarget == 2)
+        drawHint (g, plot, "drag  left/right = TIME   up/down = BLOOM   double-click = reset");
 }
 
 void LumenRoomsEditor::drawEqCurve (juce::Graphics& g, juce::Rectangle<float> r)
@@ -701,6 +754,7 @@ void LumenRoomsEditor::timerCallback()
     const auto imp = proc.getImportedName();
     if (importedLabel.getText() != imp) importedLabel.setText (imp, juce::dontSendNotification);
 
+    if (proc.mapMode == 1) pullLive();
     worker.request (currentVisualParams());
     if (worker.fetch (vis))
     {
@@ -735,14 +789,30 @@ void LumenRoomsEditor::showLoadMenu()
     auto files = std::make_shared<std::vector<juce::File>>();
     juce::PopupMenu menu;
     menu.setLookAndFeel (&look);
+    auto mine = std::make_shared<juce::Array<juce::File>> (LumenRoomsProcessor::myPresetFolder().findChildFiles (juce::File::findFiles, false, "*.lrpreset"));
+    mine->sort();
+    {
+        juce::PopupMenu mp;
+        for (int i = 0; i < mine->size(); ++i) mp.addItem (200000 + i, (*mine)[i].getFileNameWithoutExtension());
+        if (mine->isEmpty()) mp.addItem (-1, "(none yet - use SAVE)", false);
+        menu.addSubMenu ("My Presets", mp);
+        menu.addSeparator();
+    }
     const auto folder = LumenRoomsProcessor::defaultPresetFolder();
     if (folder.getFileName() == "Factory Presets" || folder.getFileName() == "Presets") addFolderToMenu (menu, folder, *files, 0);
     const juce::File user = LumenRoomsProcessor::userPresetFolder();
     if (user.isDirectory()) { juce::PopupMenu um; addFolderToMenu (um, user, *files, 1); if (um.getNumItems() > 0) menu.addSubMenu ("User Presets", um); }
     menu.addSeparator();
     menu.addItem (100000, "Open file...");
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&loadButton), [this, files, folder] (int r)
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&loadButton), [this, files, folder, mine] (int r)
     {
+        if (r >= 200000 && r < 200000 + mine->size())
+        {
+            const auto f = (*mine)[r - 200000];
+            const auto err = proc.loadMyPreset (f);
+            if (err.isNotEmpty()) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "LOAD", err);
+            return;
+        }
         auto load = [this] (const juce::File& f)
         {
             const auto err = proc.importPreset (f);
@@ -758,4 +828,215 @@ void LumenRoomsEditor::showLoadMenu()
         else if (r > 0 && r <= (int) files->size())
             load ((*files)[(size_t) r - 1]);
     });
+}
+
+//==============================================================================
+void LumenRoomsEditor::showSaveDialog()
+{
+    saveWindow = std::make_unique<juce::AlertWindow> ("Save preset", "Name for this preset (saved to My Presets)", juce::MessageBoxIconType::NoIcon, this);
+    saveWindow->setLookAndFeel (&look);
+    saveWindow->addTextEditor ("name", proc.getImportedName().isNotEmpty() ? proc.getImportedName() : juce::String ("My Room"));
+    saveWindow->addButton ("SAVE", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    saveWindow->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    saveWindow->enterModalState (true, juce::ModalCallbackFunction::create ([this] (int result)
+    {
+        if (result == 1 && saveWindow != nullptr)
+        {
+            const auto name = saveWindow->getTextEditorContents ("name");
+            const auto existing = LumenRoomsProcessor::myPresetFolder().getChildFile (juce::File::createLegalFileName (name.trim()) + ".lrpreset");
+            const auto err = proc.saveMyPreset (name);
+            if (err.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "SAVE", err);
+            juce::ignoreUnused (existing);
+        }
+        if (saveWindow != nullptr) saveWindow->setLookAndFeel (nullptr);
+        saveWindow.reset();
+    }), false);
+}
+
+void LumenRoomsEditor::setMapMode (int m)
+{
+    proc.mapMode = m;
+    shapeButton.setToggleState (m == 0, juce::dontSendNotification);
+    liveButton.setToggleState (m == 1, juce::dontSendNotification);
+    if (m == 1)
+    {
+        // 古いデータを捨ててから受け取り始める
+        auto& t = proc.liveTap;
+        const auto sc = t.fifo.read (t.fifo.getNumReady());
+        juce::ignoreUnused (sc);
+    }
+    proc.liveWanted.store (m == 1);
+    repaint (mapArea);
+}
+
+void LumenRoomsEditor::pullLive()
+{
+    auto& t = proc.liveTap;
+    const double sr = juce::jmax (8000.0, proc.getSampleRateForView());
+    const int hop = juce::jmax (64, (int) (sr * 6.0 / liveCols));   // 画面の幅で約 6 秒
+    const int ready = t.fifo.getNumReady();
+    if (ready <= 0) return;
+    const auto sc = t.fifo.read (ready);
+    bool changed = false;
+    auto consume = [&] (int start, int n)
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            ringDry[(size_t) ringPos] = t.dry[(size_t) (start + i)];
+            ringWet[(size_t) ringPos] = t.wet[(size_t) (start + i)];
+            ringPos = (ringPos + 1) & (liveN - 1);
+            if (++sinceHop < hop) continue;
+            sinceHop = 0;
+            changed = true;
+            // 1 列ぶん：ドライとウェットをそれぞれ周波数ごとの大きさに
+            float colDb[2][lumen::VisualWorker::kRows];
+            std::vector<float> buf ((size_t) liveN * 2);
+            for (int which = 0; which < 2; ++which)
+            {
+                const auto& ring = which == 0 ? ringDry : ringWet;
+                std::fill (buf.begin(), buf.end(), 0.0f);
+                for (int k = 0; k < liveN; ++k) buf[(size_t) k] = ring[(size_t) ((ringPos + k) & (liveN - 1))];
+                liveWin.multiplyWithWindowingTable (buf.data(), (size_t) liveN);
+                liveFft.performFrequencyOnlyForwardTransform (buf.data());
+                for (int row = 0; row < lumen::VisualWorker::kRows; ++row)
+                {
+                    const float fr = lumen::VisualWorker::rowFreq (row);
+                    const float f0 = fr / std::pow (800.0f, 0.5f / (lumen::VisualWorker::kRows - 1)), f1 = fr * std::pow (800.0f, 0.5f / (lumen::VisualWorker::kRows - 1));
+                    const int b0 = juce::jmax (1, (int) (f0 / sr * liveN)), b1 = juce::jmax (b0, (int) (f1 / sr * liveN));
+                    double s2 = 0;
+                    for (int b = b0; b <= b1 && b < liveN / 2; ++b) s2 += (double) buf[(size_t) b] * buf[(size_t) b];
+                    colDb[which][row] = 10.0f * std::log10 ((float) (s2 / (b1 - b0 + 1)) + 1e-20f) - 20.0f * std::log10 ((float) liveN / 4.0f)
+                                        + 3.0f * std::log2 (fr / 1000.0f);
+                }
+            }
+            liveImage.moveImageSection (0, 0, 1, 0, liveCols - 1, lumen::VisualWorker::kRows);
+            for (int row = 0; row < lumen::VisualWorker::kRows; ++row)
+            {
+                const float vw = juce::jlimit (0.0f, 1.0f, (colDb[1][row] + 96.0f) / 78.0f);
+                const float vd = juce::jlimit (0.0f, 1.0f, (colDb[0][row] + 96.0f) / 78.0f);
+                auto c = lumen::heatColour (std::pow (vw, 1.15f));
+                const float a = juce::jlimit (0.0f, 0.8f, (vd - vw * 0.85f) * 1.6f);   // ドライが響きより大きい所は青緑
+                if (a > 0.0f) c = c.interpolatedWith (juce::Colour (0xff6ff2e6).withMultipliedBrightness (0.35f + 0.65f * vd), a);
+                liveImage.setPixelAt (liveCols - 1, lumen::VisualWorker::kRows - 1 - row, c);
+            }
+        }
+    };
+    if (sc.blockSize1 > 0) consume (sc.startIndex1, sc.blockSize1);
+    if (sc.blockSize2 > 0) consume (sc.startIndex2, sc.blockSize2);
+    if (changed) repaint (mapArea);
+}
+
+void LumenRoomsEditor::drawLiveMap (juce::Graphics& g, juce::Rectangle<float> r)
+{
+    drawCaption (g, r, "REVERB", amber, "teal = dry input   warm = reverb");
+    auto plot = mapPlot();
+    g.setColour (well);
+    g.fillRoundedRectangle (plot, 6.0f);
+    {
+        juce::Graphics::ScopedSaveState ss (g);
+        juce::Path clip;
+        clip.addRoundedRectangle (plot, 6.0f);
+        g.reduceClipRegion (clip);
+        g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+        g.drawImage (liveImage, plot);
+    }
+    g.setFont (juce::FontOptions (10.5f));
+    for (float f : { 100.0f, 1000.0f, 10000.0f })
+    {
+        const float y = plot.getBottom() - plot.getHeight() * std::log (f / 25.0f) / std::log (800.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.10f));
+        g.drawHorizontalLine ((int) y, plot.getX(), plot.getRight());
+        g.setColour (faint);
+        g.drawText (f >= 1000 ? juce::String ((int) (f / 1000)) + "k" : juce::String ((int) f), (int) plot.getX() - 30, (int) y - 6, 26, 12,
+                    juce::Justification::centredRight);
+    }
+    for (int sec = 1; sec < 6; ++sec)
+    {
+        const float x = plot.getRight() - plot.getWidth() * (float) sec / 6.0f;
+        g.setColour (juce::Colours::white.withAlpha (0.08f));
+        g.drawVerticalLine ((int) x, plot.getY(), plot.getBottom());
+        g.setColour (faint);
+        g.drawText ("-" + juce::String (sec) + " s", (int) x - 20, (int) plot.getBottom() + 7, 40, 12, juce::Justification::centred);
+    }
+    g.setColour (faint);
+    g.drawText ("now", (int) plot.getRight() - 30, (int) plot.getBottom() + 7, 30, 12, juce::Justification::centredRight);
+}
+
+//==============================================================================
+static int targetAt (juce::Point<float> p, juce::Rectangle<float> er, juce::Rectangle<float> map, int mapMode)
+{
+    if (er.contains (p)) return 1;
+    if (map.contains (p) && mapMode == 0) return 2;
+    return 0;
+}
+
+void LumenRoomsEditor::mouseMove (const juce::MouseEvent& e)
+{
+    const int t = targetAt (e.position, erPlot(), mapPlot(), proc.mapMode);
+    if (t != hoverTarget)
+    {
+        hoverTarget = t;
+        setMouseCursor (t != 0 ? juce::MouseCursor::UpDownLeftRightResizeCursor : juce::MouseCursor::NormalCursor);
+        repaint (erArea);
+        repaint (mapArea);
+    }
+}
+
+void LumenRoomsEditor::mouseExit (const juce::MouseEvent&)
+{
+    if (hoverTarget != 0) { hoverTarget = 0; setMouseCursor (juce::MouseCursor::NormalCursor); repaint (erArea); repaint (mapArea); }
+}
+
+static std::pair<const char*, const char*> dragParams (int target)
+{
+    return target == 1 ? std::pair<const char*, const char*> { "erSize", "diffusion" } : std::pair<const char*, const char*> { "time", "bloom" };
+}
+
+void LumenRoomsEditor::mouseDown (const juce::MouseEvent& e)
+{
+    dragTarget = targetAt (e.position, erPlot(), mapPlot(), proc.mapMode);
+    if (dragTarget == 0) return;
+    const auto ids = dragParams (dragTarget);
+    auto* h = proc.apvts.getParameter (ids.first);
+    auto* v = proc.apvts.getParameter (ids.second);
+    dragStartX = h->getValue();
+    dragStartY = v->getValue();
+    h->beginChangeGesture();
+    v->beginChangeGesture();
+}
+
+void LumenRoomsEditor::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragTarget == 0) return;
+    const auto ids = dragParams (dragTarget);
+    const auto plot = dragTarget == 1 ? erPlot() : mapPlot();
+    const float fine = e.mods.isShiftDown() ? 0.25f : 1.0f;
+    const float dx = (float) e.getDistanceFromDragStartX() / plot.getWidth() * fine;
+    const float dy = (float) -e.getDistanceFromDragStartY() / plot.getHeight() * fine;
+    proc.apvts.getParameter (ids.first)->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, dragStartX + dx));
+    proc.apvts.getParameter (ids.second)->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, dragStartY + dy));
+}
+
+void LumenRoomsEditor::mouseUp (const juce::MouseEvent&)
+{
+    if (dragTarget == 0) return;
+    const auto ids = dragParams (dragTarget);
+    proc.apvts.getParameter (ids.first)->endChangeGesture();
+    proc.apvts.getParameter (ids.second)->endChangeGesture();
+    dragTarget = 0;
+}
+
+void LumenRoomsEditor::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    const int t = targetAt (e.position, erPlot(), mapPlot(), proc.mapMode);
+    if (t == 0) return;
+    const auto ids = dragParams (t);
+    for (auto id : { ids.first, ids.second })
+    {
+        auto* p = proc.apvts.getParameter (id);
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (p->getDefaultValue());
+        p->endChangeGesture();
+    }
 }

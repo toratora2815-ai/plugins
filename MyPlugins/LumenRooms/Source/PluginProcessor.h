@@ -53,6 +53,28 @@ public:
     static juce::File defaultPresetFolder();
     static juce::File userPresetFolder();
 
+    // 自分のプリセット（Lumen Rooms 形式 .lrpreset）
+    static juce::File myPresetFolder();
+    juce::String saveMyPreset (const juce::String& name);
+    juce::String loadMyPreset (const juce::File&);
+
+    // 画面の「LIVE」表示用：入力（ドライ）と響き（ウェット）をモノラルで受け渡す
+    struct LiveTap
+    {
+        static constexpr int size = 1 << 16;
+        juce::AbstractFifo fifo { size };
+        std::vector<float> dry = std::vector<float> ((size_t) size), wet = std::vector<float> ((size_t) size);
+        void push (const float* d, const float* w, int n)
+        {
+            const auto scope = fifo.write (n);
+            if (scope.blockSize1 > 0) { std::copy (d, d + scope.blockSize1, dry.begin() + scope.startIndex1); std::copy (w, w + scope.blockSize1, wet.begin() + scope.startIndex1); }
+            if (scope.blockSize2 > 0) { std::copy (d + scope.blockSize1, d + n, dry.begin() + scope.startIndex2); std::copy (w + scope.blockSize1, w + n, wet.begin() + scope.startIndex2); }
+        }
+    } liveTap;
+    std::atomic<bool> liveWanted { false };
+    int mapMode = 0;   // 0 = SHAPE（設定の形）, 1 = LIVE（実際の音）
+    double getSampleRateForView() const { return sr; }
+
     // 今のつまみの値（画面の表示でも使う）
     lumen::ReflParams readRefl() const;
     lumen::TailParams readTail() const;
@@ -77,6 +99,7 @@ private:
     int currentProgram = 0;
     juce::String importedName;
     std::atomic<double> hostBpm { 120.0 };
+    std::vector<float> liveDryBuf, liveWetBuf;
     void setParam (const char* id, float value);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LumenRoomsProcessor)

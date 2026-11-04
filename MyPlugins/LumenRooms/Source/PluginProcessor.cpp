@@ -267,6 +267,8 @@ void LumenRoomsProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     convFromL.prepare (spec);
     convFromR.prepare (spec);
     bufL.setSize (2, maxBlock);
+    liveDryBuf.assign ((size_t) maxBlock, 0.0f);
+    liveWetBuf.assign ((size_t) maxBlock, 0.0f);
     bufR.setSize (2, maxBlock);
     haveRefl = false;
     rebuildReflections();
@@ -331,7 +333,15 @@ void LumenRoomsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         // 反射の合計：左 = 左入力の自分側 + 右入力の反対側
         bufL.addFrom (0, 0, bufR, 0, 0, k);
         bufL.addFrom (1, 0, bufR, 1, 0, k);
+        const bool live = liveWanted.load (std::memory_order_relaxed);
+        if (live) for (int i = 0; i < k; ++i) liveDryBuf[(size_t) i] = 0.5f * (L[start + i] + R[start + i]);
         engine.process (L + start, R + start, bufL.getReadPointer (0), bufL.getReadPointer (1), k);
+        if (live)
+        {
+            const float dryG = lumen::mixLaw (1.0f - p ("mix") / 100.0f);
+            for (int i = 0; i < k; ++i) liveWetBuf[(size_t) i] = 0.5f * (L[start + i] + R[start + i]) - dryG * liveDryBuf[(size_t) i];
+            liveTap.push (liveDryBuf.data(), liveWetBuf.data(), k);
+        }
     }
 
     for (int c = 0; c < 2; ++c)
@@ -390,6 +400,43 @@ juce::File LumenRoomsProcessor::defaultPresetFolder()
     if (backup.isDirectory()) return backup;
     const juce::File f ("/Library/Application Support/LiquidSonics/Cinematic Rooms Professional/Factory Presets");
     return f.isDirectory() ? f : juce::File::getSpecialLocation (juce::File::userHomeDirectory);
+}
+
+juce::File LumenRoomsProcessor::myPresetFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("MyPlugins/LumenRooms/My Presets");
+}
+
+juce::String LumenRoomsProcessor::saveMyPreset (const juce::String& rawName)
+{
+    const auto name = juce::File::createLegalFileName (rawName.trim());
+    if (name.isEmpty()) return "名前を入れてください";
+    const auto dir = myPresetFolder();
+    if (! dir.createDirectory()) return "保存先のフォルダを作れませんでした";
+    auto state = apvts.copyState();
+    state.setProperty ("presetName", rawName.trim(), nullptr);
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    if (xml == nullptr || ! xml->writeTo (dir.getChildFile (name + ".lrpreset"))) return "保存できませんでした";
+    importedName = rawName.trim();
+    return {};
+}
+
+juce::String LumenRoomsProcessor::loadMyPreset (const juce::File& file)
+{
+    auto xml = juce::XmlDocument::parse (file);
+    if (xml == nullptr) return "ファイルを読めませんでした";
+    auto st = juce::ValueTree::fromXml (*xml);
+    if (! st.isValid()) return "形式が違います";
+    // DRY/WET と OUTPUT 以外を、保存した値にする
+    for (auto c : st)
+    {
+        const auto id = c.getProperty ("id").toString();
+        if (id.isEmpty() || id == "mix" || id == "master") continue;
+        if (auto* rp = apvts.getParameter (id))
+            rp->setValueNotifyingHost (rp->convertTo0to1 ((float) (double) c.getProperty ("value")));
+    }
+    importedName = st.getProperty ("presetName", file.getFileNameWithoutExtension()).toString();
+    return {};
 }
 
 juce::File LumenRoomsProcessor::userPresetFolder()

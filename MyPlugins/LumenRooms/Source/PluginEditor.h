@@ -25,6 +25,12 @@ public:
     ~LumenRoomsEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
 
 private:
     enum class Size { big, mid };
@@ -68,6 +74,15 @@ private:
     void drawEqCurve (juce::Graphics&, juce::Rectangle<float>);
     void drawMeters (juce::Graphics&, juce::Rectangle<float>);
     void showLoadMenu();
+    void showSaveDialog();
+    void setMapMode (int);
+    void pullLive();
+    void drawLiveMap (juce::Graphics&, juce::Rectangle<float>);
+    juce::Rectangle<float> erPlot() const;
+    juce::Rectangle<float> mapPlot() const;
+    int dragTarget = 0;   // 0 = なし, 1 = 反射の表示, 2 = 残響の表示
+    float dragStartX = 0, dragStartY = 0;
+    int hoverTarget = 0;
     void addFolderToMenu (juce::PopupMenu&, const juce::File&, std::vector<juce::File>&, int depth);
 
     LumenRoomsProcessor& proc;
@@ -77,7 +92,16 @@ private:
     std::map<juce::String, std::unique_ptr<Toggle>> toggles;
     std::vector<Card> cards;
     juce::TextButton tabs[3];
-    juce::TextButton loadButton { "LOAD" };
+    juce::TextButton loadButton { "LOAD" }, saveButton { "SAVE" };
+    juce::TextButton shapeButton { "SHAPE" }, liveButton { "LIVE" };
+    std::unique_ptr<juce::AlertWindow> saveWindow;
+    // LIVE 表示
+    static constexpr int liveOrder = 11, liveN = 1 << liveOrder, liveCols = 260;
+    juce::dsp::FFT liveFft { liveOrder };
+    juce::dsp::WindowingFunction<float> liveWin { (size_t) liveN, juce::dsp::WindowingFunction<float>::hann };
+    std::vector<float> ringDry = std::vector<float> ((size_t) liveN, 0.0f), ringWet = std::vector<float> ((size_t) liveN, 0.0f);
+    int ringPos = 0, sinceHop = 0;
+    juce::Image liveImage { juce::Image::ARGB, liveCols, lumen::VisualWorker::kRows, true };
     juce::ComboBox presetBox;
     juce::Label importedLabel;
     std::unique_ptr<juce::FileChooser> chooser;
