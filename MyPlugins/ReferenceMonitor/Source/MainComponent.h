@@ -125,7 +125,8 @@ private:
     void drawSpectrum (juce::Graphics&, juce::Rectangle<float>);
     void drawMeters (juce::Graphics&, juce::Rectangle<float>);
     void drawBands (juce::Graphics&, juce::Rectangle<float>, bool punch);   // WIDTH / PUNCH 表示
-    void setView (int mode);   // 0 TONE / 1 WIDTH / 2 PUNCH
+    void drawLow (juce::Graphics&, juce::Rectangle<float>);                  // LOW 表示（20〜250 Hz を拡大）
+    void setView (int mode);   // 0 TONE / 1 WIDTH / 2 PUNCH / 3 LOW
     // MORE（LISTEN AS と配信サービスの音量）
     void showMoreMenu();
     void updateMoreButton();
@@ -200,7 +201,14 @@ private:
     bool mixHas = false, refHas = false;
     float displayTop = -20.0f;
     std::vector<double> snapBuf, sideBuf;
-    int viewMode = 0;                              // 0 TONE / 1 WIDTH / 2 PUNCH
+    int viewMode = 0;                              // 0 TONE / 1 WIDTH / 2 PUNCH / 3 LOW
+    // LOW 表示: 低域を細かく測った音色（音量合わせ込み）。自分の曲は「全体の音色の高さ」を REF にそろえて描く
+    std::vector<double> lowMidBuf, lowSideBuf;
+    std::vector<float> mixLowDb, refLowDb, snapLowDb;
+    bool mixLowHas = false, refLowHas = false;
+    float lowShift = 0.0f, snapLowShift = 0.0f, lowTop = -20.0f;   // 自分の曲（SNAP）と REF の、100 Hz〜8 kHz の音量の差
+    std::array<float, 3> lowDiff { -300.0f, -300.0f, -300.0f };  // SUB / BASS / LOW-MID の差（dB）
+    float mixLowSide = -1.0f, refLowSide = -1.0f;                // 120 Hz 以下のサイドの割合
     std::array<float, 3> mixPunchV { -1, -1, -1 }, refPunchV { -1, -1, -1 }, snapPunch { -1, -1, -1 };
     struct AvgCurve { juce::String name; std::vector<float> db; };
     std::vector<AvgCurve> avgCurves;

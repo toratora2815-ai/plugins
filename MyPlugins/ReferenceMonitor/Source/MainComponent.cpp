@@ -85,7 +85,7 @@ MainComponent::MainComponent()
       stereoSeg ({ "STEREO", "MONO", "SIDE" }, { selCol }, [this] (int i) { engine.stereo = i; saveSettings(); }),
       outSeg ({ "A", "B" }, { selCol }, [this] (int) { saveSettings(); captureError.clear(); retryAt = 0; }),
       listenSeg ({ "OFF", "PHONE", "LAPTOP", "EARBUDS", "BT SPEAKER", "CAR", "CLUB" }, { selCol, warn }, [this] (int i) { setListenAs (i); }),
-      viewSeg ({ "TONE", "WIDTH", "PUNCH" }, { selCol }, [this] (int i) { setView (i); })
+      viewSeg ({ "TONE", "WIDTH", "PUNCH", "LOW" }, { selCol }, [this] (int i) { setView (i); })
 {
     for (float f = fMin; f <= fMax; f *= std::pow (2.0f, 1.0f / 6.0f))
         centers.push_back (f);
@@ -286,7 +286,7 @@ void MainComponent::loadSettings()
     stereoSeg.setIndex (engine.stereo);
     outSeg.setIndex ((int) s.getWithDefault ("outSel", 0));
     abSeg.setIndex (0);
-    viewMode = juce::jlimit (0, 2, (int) s.getWithDefault ("view", (bool) s.getWithDefault ("widthView", false) ? 1 : 0));
+    viewMode = juce::jlimit (0, 3, (int) s.getWithDefault ("view", (bool) s.getWithDefault ("widthView", false) ? 1 : 0));
     viewSeg.setIndex (viewMode);
     loadAvg();
     updateMoreButton();
@@ -949,7 +949,7 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
     if (c == 'd' || c == 'D') { engine.dim = ! engine.dim.load(); return true; }
     if (c == 't' || c == 'T') { setListenAs ((engine.sim.target.load() + 1) % refdsp::ListenSim::kNumPresets); return true; }
     if (c == '0')             { setListenAs (0); return true; }
-    if (c == 'w' || c == 'W') { setView ((viewMode + 1) % 3); return true; }
+    if (c == 'w' || c == 'W') { setView ((viewMode + 1) % 4); return true; }
     if (c == 'n' || c == 'N') { takeSnapshot(); return true; }
     return false;
 }
@@ -971,7 +971,7 @@ void MainComponent::remoteCommand (const juce::String& c)
     else if (c == "listen")    setListenAs ((engine.sim.target.load() + 1) % refdsp::ListenSim::kNumPresets);
     else if (c == "listenOff") setListenAs (0);
     else if (c == "reset")     engine.resetMeters();
-    else if (c == "width")     setView ((viewMode + 1) % 3);
+    else if (c == "width")     setView ((viewMode + 1) % 4);
     else if (c == "snap")      takeSnapshot();
     else if (c == "snapClear") clearSnapshot();
     else if (c == "out" || c == "outA" || c == "outB")
@@ -1130,6 +1130,51 @@ void MainComponent::updateSpectra()
         const float target = std::ceil ((top + 3.0f) / 6.0f) * 6.0f;
         displayTop += 0.15f * (target - displayTop);
         if (std::abs (target - displayTop) < 0.3f) displayTop = target;
+    }
+
+    // LOW 表示（低域を細かく）。AVG のときも、今の参照曲と比べる
+    {
+        double lrate = 6000.0;
+        auto smoothSide = [] (float& cur, float now) { if (now >= 0.0f) cur = cur < 0.0f ? now : cur + 0.03f * (now - cur); };
+        mixLowHas = engine.mixLow.getSnapshot (lowMidBuf, lowSideBuf, lrate);
+        mixLowDb = LowAnalyser::toBands (lowMidBuf, lrate);
+        if (mixLowHas) smoothSide (mixLowSide, LowAnalyser::sideRatio (lowMidBuf, lowSideBuf, lrate, 30.0, 120.0));
+        refLowHas = engine.refLow.getSnapshot (lowMidBuf, lowSideBuf, lrate);
+        refLowDb = LowAnalyser::toBands (lowMidBuf, lrate);
+        if (refLowHas) smoothSide (refLowSide, LowAnalyser::sideRatio (lowMidBuf, lowSideBuf, lrate, 30.0, 120.0));
+        for (auto& v : mixLowDb) if (v > -250.0f) v += gm;
+        for (auto& v : refLowDb) if (v > -250.0f) v += gr;
+
+        // 全体（100 Hz〜8 kHz）の音量の差。低域の差は「全体に対して多いか少ないか」で見る
+        auto levelGap = [this] (const std::vector<float>& a, const std::vector<float>& b, float& out)
+        {
+            double sum = 0.0; int cnt = 0;
+            for (size_t k = 0; k < centers.size() && k < a.size() && k < b.size(); ++k)
+                if (a[k] > -250.0f && b[k] > -250.0f && centers[k] >= 100.0f && centers[k] <= 8000.0f) { sum += a[k] - b[k]; ++cnt; }
+            if (cnt > 0) out = (float) (sum / cnt);
+        };
+        if (mixHas && refHas) levelGap (mixDb, refDb, lowShift);
+        if (snapHas && refHas && ! snapDb.empty()) levelGap (snapDb, refDb, snapLowShift);
+
+        if (mixLowHas && refLowHas)
+        {
+            static const float edges[4] = { 20.0f, 60.0f, 120.0f, 251.0f };
+            const auto& lc = LowAnalyser::centres();
+            for (int b = 0; b < 3; ++b)
+            {
+                double em = 0.0, er = 0.0;
+                for (size_t k = 0; k < lc.size(); ++k)
+                {
+                    if (lc[k] < edges[b] || lc[k] >= edges[b + 1]) continue;
+                    if (mixLowDb[k] > -250.0f) em += std::pow (10.0, (mixLowDb[k] - lowShift) / 10.0);
+                    if (refLowDb[k] > -250.0f) er += std::pow (10.0, refLowDb[k] / 10.0);
+                }
+                if (em < 1.0e-14 || er < 1.0e-14) continue;
+                const float d = juce::jlimit (-30.0f, 30.0f, (float) (10.0 * std::log10 (em / er)));
+                auto& cur = lowDiff[(size_t) b];
+                cur = cur < -250.0f ? d : cur + 0.08f * (d - cur);
+            }
+        }
     }
 
     // 帯域ごとの迫力（測れたときだけ、少しならす）
@@ -1314,6 +1359,7 @@ void MainComponent::paint (juce::Graphics& g)
     }
     if (viewMode == 1)      drawBands (g, specArea.withTrimmedTop (specHeader.getHeight()).toFloat(), false);
     else if (viewMode == 2) drawBands (g, specArea.withTrimmedTop (specHeader.getHeight()).toFloat(), true);
+    else if (viewMode == 3) drawLow (g, specArea.withTrimmedTop (specHeader.getHeight()).toFloat());
     else                    drawSpectrum (g, specArea.withTrimmedTop (specHeader.getHeight()).toFloat());
     drawMeters (g, meterArea.toFloat());
 
@@ -1337,7 +1383,7 @@ void MainComponent::paint (juce::Graphics& g)
     g.drawText ("MORE  (listen as / streaming)", moreLabel, juce::Justification::centredLeft);
 
     g.setColour (text.withAlpha (0.4f));
-    g.drawFittedText ("Keys: SPACE = A/B  1-9 = cue  P = play  C = cue  S = set MIX  L = loop  M = mono  D = dim  T = listen as  W = width  N = snap",
+    g.drawFittedText ("Keys: SPACE = A/B  1-9 = cue  P = play  C = cue  S = set MIX  L = loop  M = mono  D = dim  T = listen as  W = view  N = snap",
                       juce::Rectangle<int> (specArea.getX(), meterArea.getBottom() + 2, meterArea.getRight() - specArea.getX(), 14),
                       juce::Justification::centredLeft, 1, 0.8f);
 }
@@ -1594,7 +1640,7 @@ std::array<float, 3> MainComponent::bandWidths (const std::vector<double>& mid, 
 
 void MainComponent::setView (int mode)
 {
-    viewMode = juce::jlimit (0, 2, mode);
+    viewMode = juce::jlimit (0, 3, mode);
     viewSeg.setIndex (viewMode);
     saveSettings();
     repaint();
@@ -1610,6 +1656,7 @@ void MainComponent::takeSnapshot()
     snapDb = mixSlow;
     snapWidth = mixWidth;
     snapPunch = mixPunchV;
+    snapLowDb = mixLowDb;
     snapHas = true;
     snapTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
     snapButton.setToggleState (true, juce::dontSendNotification);
@@ -1621,6 +1668,7 @@ void MainComponent::clearSnapshot()
 {
     snapHas = false;
     snapDb.clear();
+    snapLowDb.clear();
     snapWidth = { -1, -1, -1 };
     snapPunch = { -1, -1, -1 };
     snapButton.setToggleState (false, juce::dontSendNotification);
@@ -1957,6 +2005,224 @@ void MainComponent::drawBands (juce::Graphics& g, juce::Rectangle<float> area, b
                       foot.toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
 }
 
+void MainComponent::drawLow (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    auto r = area.reduced (36, 4).withTrimmedBottom (22);
+    auto cards = r.removeFromBottom (48);
+    r.removeFromBottom (24);
+    auto main = r.removeFromTop (r.getHeight() * 0.62f);
+    r.removeFromTop (18);
+    auto diff = r;
+    const auto& lc = LowAnalyser::centres();
+    constexpr float lf0 = 20.0f, lf1 = 250.0f;
+
+    // 自分の曲（と SNAP）は、全体の音色の高さを REF にそろえる
+    std::vector<float> mixA, snapA, diffL (lc.size(), -300.0f);
+    if (mixLowHas) { mixA = mixLowDb; for (auto& v : mixA) if (v > -250.0f) v -= lowShift; }
+    if (snapHas && snapLowDb.size() == lc.size()) { snapA = snapLowDb; for (auto& v : snapA) if (v > -250.0f) v -= snapLowShift; }
+    const bool both = mixLowHas && refLowHas && mixA.size() == lc.size() && refLowDb.size() == lc.size();
+    if (both)
+    {
+        std::vector<float> raw (lc.size(), -300.0f);
+        for (size_t k = 0; k < lc.size(); ++k)
+            if (mixA[k] > -250.0f && refLowDb[k] > -250.0f) raw[k] = mixA[k] - refLowDb[k];
+        for (size_t k = 0; k < lc.size(); ++k)
+        {
+            if (raw[k] < -250.0f) continue;
+            float s = 0.0f, w = 0.0f;
+            for (int j = -2; j <= 2; ++j)
+            {
+                const int i = (int) k + j;
+                if (i < 0 || i >= (int) lc.size() || raw[(size_t) i] < -250.0f) continue;
+                const float wt = 3.0f - (float) std::abs (j);
+                s += raw[(size_t) i] * wt; w += wt;
+            }
+            diffL[k] = s / w;
+        }
+    }
+
+    // 縦の目盛り（いちばん大きい所 + 3 dB を上に、36 dB 分）
+    float top = -200.0f;
+    for (auto* v : { &mixA, &refLowDb })
+        for (auto x : *v) top = juce::jmax (top, x);
+    if (top > -150.0f)
+    {
+        const float target = std::ceil ((top + 3.0f) / 6.0f) * 6.0f;
+        lowTop += 0.15f * (target - lowTop);
+        if (std::abs (target - lowTop) < 0.3f) lowTop = target;
+    }
+    const float range = 36.0f;
+    auto xOf = [&] (float f) { return main.getX() + main.getWidth() * std::log (f / lf0) / std::log (lf1 / lf0); };
+    auto yMain = [&] (float db) { return main.getY() + (lowTop - db) / range * main.getHeight(); };
+    const float diffRange = 12.0f;
+    auto yDiff = [&] (float db) { return diff.getCentreY() - juce::jlimit (-diffRange, diffRange, db) / diffRange * diff.getHeight() * 0.5f; };
+
+    g.setFont (juce::FontOptions (11.0f));
+    for (float f : { 20.0f, 30.0f, 40.0f, 50.0f, 60.0f, 80.0f, 100.0f, 120.0f, 150.0f, 200.0f, 250.0f })
+    {
+        const float x = xOf (f);
+        const bool edge = f == 60.0f || f == 120.0f;
+        g.setColour (edge ? text.withAlpha (0.25f) : grid);
+        g.drawVerticalLine ((int) x, main.getY(), main.getBottom());
+        g.drawVerticalLine ((int) x, diff.getY(), diff.getBottom());
+        g.setColour (text.withAlpha (0.5f));
+        g.drawText (juce::String ((int) f), (int) x - 20, (int) diff.getBottom() + 2, 40, 14, juce::Justification::centred);
+    }
+    {
+        g.setColour (text.withAlpha (0.35f));
+        g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+        const float xs[4] = { xOf (20.0f), xOf (60.0f), xOf (120.0f), xOf (250.0f) };
+        const char* nm[3] = { "SUB", "BASS", "LOW-MID" };
+        for (int b = 0; b < 3; ++b)
+            g.drawText (nm[b], juce::Rectangle<float> (xs[b], main.getY() + 2, xs[b + 1] - xs[b], 14).toNearestInt(), juce::Justification::centred);
+        g.setFont (juce::FontOptions (11.0f));
+    }
+    for (int i = 0; i <= 36; i += 12)
+    {
+        const float db = lowTop - (float) i, y = yMain (db);
+        g.setColour (grid);
+        g.drawHorizontalLine ((int) y, main.getX(), main.getRight());
+        g.setColour (text.withAlpha (0.5f));
+        g.drawText (juce::String (juce::roundToInt (db)), (int) main.getX() - 34, (int) y - 7, 28, 14, juce::Justification::centredRight);
+    }
+    for (int db : { -12, -6, 0, 6, 12 })
+    {
+        const float y = yDiff ((float) db);
+        g.setColour (db == 0 ? text.withAlpha (0.35f) : grid);
+        g.drawHorizontalLine ((int) y, diff.getX(), diff.getRight());
+        g.setColour (text.withAlpha (0.5f));
+        g.drawText ((db > 0 ? "+" : "") + juce::String (db), (int) diff.getX() - 34, (int) y - 7, 28, 14, juce::Justification::centredRight);
+    }
+
+    auto pathOf = [&] (const std::vector<float>& db, std::function<float (float)> yOf, float& lastX, float& firstX)
+    {
+        juce::Path p; bool started = false;
+        for (size_t k = 0; k < db.size() && k < lc.size(); ++k)
+        {
+            if (db[k] < -250.0f) continue;
+            const juce::Point<float> pt (xOf (lc[k]), yOf (db[k]));
+            if (! started) { p.startNewSubPath (pt); started = true; firstX = pt.x; } else p.lineTo (pt);
+            lastX = pt.x;
+        }
+        return p;
+    };
+    auto curve = [&] (const std::vector<float>& db, juce::Rectangle<float> clip, std::function<float (float)> yOf, juce::Colour c, bool fill)
+    {
+        float lastX = 0, firstX = 0;
+        auto p = pathOf (db, yOf, lastX, firstX);
+        if (p.isEmpty()) return;
+        g.saveState();
+        g.reduceClipRegion (clip.toNearestInt());
+        if (fill)
+        {
+            juce::Path f (p);
+            f.lineTo (lastX, clip.getBottom());
+            f.lineTo (firstX, clip.getBottom());
+            f.closeSubPath();
+            g.setColour (c.withAlpha (0.12f));
+            g.fillPath (f);
+        }
+        g.setColour (c);
+        g.strokePath (p, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.restoreState();
+    };
+    auto dashed = [&] (const std::vector<float>& db, juce::Colour c)
+    {
+        float lastX = 0, firstX = 0;
+        auto p = pathOf (db, yMain, lastX, firstX);
+        if (p.isEmpty()) return;
+        juce::Path d;
+        const float dash[] = { 5.0f, 4.0f };
+        juce::PathStrokeType (1.6f).createDashedStroke (d, p, dash, 2);
+        g.saveState();
+        g.reduceClipRegion (main.toNearestInt());
+        g.setColour (c);
+        g.fillPath (d);
+        g.restoreState();
+    };
+    // いちばん大きい所（30〜150 Hz）に印と周波数
+    auto peakMark = [&] (const std::vector<float>& db, juce::Colour c, bool above)
+    {
+        int best = -1;
+        for (size_t k = 0; k < db.size() && k < lc.size(); ++k)
+            if (lc[k] >= 30.0f && lc[k] <= 150.0f && db[k] > -250.0f && (best < 0 || db[k] > db[(size_t) best])) best = (int) k;
+        if (best < 0) return;
+        const float x = xOf (lc[(size_t) best]), y = juce::jlimit (main.getY() + 18.0f, main.getBottom() - 4.0f, yMain (db[(size_t) best]));
+        g.setColour (c);
+        g.fillEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f);
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText (juce::String (juce::roundToInt (lc[(size_t) best])) + " Hz",
+                    juce::Rectangle<float> (x - 30.0f, above ? y - 20.0f : y + 5.0f, 60.0f, 14.0f).toNearestInt(), juce::Justification::centred);
+    };
+
+    if (refLowHas) curve (refLowDb, main, yMain, refCol, true);
+    if (mixLowHas) curve (mixA, main, yMain, mixCol, true);
+    if (! snapA.empty()) dashed (snapA, mixCol.brighter (0.5f).withAlpha (0.8f));
+    if (refLowHas) peakMark (refLowDb, refCol, false);
+    if (mixLowHas) peakMark (mixA, mixCol, true);
+    if (both) curve (diffL, diff, yDiff, text.withAlpha (0.9f), false);
+    else
+    {
+        g.setColour (text.withAlpha (0.4f));
+        g.drawText ("Play both MY MIX and REFERENCE once to see the difference", diff.toNearestInt(), juce::Justification::centred);
+    }
+    g.setColour (text.withAlpha (0.7f));
+    g.setFont (juce::FontOptions (11.0f));
+    g.drawText ("MY MIX - REFERENCE (low end vs. the rest of the mix)   above 0 = your mix has more",
+                diff.toNearestInt().withHeight (14).translated (0, -16), juce::Justification::centredLeft);
+
+    // 下の札: SUB / BASS / LOW-MID の差と、120 Hz 以下のモノラル度
+    auto c = cards.withTrimmedLeft (-28.0f);
+    const float cw = (c.getWidth() - 18.0f) / 4.0f;
+    const char* nm[3] = { "SUB  20-60 Hz", "BASS  60-120 Hz", "LOW-MID  120-250" };
+    for (int i = 0; i < 4; ++i)
+    {
+        auto cell = juce::Rectangle<float> (c.getX() + (cw + 6.0f) * (float) i, c.getY(), cw, c.getHeight());
+        g.setColour (grid.withAlpha (0.6f));
+        g.fillRoundedRectangle (cell, 5.0f);
+        auto in = cell.reduced (8, 4);
+        g.setColour (text.withAlpha (0.55f));
+        g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+        g.drawText (i < 3 ? juce::String (nm[i]) : juce::String ("MONO  < 120 Hz"), in.removeFromTop (14).toNearestInt(), juce::Justification::centredLeft);
+        juce::String big, small; juce::Colour col = text.withAlpha (0.9f);
+        if (i < 3)
+        {
+            const float d = lowDiff[(size_t) i];
+            if (! both || d < -250.0f) { big = "--"; col = text.withAlpha (0.4f); }
+            else
+            {
+                big = (d >= 0.0f ? "+" : "") + juce::String (d, 1) + " dB";
+                if      (d > 3.0f)  { small = "too much"; col = warn; }
+                else if (d > 1.5f)  small = "a bit more";
+                else if (d < -3.0f) { small = "too little"; col = warn; }
+                else if (d < -1.5f) small = "a bit less";
+                else                { small = "same as REF"; col = good; }
+            }
+        }
+        else
+        {
+            auto pct = [] (float v) { return v < 0.0f ? juce::String ("--") : juce::String (juce::roundToInt (v * 100.0f)) + "%"; };
+            big = "MIX " + pct (mixLowSide);
+            small = "REF " + pct (refLowSide);
+            if (mixLowSide > 0.15f) { col = warn; small << "  wide bass!"; }
+            else if (mixLowSide >= 0.0f) col = good;
+        }
+        g.setColour (col);
+        g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+        g.drawText (big, in.removeFromLeft (in.getWidth() * 0.56f).toNearestInt(), juce::Justification::centredLeft);
+        g.setColour (col.withAlpha (0.8f));
+        g.setFont (juce::FontOptions (11.0f));
+        g.drawFittedText (small, in.toNearestInt(), juce::Justification::centredRight, 1, 0.7f);
+    }
+
+    g.setColour (text.withAlpha (0.5f));
+    g.setFont (juce::FontOptions (10.5f));
+    g.drawFittedText ("Dots = loudest low note (kick / bass).  Low end is compared after matching the whole mix (100 Hz - 8 kHz)."
+                      + juce::String (snapHas ? "  Dashed = SNAP." : ""),
+                      juce::Rectangle<float> (area.getX() + 8, area.getBottom() - 18, area.getWidth() - 16, 16).toNearestInt(),
+                      juce::Justification::centredLeft, 1, 0.8f);
+}
+
 void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
 {
     g.setColour (panel);
@@ -2135,7 +2401,7 @@ void MainComponent::resized()
     specHeader = specArea.withHeight (30);
     {
         auto h = specHeader.reduced (8, 4);
-        viewSeg.setBounds (h.removeFromLeft (180));
+        viewSeg.setBounds (h.removeFromLeft (216));
         h.removeFromLeft (10);
         snapButton.setBounds (h.removeFromRight (58));
         h.removeFromRight (6);

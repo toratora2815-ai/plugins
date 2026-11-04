@@ -14,6 +14,8 @@ void Engine::prepare (double sampleRate, int)
     refSpec.prepare (sr);
     mixPunch.prepare (sr);
     refPunch.prepare (sr);
+    mixLow.prepare (sr);
+    refLow.prepare (sr);
 
     abSmooth.reset (sr, 0.02);
     abSmooth.setCurrentAndTargetValue (ab.load() ? 1.0f : 0.0f);
@@ -91,8 +93,8 @@ void Engine::silenceWatch (float peak, int n, int& silentSamples, bool& armed, b
         if (armed)
         {
             armed = false;
-            if (isRef) { refMeter.requestReset(); refSpec.requestReset(); refPunch.requestReset(); }
-            else       { mixMeter.requestReset(); mixSpec.requestReset(); mixPunch.requestReset(); }
+            if (isRef) { refMeter.requestReset(); refSpec.requestReset(); refPunch.requestReset(); refLow.requestReset(); }
+            else       { mixMeter.requestReset(); mixSpec.requestReset(); mixPunch.requestReset(); mixLow.requestReset(); }
         }
     }
 }
@@ -117,7 +119,7 @@ void Engine::processChunk (const float* mixL, const float* mixR, const float* li
     float* refR = refBuf.getWritePointer (1);
 
     const int source = refSource.load();
-    if (source != lastSource) { refMeter.requestReset(); refSpec.requestReset(); refPunch.requestReset(); lastSource = source; refSilent = 0; refArmed = false; }
+    if (source != lastSource) { refMeter.requestReset(); refSpec.requestReset(); refPunch.requestReset(); refLow.requestReset(); lastSource = source; refSilent = 0; refArmed = false; }
 
     if (source == sourceFile)
         player.process (refL, refR, n, sr);
@@ -140,6 +142,8 @@ void Engine::processChunk (const float* mixL, const float* mixR, const float* li
     refSpec.push (refL, refR, n);
     mixPunch.process (mixL, mixR, n);
     refPunch.process (refL, refR, n);
+    mixLow.push (mixL, mixR, n);
+    refLow.push (refL, refR, n);
 
     // ---- 音量合わせ ----
     const int lv = level.load();
