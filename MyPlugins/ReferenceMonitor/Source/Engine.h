@@ -6,6 +6,7 @@
 #include "Spectrum.h"
 #include "FilePlayer.h"
 #include "ListenSim.h"
+#include "Punch.h"
 
 class Engine
 {
@@ -22,8 +23,9 @@ public:
                   const float* liveL, const float* liveR,
                   float* outL, float* outR, int n) noexcept;
 
-    void resetMeters() { mixMeter.requestReset(); refMeter.requestReset(); mixSpec.requestReset(); refSpec.requestReset(); }
-    void resetRefMeters() { refMeter.requestReset(); refSpec.requestReset(); }
+    void resetMeters() { mixMeter.requestReset(); refMeter.requestReset(); mixSpec.requestReset(); refSpec.requestReset();
+                         mixPunch.requestReset(); refPunch.requestReset(); }
+    void resetRefMeters() { refMeter.requestReset(); refSpec.requestReset(); refPunch.requestReset(); }
 
     // ---- 設定（どのスレッドからでも）----
     std::atomic<bool>  ab { false };              // true = REFERENCE
@@ -38,6 +40,7 @@ public:
     // ---- 計測・表示用 ----
     refdsp::LoudnessMeter mixMeter, refMeter;
     SpectrumAnalyser mixSpec, refSpec;
+    refdsp::PunchMeter mixPunch, refPunch;   // 帯域ごとの迫力（PUNCH 表示）
     FilePlayer player;
     std::atomic<float> mixGainDb { 0.0f }, refGainDb { 0.0f };
     std::atomic<float> mixPeakDb { -120.0f }, livePeakDb { -120.0f };

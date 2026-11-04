@@ -77,6 +77,7 @@
   v1.3.3: ウィンドウの位置と大きさを覚える（library.json の settings "window"、動かして 0.8 秒後と終了時に保存）
   v1.4.0: グラフを TONE / WIDTH で切替（W キー、WIDTH＝低・中・高のサイドの割合を MIX と REF で比較。Spectrum.h がサイドも測る）、SNAP（N キー、今のミックスを覚えて点線で比較。右クリックで消す）、VOLUME と REF TRIM は上下ドラッグ／ホイールの数字の箱にして、STEREO と一緒に出力の行へ（下は3段）。リモート命令 "width" / "snap" / "snapClear"
   v1.4.2: + CUE は名前を聞かずにすぐ追加（名前は空、表示は「CUE 番号」。前の版の「Cue 3」も番号扱い）。キューのボタンをダブルクリックで名前変更
+  v1.5.0: PUNCH 表示（Punch.h、帯域ごとの 3 秒クレスト dB）、AVG（何曲かの平均の音色と比べる。settings "avgCurves"、ファイルは曲全体を解析、ライブは 15 秒以上の平均）、LISTEN AS と SPOTIFY/APPLE/YOUTUBE は MORE メニューへ（LEVEL は OFF/MATCH だけ、配信サービスのメーター行はそのとき以外隠す）、下は2段で幅は固定、Apple Music の曲は流れた所のモーメンタリー LUFS で音量の形を描く
 - Mix Time Machine（MixTimeMachine）… バウンス履歴と聴き比べの単体 Mac アプリ。~/Music/Logic（と Bounces フォルダ）を見張って新しいバウンスを自動で取り込み、
   FLAC でコピー保存（~/Music/Mix Time Machine）。A/B を音量合わせ・頭のずれ自動合わせで切替、5回のブラインドテスト、何が変わったか（音量・PLR・広がり・音色差）
 - Num Deck（NumDeck）… テンキー 1〜9 に Logic の操作を割り当てる単体 Mac アプリ（ゲーム機メニュー風の 3×3 タイル画面）。

@@ -79,20 +79,13 @@ void Seg::resized()
 // ============================================================================
 MainComponent::MainComponent()
     : abSeg ({ "MY MIX  (Logic)", "REFERENCE" }, { mixCol, refCol }, [this] (int i) { setAB (i == 1); }),
-      levelSeg ({ "OFF", "MATCH", "SPOTIFY", "APPLE", "YOUTUBE" }, { good }, [this] (int i)
-                 {
-                     engine.level = i;
-                     saveSettings();
-                     if (i >= Engine::levelStream)
-                         flash (juce::String (refdsp::streamingPlatform (i - Engine::levelStream).name)
-                                + ": both songs are turned up/down the way the service does it (whole-song loudness). "
-                                  "If yours gets turned down more than the reference, the extra loudness is wasted.");
-                 }),
+      // SPOTIFY / APPLE / YOUTUBE は MORE の中（あまり使わないので）
+      levelSeg ({ "OFF", "MATCH" }, { good }, [this] (int i) { engine.level = i; saveSettings(); updateMoreButton(); }),
       bandSeg ({ "FULL", "LOW", "MID", "HIGH" }, { selCol }, [this] (int i) { engine.band = i; saveSettings(); }),
       stereoSeg ({ "STEREO", "MONO", "SIDE" }, { selCol }, [this] (int i) { engine.stereo = i; saveSettings(); }),
       outSeg ({ "A", "B" }, { selCol }, [this] (int) { saveSettings(); captureError.clear(); retryAt = 0; }),
       listenSeg ({ "OFF", "PHONE", "LAPTOP", "EARBUDS", "BT SPEAKER", "CAR", "CLUB" }, { selCol, warn }, [this] (int i) { setListenAs (i); }),
-      viewSeg ({ "TONE", "WIDTH" }, { selCol }, [this] (int i) { setWidthView (i == 1); })
+      viewSeg ({ "TONE", "WIDTH", "PUNCH" }, { selCol }, [this] (int i) { setView (i); })
 {
     for (float f = fMin; f <= fMax; f *= std::pow (2.0f, 1.0f / 6.0f))
         centers.push_back (f);
@@ -104,7 +97,7 @@ MainComponent::MainComponent()
     for (auto* c : std::initializer_list<juce::Component*> {
              &refBox, &addButton, &removeButton, &liveAppBox, &abSeg, &levelSeg, &bandSeg, &stereoSeg, &outSeg, &listenSeg,
              &playButton, &loopButton, &restartButton, &addCueButton, &setMixButton, &resetButton, &dimButton, &muteButton,
-             &pinButton, &bypassButton, &trimSlider, &volumeSlider, &outABox, &outBBox, &viewSeg, &snapButton })
+             &pinButton, &bypassButton, &trimSlider, &volumeSlider, &outABox, &outBBox, &viewSeg, &snapButton, &avgButton, &moreButton })
     {
         addAndMakeVisible (c);
         noFocus (*c);
@@ -124,6 +117,23 @@ MainComponent::MainComponent()
     snapButton.setTooltip ("Remember how your mix sounds now (dashed line). Right-click to clear.");
     snapButton.onClick = [this] { takeSnapshot(); };
     snapButton.onRightClick = [this] { clearSnapshot(); };
+
+    styleToggle (avgButton, refCol);
+    avgButton.setButtonText ("AVG");
+    avgButton.setTooltip ("Compare your tone with the average of several references. Right-click to add / remove songs.");
+    avgButton.onClick = [this]
+    {
+        if (avgCurves.empty()) { avgMenu(); return; }
+        avgOn = ! avgOn;
+        saveAvg();
+        repaint();
+    };
+    avgButton.onRightClick = [this] { avgMenu(); };
+
+    // LISTEN AS（PHONE など）と配信サービスの音量は、あまり使わないので MORE の中に
+    listenSeg.setVisible (false);
+    styleToggle (moreButton, warn);
+    moreButton.onClick = [this] { showMoreMenu(); };
 
     addButton.onClick = [this]
     {
@@ -239,6 +249,7 @@ void MainComponent::setListenAs (int idx)
     engine.sim.target = idx;
     listenSeg.setIndex (idx);
     saveSettings();
+    updateMoreButton();
     if (idx > 0) flash (refdsp::ListenSim::preset (idx).hint);
     else         flashMessage.clear();
 }
@@ -275,8 +286,10 @@ void MainComponent::loadSettings()
     stereoSeg.setIndex (engine.stereo);
     outSeg.setIndex ((int) s.getWithDefault ("outSel", 0));
     abSeg.setIndex (0);
-    widthView = (bool) s.getWithDefault ("widthView", false);
-    viewSeg.setIndex (widthView ? 1 : 0);
+    viewMode = juce::jlimit (0, 2, (int) s.getWithDefault ("view", (bool) s.getWithDefault ("widthView", false) ? 1 : 0));
+    viewSeg.setIndex (viewMode);
+    loadAvg();
+    updateMoreButton();
     trimSlider.setValue (engine.trimDb.load(), juce::dontSendNotification);
     volumeSlider.setValue (engine.volumeDb.load(), juce::dontSendNotification);
 }
@@ -298,7 +311,7 @@ void MainComponent::saveSettings()
     s.set ("liveBundle", liveBundle);
     s.set ("selected", selectedRow);
     s.set ("pin", pinButton.getToggleState());
-    s.set ("widthView", widthView);
+    s.set ("view", viewMode);
     library.save();
 }
 
@@ -936,7 +949,7 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
     if (c == 'd' || c == 'D') { engine.dim = ! engine.dim.load(); return true; }
     if (c == 't' || c == 'T') { setListenAs ((engine.sim.target.load() + 1) % refdsp::ListenSim::kNumPresets); return true; }
     if (c == '0')             { setListenAs (0); return true; }
-    if (c == 'w' || c == 'W') { setWidthView (! widthView); return true; }
+    if (c == 'w' || c == 'W') { setView ((viewMode + 1) % 3); return true; }
     if (c == 'n' || c == 'N') { takeSnapshot(); return true; }
     return false;
 }
@@ -958,7 +971,7 @@ void MainComponent::remoteCommand (const juce::String& c)
     else if (c == "listen")    setListenAs ((engine.sim.target.load() + 1) % refdsp::ListenSim::kNumPresets);
     else if (c == "listenOff") setListenAs (0);
     else if (c == "reset")     engine.resetMeters();
-    else if (c == "width")     setWidthView (! widthView);
+    else if (c == "width")     setView ((viewMode + 1) % 3);
     else if (c == "snap")      takeSnapshot();
     else if (c == "snapClear") clearSnapshot();
     else if (c == "out" || c == "outA" || c == "outB")
@@ -1119,6 +1132,31 @@ void MainComponent::updateSpectra()
         if (std::abs (target - displayTop) < 0.3f) displayTop = target;
     }
 
+    // 帯域ごとの迫力（測れたときだけ、少しならす）
+    for (size_t b = 0; b < 3; ++b)
+    {
+        const float m = engine.mixPunch.crestDb[b].load(), f = engine.refPunch.crestDb[b].load();
+        if (m >= 0.0f) mixPunchV[b] = mixPunchV[b] < 0.0f ? m : mixPunchV[b] + 0.05f * (m - mixPunchV[b]);
+        if (f >= 0.0f) refPunchV[b] = refPunchV[b] < 0.0f ? f : refPunchV[b] + 0.05f * (f - refPunchV[b]);
+    }
+
+    // 長め（約 20 秒）にならした音色。AVG と比べる・参照曲を AVG に足すのに使う
+    auto longAvg = [] (std::vector<float>& acc, double& count, const std::vector<float>& now)
+    {
+        if (acc.size() != now.size()) { acc.assign (now.size(), -300.0f); count = 0; }
+        const float a = (float) juce::jmax (1.0 / (25.0 * 20.0), 1.0 / (count + 1.0));   // 最初は単純平均、のちに 20 秒
+        for (size_t k = 0; k < now.size(); ++k)
+        {
+            if (now[k] < -250.0f) continue;
+            acc[k] = acc[k] < -250.0f ? now[k] : acc[k] + a * (now[k] - acc[k]);
+        }
+        count += 1.0;
+    };
+    const auto refKey = isLive() ? musicState.trackId : juce::String (selectedRow);
+    if (refKey != refLongKey) { refLongKey = refKey; refLong.clear(); refLongCount = 0; }
+    if (mixHas && engine.mixMeter.signalPresent.load()) longAvg (mixLong, mixLongCount, mixDb);
+    if (refHas && engine.refMeter.signalPresent.load()) longAvg (refLong, refLongCount, refDb);
+
     // SNAP で覚える元: ミックスの音色を約 3 秒でならしたもの
     if (mixHas)
     {
@@ -1130,10 +1168,21 @@ void MainComponent::updateSpectra()
         }
     }
 
+    // AVG: 参照曲の代わりに「何曲かの平均」と、自分の曲の 20 秒の平均を比べる
+    if (avgOn && ! avgDb.empty() && mixLongCount > 0)
+    {
+        mixDb = mixLong;
+        refDb = avgDb;
+        const float shift = curveLevel (mixLong) - curveLevel (avgDb);   // 見やすいよう、平均の線を自分の曲の高さに合わせる
+        for (auto& v : refDb) if (v > -250.0f) v += shift;
+        mixHas = refHas = true;
+    }
+
     diffDb.assign (centers.size(), -300.0f);
     if (mixHas && refHas) diffDb = toneDiff (mixDb, refDb);
     snapDiffDb.assign (centers.size(), -300.0f);
     if (snapHas && refHas) snapDiffDb = toneDiff (snapDb, refDb);
+    updateLiveShape();
 
     // 状態の文字
     const auto now = juce::Time::getMillisecondCounterHiRes() * 0.001;
@@ -1250,8 +1299,10 @@ void MainComponent::paint (juce::Graphics& g)
     {
         g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
         auto lg = legendArea;
-        g.setColour (mixCol); g.drawText ("MY MIX", lg.removeFromLeft (52), juce::Justification::centredLeft);
-        g.setColour (refCol); g.drawText ("REFERENCE", lg.removeFromLeft (74), juce::Justification::centredLeft);
+        const bool avgShown = viewMode == 0 && avgOn && ! avgDb.empty();
+        g.setColour (mixCol); g.drawText (avgShown ? "MY MIX (20s)" : "MY MIX", lg.removeFromLeft (avgShown ? 84 : 52), juce::Justification::centredLeft);
+        g.setColour (refCol); g.drawText (avgShown ? "AVG OF " + juce::String ((int) avgCurves.size()) : juce::String ("REFERENCE"),
+                                          lg.removeFromLeft (avgShown ? 70 : 74), juce::Justification::centredLeft);
         if (snapHas)
         {
             g.setColour (text.withAlpha (0.75f));
@@ -1261,8 +1312,9 @@ void MainComponent::paint (juce::Graphics& g)
                         lg, juce::Justification::centredLeft);
         }
     }
-    if (widthView) drawWidth (g, specArea.withTrimmedTop (specHeader.getHeight()).toFloat());
-    else           drawSpectrum (g, specArea.withTrimmedTop (specHeader.getHeight()).toFloat());
+    if (viewMode == 1)      drawBands (g, specArea.withTrimmedTop (specHeader.getHeight()).toFloat(), false);
+    else if (viewMode == 2) drawBands (g, specArea.withTrimmedTop (specHeader.getHeight()).toFloat(), true);
+    else                    drawSpectrum (g, specArea.withTrimmedTop (specHeader.getHeight()).toFloat());
     drawMeters (g, meterArea.toFloat());
 
     if (flashMessage.isNotEmpty() && juce::Time::getMillisecondCounterHiRes() * 0.001 < flashUntil)
@@ -1282,7 +1334,7 @@ void MainComponent::paint (juce::Graphics& g)
     g.drawText ("REF TRIM",  trimLabel,   juce::Justification::centredLeft);
     g.drawText ("OUTPUT  (A / B)", outLabel, juce::Justification::centredLeft);
     g.drawText ("VOLUME",    volLabel,    juce::Justification::centredLeft);
-    g.drawText ("LISTEN AS  (T = next, 0 = off)  -  applies to both songs, loudness kept equal", listenLabel, juce::Justification::centredLeft);
+    g.drawText ("MORE  (listen as / streaming)", moreLabel, juce::Justification::centredLeft);
 
     g.setColour (text.withAlpha (0.4f));
     g.drawFittedText ("Keys: SPACE = A/B  1-9 = cue  P = play  C = cue  S = set MIX  L = loop  M = mono  D = dim  T = listen as  W = width  N = snap",
@@ -1336,11 +1388,34 @@ void MainComponent::drawTimeline (juce::Graphics& g, juce::Rectangle<float> r)
     }
     else
     {
-        const auto bar = inner.withSizeKeepingCentre (inner.getWidth(), 8.0f);
-        g.setColour (grid);
-        g.fillRoundedRectangle (bar, 4.0f);
-        g.setColour (refCol);
-        g.fillRoundedRectangle (bar.withWidth ((float) (pos / len) * bar.getWidth()), 4.0f);
+        // 流れた所だけ、音量の形を描く（大きい所ほど高い。いちばん大きい所から 24 dB 下までを表示）
+        const auto it = liveShapes.find (musicState.trackId);
+        float top = -200.0f;
+        if (it != liveShapes.end()) for (float v : it->second) top = juce::jmax (top, v);
+        if (top > -70.0f)
+        {
+            const auto& sh = it->second;
+            const float mid = inner.getCentreY(), hh = inner.getHeight() * 0.42f;
+            const int w = (int) inner.getWidth();
+            g.setColour (grid);
+            g.drawHorizontalLine ((int) mid, inner.getX(), inner.getRight());
+            for (int x = 0; x < w; ++x)
+            {
+                const float v = sh[(size_t) juce::jlimit (0, (int) sh.size() - 1, (int) ((float) x / (float) w * (float) sh.size()))];
+                if (v < -199.0f) continue;
+                const float h = juce::jlimit (0.06f, 1.0f, (v - (top - 24.0f)) / 24.0f);
+                g.setColour ((double) x / w <= pos / len ? refCol.withAlpha (0.85f) : refCol.withAlpha (0.35f));
+                g.drawVerticalLine ((int) inner.getX() + x, mid - h * hh, mid + h * hh);
+            }
+        }
+        else
+        {
+            const auto bar = inner.withSizeKeepingCentre (inner.getWidth(), 8.0f);
+            g.setColour (grid);
+            g.fillRoundedRectangle (bar, 4.0f);
+            g.setColour (refCol);
+            g.fillRoundedRectangle (bar.withWidth ((float) (pos / len) * bar.getWidth()), 4.0f);
+        }
     }
 
     // キューの目印
@@ -1517,10 +1592,10 @@ std::array<float, 3> MainComponent::bandWidths (const std::vector<double>& mid, 
     return out;
 }
 
-void MainComponent::setWidthView (bool on)
+void MainComponent::setView (int mode)
 {
-    widthView = on;
-    viewSeg.setIndex (on ? 1 : 0);
+    viewMode = juce::jlimit (0, 2, mode);
+    viewSeg.setIndex (viewMode);
     saveSettings();
     repaint();
 }
@@ -1534,6 +1609,7 @@ void MainComponent::takeSnapshot()
     }
     snapDb = mixSlow;
     snapWidth = mixWidth;
+    snapPunch = mixPunchV;
     snapHas = true;
     snapTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
     snapButton.setToggleState (true, juce::dontSendNotification);
@@ -1546,15 +1622,249 @@ void MainComponent::clearSnapshot()
     snapHas = false;
     snapDb.clear();
     snapWidth = { -1, -1, -1 };
+    snapPunch = { -1, -1, -1 };
     snapButton.setToggleState (false, juce::dontSendNotification);
     repaint();
 }
 
-void MainComponent::drawWidth (juce::Graphics& g, juce::Rectangle<float> area)
+// ----------------------------------------------------------------------------
+// MORE: LISTEN AS（スマホ・車などの聞こえ方）と、配信サービスの音量（SPOTIFY など）
+
+void MainComponent::showMoreMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader ("LISTEN AS  (T = next, 0 = off)");
+    for (int i = 0; i < refdsp::ListenSim::kNumPresets; ++i)
+        m.addItem (100 + i, i == 0 ? juce::String ("Off (normal)") : juce::String (refdsp::ListenSim::preset (i).name),
+                   true, engine.sim.target.load() == i);
+    m.addSeparator();
+    m.addSectionHeader ("LEVEL: like a streaming service");
+    for (int i = 0; i < 3; ++i)
+        m.addItem (200 + i, refdsp::streamingPlatform (i).name, true, engine.level.load() == Engine::levelStream + i);
+    m.addItem (199, "Back to MATCH", engine.level.load() >= Engine::levelStream);
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (moreButton), [this] (int r)
+    {
+        if (r >= 100 && r < 100 + refdsp::ListenSim::kNumPresets)
+            setListenAs (r - 100);
+        else if (r == 199 || (r >= 200 && r < 203))
+        {
+            const int lv = r == 199 ? (int) Engine::levelMatch : Engine::levelStream + (r - 200);
+            engine.level = lv;
+            levelSeg.setIndex (lv);
+            saveSettings();
+            if (lv >= Engine::levelStream)
+                flash (juce::String (refdsp::streamingPlatform (lv - Engine::levelStream).name)
+                       + ": both songs are turned up/down the way the service does it (whole-song loudness). "
+                         "If yours gets turned down more than the reference, the extra loudness is wasted.");
+        }
+        updateMoreButton();
+        repaint();
+    });
+}
+
+// どれかが入っているときは、MORE のボタンに出して色を付ける（入れっぱなしに気づけるように）
+void MainComponent::updateMoreButton()
+{
+    juce::StringArray on;
+    const int li = engine.sim.target.load();
+    if (li > 0) on.add (refdsp::ListenSim::preset (li).name);
+    const int lv = engine.level.load();
+    if (lv >= Engine::levelStream) on.add (refdsp::streamingPlatform (lv - Engine::levelStream).name);
+    moreButton.setButtonText (on.isEmpty() ? juce::String ("MORE") : on.joinIntoString (" + "));
+    moreButton.setToggleState (! on.isEmpty(), juce::dontSendNotification);
+}
+
+// ----------------------------------------------------------------------------
+// AVG: 何曲かのリファレンスの「平均の音色」と比べる。1 曲のクセに引っぱられないように
+
+// 100Hz〜8kHz の平均の高さ（音色の線どうしを比べるときの基準）
+float MainComponent::curveLevel (const std::vector<float>& v) const
+{
+    double sum = 0.0; int cnt = 0;
+    for (size_t k = 0; k < v.size() && k < centers.size(); ++k)
+        if (v[k] > -250.0f && centers[k] >= 100.0f && centers[k] <= 8000.0f) { sum += v[k]; ++cnt; }
+    return cnt > 0 ? (float) (sum / cnt) : 0.0f;
+}
+
+std::vector<float> MainComponent::normalisedCurve (std::vector<float> v) const
+{
+    const float lv = curveLevel (v);
+    for (auto& x : v) if (x > -250.0f) x -= lv;
+    return v;
+}
+
+// ファイルは曲全体を解析する（ミッドの平均パワー）
+std::vector<float> MainComponent::fileCurve (const RefAudio& a) const
+{
+    constexpr int order = SpectrumAnalyser::order, size = SpectrumAnalyser::size;
+    juce::dsp::FFT fft (order);
+    std::vector<float> win ((size_t) size), buf ((size_t) size * 2);
+    for (int i = 0; i < size; ++i)
+        win[(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) size);
+    std::vector<double> power ((size_t) size / 2 + 1, 0.0);
+    const float* L = a.buffer.getReadPointer (0);
+    const float* R = a.buffer.getReadPointer (1);
+    const int n = a.buffer.getNumSamples();
+    int frames = 0;
+    for (int start = 0; start + size <= n; start += size)
+    {
+        double ms = 0.0;
+        for (int i = 0; i < size; ++i)
+        {
+            const float x = 0.5f * (L[start + i] + R[start + i]);
+            ms += (double) x * x;
+            buf[(size_t) i] = x * win[(size_t) i];
+        }
+        if (ms / size < 1.0e-8) continue;   // 無音の所は数えない
+        std::fill (buf.begin() + size, buf.end(), 0.0f);
+        fft.performFrequencyOnlyForwardTransform (buf.data(), true);
+        for (size_t b = 0; b < power.size(); ++b) power[b] += (double) buf[b] * buf[b];
+        ++frames;
+    }
+    if (frames == 0) return {};
+    for (auto& p : power) p /= frames;
+    return toBands (power, a.sampleRate);
+}
+
+void MainComponent::addCurrentToAvg()
+{
+    std::vector<float> curve;
+    juce::String name;
+    if (! isLive())
+    {
+        if (auto* a = engine.player.getAudio()) { curve = fileCurve (*a); name = a->name; }
+    }
+    else if (refLongCount >= 25.0 * 15.0)   // 15 秒以上聴いた分の平均
+    {
+        curve = refLong;
+        name = musicState.title.isNotEmpty() ? musicState.title : juce::String ("Apple Music song");
+    }
+    else
+    {
+        flash ("AVG: play this reference for at least 15 seconds first (the longer, the better), then add it.");
+        return;
+    }
+    if (curve.empty()) { flash ("AVG: this reference could not be analysed."); return; }
+
+    curve = normalisedCurve (curve);
+    for (auto& c : avgCurves)
+        if (c.name == name) { c.db = curve; name.clear(); break; }   // 同じ曲は入れ替え
+    if (name.isNotEmpty()) avgCurves.push_back ({ name, curve });
+    avgOn = true;
+    rebuildAvg();
+    saveAvg();
+    flash ("AVG: " + juce::String ((int) avgCurves.size()) + " song(s). The tone graph now compares your mix (20 s average) with their average."
+           + (avgCurves.size() < 3 ? "  Adding 2-3 songs works best." : ""));
+    repaint();
+}
+
+void MainComponent::avgMenu()
+{
+    juce::PopupMenu m;
+    const juce::String cur = isLive() ? musicState.title : (engine.player.getAudio() != nullptr ? engine.player.getAudio()->name : juce::String());
+    m.addItem (1, "Add current reference to AVG" + (cur.isNotEmpty() ? "  (" + cur + ")" : juce::String()), cur.isNotEmpty());
+    m.addItem (2, avgOn ? "Turn AVG off (compare with the current reference)" : "Turn AVG on", ! avgCurves.empty());
+    if (! avgCurves.empty())
+    {
+        m.addSeparator();
+        m.addSectionHeader ("In AVG (click to remove)");
+        for (int i = 0; i < (int) avgCurves.size(); ++i)
+            m.addItem (100 + i, avgCurves[(size_t) i].name);
+        m.addItem (3, "Remove all");
+    }
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (avgButton), [this] (int r)
+    {
+        if (r == 1) { addCurrentToAvg(); return; }
+        if (r == 2) avgOn = ! avgOn;
+        else if (r == 3) { avgCurves.clear(); avgOn = false; }
+        else if (r >= 100 && r - 100 < (int) avgCurves.size())
+        {
+            avgCurves.erase (avgCurves.begin() + (r - 100));
+            if (avgCurves.empty()) avgOn = false;
+        }
+        else return;
+        rebuildAvg();
+        saveAvg();
+        repaint();
+    });
+}
+
+void MainComponent::rebuildAvg()
+{
+    avgDb.clear();
+    if (! avgCurves.empty())
+    {
+        avgDb.assign (centers.size(), -300.0f);
+        for (size_t k = 0; k < centers.size(); ++k)
+        {
+            double sum = 0.0; int cnt = 0;
+            for (auto& c : avgCurves)
+                if (k < c.db.size() && c.db[k] > -250.0f) { sum += c.db[k]; ++cnt; }
+            if (cnt > 0) avgDb[k] = (float) (sum / cnt);
+        }
+    }
+    avgButton.setButtonText (avgCurves.empty() ? juce::String ("AVG") : "AVG " + juce::String ((int) avgCurves.size()));
+    avgButton.setToggleState (avgOn && ! avgCurves.empty(), juce::dontSendNotification);
+}
+
+void MainComponent::saveAvg()
+{
+    juce::Array<juce::var> arr;
+    for (auto& c : avgCurves)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("name", c.name);
+        juce::Array<juce::var> db;
+        for (float v : c.db) db.add (v > -250.0f ? juce::roundToInt (v * 10.0f) / 10.0 : -300.0);
+        o->setProperty ("db", db);
+        arr.add (juce::var (o));
+    }
+    library.settings.set ("avgCurves", arr);
+    library.settings.set ("avgOn", avgOn);
+    library.save();
+}
+
+void MainComponent::loadAvg()
+{
+    avgCurves.clear();
+    if (auto* arr = library.settings.getWithDefault ("avgCurves", {}).getArray())
+        for (auto& v : *arr)
+        {
+            AvgCurve c;
+            c.name = v.getProperty ("name", "").toString();
+            if (auto* db = v.getProperty ("db", {}).getArray())
+                for (auto& x : *db) c.db.push_back ((float) (double) x);
+            if (c.db.size() == centers.size()) avgCurves.push_back (std::move (c));
+        }
+    avgOn = (bool) library.settings.getWithDefault ("avgOn", false) && ! avgCurves.empty();
+    rebuildAvg();
+}
+
+// ----------------------------------------------------------------------------
+// ミュージックの曲は波形を読めないので、流れた所の音量（モーメンタリー LUFS）を少しずつ描いていく
+
+void MainComponent::updateLiveShape()
+{
+    if (! isLive() || ! musicState.playing || musicState.duration < 5.0 || musicState.trackId.isEmpty()) return;
+    const float m = engine.refMeter.momentary.load();
+    if (m < -70.0f) return;
+    auto& v = liveShapes[musicState.trackId];
+    if (v.empty()) v.assign (400, -200.0f);
+    const int idx = juce::jlimit (0, (int) v.size() - 1, (int) (musicState.position / musicState.duration * (double) v.size()));
+    v[(size_t) idx] = v[(size_t) idx] < -199.0f ? m : juce::jmax (v[(size_t) idx], m);
+}
+
+void MainComponent::drawBands (juce::Graphics& g, juce::Rectangle<float> area, bool punch)
 {
     auto r = area.reduced (12, 6);
     auto foot = r.removeFromBottom (16);
-    const float maxRatio = 0.5f;            // 棒の右端 = サイド 50%
+    // WIDTH: サイドの割合（棒の右端 = 50%）。PUNCH: クレスト dB（棒の右端 = 24 dB）
+    const float maxV = punch ? 24.0f : 0.5f;
+    const auto& mixV = punch ? mixPunchV : mixWidth;
+    const auto& refV = punch ? refPunchV : refWidth;
+    const auto& snapV = punch ? snapPunch : snapWidth;
+    auto fmtV = [punch] (float v) { return punch ? juce::String (v, 1) + " dB" : juce::String (juce::roundToInt (v * 100.0f)) + "%"; };
     const char* names[3]  = { "LOW", "MID", "HIGH" };
     const char* ranges[3] = { "< 200 Hz", "200 Hz - 4k", "> 4 kHz" };
     const float rowH = r.getHeight() / 3.0f;
@@ -1576,14 +1886,25 @@ void MainComponent::drawWidth (juce::Graphics& g, juce::Rectangle<float> area)
         g.setFont (juce::FontOptions (10.5f));
         g.drawText (ranges[b], label.toNearestInt(), juce::Justification::topLeft);
 
-        const float mw = mixWidth[(size_t) b], fw = refWidth[(size_t) b], sw = snapHas ? snapWidth[(size_t) b] : -1.0f;
+        const float mv = mixV[(size_t) b], fv = refV[(size_t) b], sv = snapHas ? snapV[(size_t) b] : -1.0f;
+        const bool both = mv >= 0.0f && fv >= 0.0f;
 
         // ひとこと
         juce::String note; juce::Colour noteCol = text.withAlpha (0.7f);
-        if (b == 0 && mw > 0.12f)                         { note = "Wide lows: thinner in mono"; noteCol = warn; }
-        else if (mw >= 0.0f && fw >= 0.0f && fw - mw > 0.05f) note = "REF is wider";
-        else if (mw >= 0.0f && fw >= 0.0f && mw - fw > 0.05f) note = "Yours is wider";
-        else if (mw >= 0.0f && fw >= 0.0f)                note = "About the same";
+        if (punch)
+        {
+            if      (both && fv - mv > 3.0f)  { note = "REF hits much harder (yours is squashed)"; noteCol = warn; }
+            else if (both && fv - mv > 1.5f)  note = "REF hits harder";
+            else if (both && mv - fv > 1.5f)  note = "Yours hits harder";
+            else if (both)                    note = "About the same";
+        }
+        else
+        {
+            if (b == 0 && mv > 0.12f)         { note = "Wide lows: thinner in mono"; noteCol = warn; }
+            else if (both && fv - mv > 0.05f) note = "REF is wider";
+            else if (both && mv - fv > 0.05f) note = "Yours is wider";
+            else if (both)                    note = "About the same";
+        }
         auto noteArea = rr.removeFromRight (juce::jmin (150.0f, rr.getWidth() * 0.34f));
         g.setColour (noteCol);
         g.setFont (juce::FontOptions (11.5f));
@@ -1593,37 +1914,36 @@ void MainComponent::drawWidth (juce::Graphics& g, juce::Rectangle<float> area)
         const float barH = juce::jmin (16.0f, (bars.getHeight() - 4.0f) * 0.5f);
         auto drawBar = [&] (juce::Rectangle<float> br, float v, juce::Colour c, const char* who)
         {
-            auto valueArea = br.removeFromRight (40);
+            auto valueArea = br.removeFromRight (punch ? 56 : 40);
             auto whoArea = br.removeFromLeft (34);
             g.setColour (c.withAlpha (0.9f));
             g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
             g.drawText (who, whoArea.toNearestInt(), juce::Justification::centredLeft);
             g.setColour (grid);
             g.fillRoundedRectangle (br, 3.0f);
+            g.setFont (juce::FontOptions (11.0f));
             if (v >= 0.0f)
             {
                 g.setColour (c);
-                g.fillRoundedRectangle (br.withWidth (br.getWidth() * juce::jlimit (0.0f, 1.0f, v / maxRatio)), 3.0f);
+                g.fillRoundedRectangle (br.withWidth (br.getWidth() * juce::jlimit (0.0f, 1.0f, v / maxV)), 3.0f);
                 g.setColour (text.withAlpha (0.85f));
-                g.setFont (juce::FontOptions (11.0f));
-                g.drawText (juce::String (juce::roundToInt (v * 100.0f)) + "%", valueArea.toNearestInt(), juce::Justification::centredRight);
+                g.drawText (fmtV (v), valueArea.toNearestInt(), juce::Justification::centredRight);
             }
             else
             {
                 g.setColour (text.withAlpha (0.4f));
-                g.setFont (juce::FontOptions (11.0f));
                 g.drawText ("--", valueArea.toNearestInt(), juce::Justification::centredRight);
             }
             return br;
         };
-        auto mixBar = drawBar (bars.removeFromTop (barH), mw, mixCol, "MIX");
+        auto mixBar = drawBar (bars.removeFromTop (barH), mv, mixCol, "MIX");
         bars.removeFromTop (4);
-        drawBar (bars.removeFromTop (barH), fw, refCol, "REF");
+        drawBar (bars.removeFromTop (barH), fv, refCol, "REF");
 
         // SNAP したときのミックスの位置（白い縦線）
-        if (sw >= 0.0f)
+        if (sv >= 0.0f)
         {
-            const float x = mixBar.getX() + mixBar.getWidth() * juce::jlimit (0.0f, 1.0f, sw / maxRatio);
+            const float x = mixBar.getX() + mixBar.getWidth() * juce::jlimit (0.0f, 1.0f, sv / maxV);
             g.setColour (text);
             g.fillRect (x - 1.0f, mixBar.getY() - 3.0f, 2.0f, mixBar.getHeight() + 6.0f);
         }
@@ -1631,7 +1951,8 @@ void MainComponent::drawWidth (juce::Graphics& g, juce::Rectangle<float> area)
 
     g.setColour (text.withAlpha (0.5f));
     g.setFont (juce::FontOptions (10.5f));
-    g.drawFittedText (juce::String ("Width = how much of each band is in the sides (bar end = 50%).")
+    g.drawFittedText ((punch ? juce::String ("Punch = peak vs. average level in each band over 3 s (bar end = 24 dB). Lower = more squashed.")
+                             : juce::String ("Width = how much of each band is in the sides (bar end = 50%)."))
                           + (snapHas ? "  White mark = SNAP." : ""),
                       foot.toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
 }
@@ -1678,8 +1999,11 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
     g.setColour (refCol);               g.drawText ("REF",  header.removeFromLeft (colW), juce::Justification::centredRight);
     g.setColour (text.withAlpha (0.6f)); g.drawText ("DIFF", header.removeFromLeft (colW), juce::Justification::centredRight);
 
+    const bool showStream = engine.level.load() >= Engine::levelStream;
     for (auto& row : rows)
     {
+        const juce::String nm (row.name);
+        if (! showStream && (nm.startsWith ("SPOTIFY") || nm.startsWith ("APPLE") || nm.startsWith ("YOUTUBE"))) continue;
         auto line = r.removeFromTop (rowH);
         g.setColour (grid);
         g.drawHorizontalLine (line.getY(), (float) line.getX(), (float) line.getRight());
@@ -1702,8 +2026,8 @@ void MainComponent::drawMeters (juce::Graphics& g, juce::Rectangle<float> area)
     g.setColour (text.withAlpha (0.5f));
     g.drawFittedText ("HEARD = what you actually hear after LEVEL (MATCH makes the two equal). "
                       "3s / 10s / SECTION = each song's own loudness before matching. "
-                      "SECTION restarts on cue jump or after 1.5 s of silence. PSR: lower = more compressed. "
-                      "SPOTIFY / APPLE / YOUTUBE = how much each service turns the song down (-) or up (+).",
+                      "SECTION restarts on cue jump or after 1.5 s of silence. PSR: lower = more compressed."
+                      + juce::String (showStream ? " SPOTIFY / APPLE / YOUTUBE = how much each service turns the song down (-) or up (+)." : ""),
                       r.withTrimmedTop (4), juce::Justification::topLeft, 4);
 }
 
@@ -1735,7 +2059,7 @@ void MainComponent::resized()
         liveAppBox.setBounds (r.removeFromRight (juce::jlimit (120, 200, r.getWidth() / 3)));
         liveLabel = r.removeFromRight (64);
         r.removeFromRight (6);
-        refBox.setBounds (r);
+        refBox.setBounds (r.withWidth (juce::jmin (r.getWidth(), 460)));
     }
     hintArea = area.removeFromTop (30);   // 注意書き用（2行まで）
     area.removeFromTop (2);
@@ -1766,39 +2090,39 @@ void MainComponent::resized()
     timelineArea = area.removeFromTop (56);
     area.removeFromTop (8);
 
-    // 下の3段（STEREO・REF TRIM・VOLUME は出力の段にまとめた）
+    // 下の2段。横に広げすぎないよう、それぞれの幅は決めておく（ウィンドウを広げても伸びない）
     auto row2 = area.removeFromBottom (46);
     area.removeFromBottom (4);
     auto row1 = area.removeFromBottom (46);
-    area.removeFromBottom (4);
-    auto row0 = area.removeFromBottom (46);
     area.removeFromBottom (20);
     auto col = [] (juce::Rectangle<int>& row, int w, juce::Rectangle<int>& label, int gap = 12)
     {
-        auto c = row.removeFromLeft (w);
+        auto c = row.removeFromLeft (juce::jmin (w, row.getWidth()));
         row.removeFromLeft (gap);
         label = c.removeFromTop (16);
         return c.reduced (0, 2);
     };
-    const int W = row0.getWidth();
-    listenSeg.setBounds (col (row0, W, listenLabel));
-    levelSeg.setBounds  (col (row1, W * 55 / 100, levelLabel));
-    bandSeg.setBounds   (col (row1, row1.getWidth(), bandLabel));
+    const int W = row1.getWidth();
+    listenSeg.setBounds ({});
+    listenLabel = {};
+    levelSeg.setBounds (col (row1, 150, levelLabel));
+    bandSeg.setBounds  (col (row1, 280, bandLabel));
+    moreButton.setBounds (col (row1, 190, moreLabel));
     {
-        // OUTPUT（残り） | STEREO | REF TRIM | VOLUME | DIM / MUTE
+        // OUTPUT | STEREO | REF TRIM | VOLUME | DIM / MUTE
         const int gap = 8, stW = 156, trimW = 66, volW = 70, dmW = 110;
-        const int outW = juce::jmax (220, W - (stW + trimW + volW + dmW + gap * 4));
-        auto o = col (row2, outW, outLabel, gap);
+        const int boxW = juce::jlimit (100, 170, (W - (stW + trimW + volW + dmW + gap * 4) - 56 - 12) / 2);
+        auto o = col (row2, boxW * 2 + 6 + 6 + 56, outLabel, gap);
         auto segR = o.removeFromRight (56);
         o.removeFromRight (6);
-        outABox.setBounds (o.removeFromLeft (o.getWidth() / 2 - 3));
+        outABox.setBounds (o.removeFromLeft (boxW));
         o.removeFromLeft (6);
         outBBox.setBounds (o);
         outSeg.setBounds (segR);
         stereoSeg.setBounds    (col (row2, stW, stereoLabel, gap));
         trimSlider.setBounds   (col (row2, trimW, trimLabel, gap));
         volumeSlider.setBounds (col (row2, volW, volLabel, gap));
-        auto b = row2.withTrimmedTop (16).reduced (0, 2);
+        auto b = row2.withTrimmedTop (16).reduced (0, 2).withWidth (juce::jmin (dmW, row2.getWidth()));
         dimButton.setBounds (b.removeFromLeft (b.getWidth() / 2 - 3));
         b.removeFromLeft (6);
         muteButton.setBounds (b);
@@ -1811,9 +2135,11 @@ void MainComponent::resized()
     specHeader = specArea.withHeight (30);
     {
         auto h = specHeader.reduced (8, 4);
-        viewSeg.setBounds (h.removeFromLeft (124));
+        viewSeg.setBounds (h.removeFromLeft (180));
         h.removeFromLeft (10);
         snapButton.setBounds (h.removeFromRight (58));
+        h.removeFromRight (6);
+        avgButton.setBounds (h.removeFromRight (64));
         h.removeFromRight (6);
         legendArea = h;
     }

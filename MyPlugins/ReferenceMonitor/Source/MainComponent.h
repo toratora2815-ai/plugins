@@ -124,8 +124,21 @@ private:
     void drawTimeline (juce::Graphics&, juce::Rectangle<float>);
     void drawSpectrum (juce::Graphics&, juce::Rectangle<float>);
     void drawMeters (juce::Graphics&, juce::Rectangle<float>);
-    void drawWidth (juce::Graphics&, juce::Rectangle<float>);
-    void setWidthView (bool on);
+    void drawBands (juce::Graphics&, juce::Rectangle<float>, bool punch);   // WIDTH / PUNCH 表示
+    void setView (int mode);   // 0 TONE / 1 WIDTH / 2 PUNCH
+    // MORE（LISTEN AS と配信サービスの音量）
+    void showMoreMenu();
+    void updateMoreButton();
+    // AVG（何曲かのリファレンスの平均の音色と比べる）
+    void avgMenu();
+    void addCurrentToAvg();
+    void rebuildAvg();
+    void saveAvg();
+    void loadAvg();
+    std::vector<float> fileCurve (const RefAudio& a) const;
+    std::vector<float> normalisedCurve (std::vector<float> v) const;
+    float curveLevel (const std::vector<float>& v) const;
+    void updateLiveShape();
     void takeSnapshot();
     void clearSnapshot();
     // 音色の差 a − b（音量の差は除く、となりと少しならす）
@@ -152,6 +165,8 @@ private:
     juce::OwnedArray<CueButton> cueButtons;
     juce::String cueSignature;
     CueButton snapButton;   // SNAP（右クリックで消す）
+    CueButton avgButton;    // AVG（右クリックでメニュー）
+    juce::TextButton moreButton { "MORE" };
     juce::TextButton resetButton { "RESET METERS" }, dimButton { "DIM" }, muteButton { "MUTE" },
                      pinButton { "PIN" }, bypassButton { "BYPASS" };
     juce::Slider trimSlider, volumeSlider;
@@ -185,7 +200,15 @@ private:
     bool mixHas = false, refHas = false;
     float displayTop = -20.0f;
     std::vector<double> snapBuf, sideBuf;
-    bool widthView = false;                        // false = TONE、true = WIDTH
+    int viewMode = 0;                              // 0 TONE / 1 WIDTH / 2 PUNCH
+    std::array<float, 3> mixPunchV { -1, -1, -1 }, refPunchV { -1, -1, -1 }, snapPunch { -1, -1, -1 };
+    struct AvgCurve { juce::String name; std::vector<float> db; };
+    std::vector<AvgCurve> avgCurves;
+    std::vector<float> avgDb, mixLong, refLong;    // 平均の目標、長め（約 20 秒）にならした自分の曲・参照曲
+    double mixLongCount = 0, refLongCount = 0;
+    juce::String refLongKey;
+    bool avgOn = false;
+    std::map<juce::String, std::vector<float>> liveShapes;   // ミュージックの曲ごとの音量の形（再生した所だけ）
     std::vector<float> mixSlow;                    // ゆっくり平均したミックスの音色（SNAP で覚える元）
     std::array<float, 3> mixWidth { -1, -1, -1 }, refWidth { -1, -1, -1 }, snapWidth { -1, -1, -1 };
     std::vector<float> snapDb, snapDiffDb;         // SNAP したときのミックスの音色と、その REF との差
@@ -193,7 +216,7 @@ private:
     double snapTime = 0.0;
     juce::Rectangle<int> specHeader, legendArea;
     juce::Rectangle<int> cueRow, headerArea, statusArea, refLabel, liveLabel, hintArea, timelineArea, specArea, meterArea, labelsRow1, labelsRow2;
-    juce::Rectangle<int> levelLabel, bandLabel, stereoLabel, trimLabel, outLabel, volLabel, listenLabel;
+    juce::Rectangle<int> levelLabel, bandLabel, stereoLabel, trimLabel, outLabel, volLabel, listenLabel, moreLabel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
