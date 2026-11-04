@@ -66,6 +66,9 @@ namespace numdeck
         static void showHUD (const std::string& text);
         // Num Deck のウィンドウを、ほかのアプリの全画面の上にも出す（いつも手前のとき）。handle は JUCE の getNativeHandle()
         static void setOverFullScreen (void* nativeHandle, bool on);
+        // メニューバー（画面の右上）の Num Deck のアイコン。選んだ項目の番号を onPick に渡す
+        //   1 = 画面を出す、2 = テンキー ON / OFF、3 = いつも手前、4 = 終了。checked(n) で項目 n にチェックを付ける
+        static void setStatusMenu (std::function<void (int)> onPick, std::function<bool (int)> checked);
         // 前のウィンドウ: 左右分割の片側なら単独の全画面に、（さっき分割から出した）全画面なら元の分割に、普通なら全画面に
         static void toggleFullScreenOrSplit();
         // Chrome があれば Chrome で。profileDir（例: "Profile 2"）を指定すると、そのアカウントで開く

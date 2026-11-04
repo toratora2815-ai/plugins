@@ -200,6 +200,32 @@ MainComponent::MainComponent()
         return true;
     };
 
+    // メニューバーのアイコン（補助アプリのときは Dock に出ないので、ここから画面を出したり終了したりする）
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    KeyTap::setStatusMenu ([safeThis] (int id)
+    {
+        if (safeThis == nullptr) return;
+        auto& self = *safeThis;
+        if (id == 1)
+        {
+            if (auto* w = self.getTopLevelComponent())
+            {
+                if (auto* dw = dynamic_cast<juce::DocumentWindow*> (w)) dw->setMinimised (false);
+                w->setVisible (true);
+                juce::Process::makeForegroundProcess();
+                w->toFront (true);
+            }
+        }
+        if (id == 2) { self.deck.enabled = ! self.deck.enabled; self.deck.save(); self.repaint(); }
+        if (id == 3) { self.deck.alwaysOnTop = ! self.deck.alwaysOnTop; self.deck.save(); self.applyOnTop(); self.repaint(); }
+        if (id == 4) juce::JUCEApplication::getInstance()->systemRequestedQuit();
+    },
+    [safeThis] (int id)
+    {
+        if (safeThis == nullptr) return false;
+        return (id == 2 && safeThis->deck.enabled) || (id == 3 && safeThis->deck.alwaysOnTop);
+    });
+
     deck.onFired = [this] (int i) { flash[(size_t) i] = 1.0f; repaint(); };
     deck.onStateChanged = [this] { resized(); repaint(); };
     deck.onIgnored = [this] { ignoredHint = 1.0f; repaint(); };

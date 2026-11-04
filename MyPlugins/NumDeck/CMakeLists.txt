@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
-project(NumDeck VERSION 1.18.2 LANGUAGES C CXX)
+project(NumDeck VERSION 1.19.0 LANGUAGES C CXX)
 if(APPLE)
     enable_language(OBJCXX)
 endif()
@@ -41,7 +41,7 @@ target_sources(NumDeck PRIVATE
 
 if(APPLE)
     # テンキーの横取り（CGEventTap）と、Logic へのショートカット送信
-    target_sources(NumDeck PRIVATE Source/KeyTap_mac.mm)
+    target_sources(NumDeck PRIVATE Source/KeyTap_mac.mm Source/Windows_mac.mm)
     target_link_libraries(NumDeck PRIVATE "-framework ApplicationServices" "-framework AppKit")
 else()
     target_sources(NumDeck PRIVATE Source/KeyTap_other.cpp)
