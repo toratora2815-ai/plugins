@@ -454,7 +454,7 @@ namespace numdeck
        #endif
         if (NSImage* img = [NSImage imageWithSystemSymbolName: @"square.grid.3x3.fill" accessibilityDescription: @"Num Deck"])
         {
-            img.template = YES;
+            [img setTemplate: YES];  // "template" は C++ の予約語なのでドット記法は使えない
             item.button.image = img;
         }
         else
