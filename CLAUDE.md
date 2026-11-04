@@ -114,6 +114,7 @@
   v1.17.1: 全画面まわりの決め打ちの待ち時間をやめ、waitFor で状態（AXFullScreen・前面のウィンドウ）を確かめてから次へ。2 分割の前に左のウィンドウへキーボードを向け（focusWindow / isFocused）、別のウィンドウを分割しないように。リンクの使い回しは 2 つがお互いと分割されているときだけ「移るだけ」。アプリを前に出すのは bringAppForward（activateWithOptions は断られることがある）
   v1.18.0: 2 画面のリンクは、そのページ（host）のタブがある Chrome のウィンドウを AppleScript で探して使い回す（入れ直し後も見つかる。分割済みならそこへ移るだけ）。全画面（相手を覚えていない）で「.」→ その前に使っていたアプリと半画面（NSWorkspace の切り替え通知で順番を記録）。「いつも手前」のとき Num Deck の全ウィンドウ（メニュー・マクロ画面も）に CanJoinAllSpaces+FullScreenAuxiliary を付け、ほかのアプリの全画面の上にも出す
   v1.18.1: 「.」（全画面 ⇔ 半画面）は、全画面のとき全画面を解除するだけ（2 画面には戻さない。相手の記憶と前のアプリの記録は削除）
+  v1.18.2: 全画面の上に出すには、「いつも手前」のあいだ NSApp を Accessory（補助アプリ）にする必要があった（Regular のままだと CanJoinAllSpaces+FullScreenAuxiliary でも出ない）
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）
 
 ## Claude からの提案（余った利用枠の活用）

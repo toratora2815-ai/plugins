@@ -401,7 +401,18 @@ namespace numdeck
     void KeyTap::setOverFullScreen (void*, bool on)
     {
         static id observer = nil;
+        const bool changed = overFullScreen != on;
         overFullScreen = on;
+        // ふつうのアプリのウィンドウは、ほかのアプリの全画面の上には出られない。
+        // 「いつも手前」のあいだは補助アプリ（Dock とメニューバーに出ない）にして、どの全画面の上にも出せるようにする
+        if (changed)
+        {
+            [NSApp setActivationPolicy: on ? NSApplicationActivationPolicyAccessory : NSApplicationActivationPolicyRegular];
+            dispatch_async (dispatch_get_main_queue(), ^{
+                for (NSWindow* w in [NSApp windows])
+                    if (w.isVisible) [w orderFrontRegardless];
+            });
+        }
         for (NSWindow* w in [NSApp windows]) applyOverFullScreen (w);
         if (observer != nil) return;
         observer = [[NSNotificationCenter defaultCenter] addObserverForName: NSApplicationDidUpdateNotification object: nil
