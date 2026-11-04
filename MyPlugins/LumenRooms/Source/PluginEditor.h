@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "Visuals.h"
+#include "PresetBrowser.h"
 
 class LumenLook : public juce::LookAndFeel_V4
 {
@@ -94,6 +95,13 @@ private:
     juce::TextButton tabs[3];
     juce::TextButton loadButton { "LOAD" }, saveButton { "SAVE" };
     juce::TextButton shapeButton { "SHAPE" }, liveButton { "LIVE" };
+    juce::TextButton srcAll { "ALL" }, srcRefl { "REFL" }, srcRev { "REVERB" };
+    juce::TextButton prevButton { "<" }, nextButton { ">" }, nameButton;
+    std::unique_ptr<PresetBrowser> browser;
+    bool livePaused = false;
+    void toggleBrowser();
+    juce::String currentPresetName() const;
+    void placeRowCols (juce::Rectangle<int> area, std::initializer_list<const char*> ids, int cols);
     std::unique_ptr<juce::AlertWindow> saveWindow;
     // LIVE 表示
     static constexpr int liveOrder = 11, liveN = 1 << liveOrder, liveCols = 260;
@@ -111,7 +119,7 @@ private:
     lumen::VisualWorker worker;
     lumen::VisualWorker::Result vis;
     bool haveVis = false;
-    float meter[2] {};
+    float meter[2] {}, meterIn[2] {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LumenRoomsEditor)
 };

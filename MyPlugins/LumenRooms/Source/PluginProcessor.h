@@ -39,6 +39,10 @@ public:
     struct ErView { float timeMs[12]; float db[12]; float lenMs[12]; };
     ErView getErView() const;
     float getOutputLevel (int ch) const { return outLevel[ch].load(); }
+    float getInputLevel (int ch) const { return inLevel[ch].load(); }
+    // 今のプリセットの目印（ブラウザの前へ／次へ用）。"builtin:3" / "my:<パス>" / "ref:<パス>"
+    juce::String getPresetKey() const { return presetKey; }
+    void setPresetKey (const juce::String& k) { presetKey = k; }
 
     static const juce::StringArray& patternNames();
     static const juce::StringArray& proximityNames();
@@ -72,6 +76,7 @@ public:
         }
     } liveTap;
     std::atomic<bool> liveWanted { false };
+    std::atomic<int> liveSource { 0 };   // 0 = 響き全部, 1 = 反射だけ, 2 = 残響だけ
     int mapMode = 0;   // 0 = SHAPE（設定の形）, 1 = LIVE（実際の音）
     double getSampleRateForView() const { return sr; }
 
@@ -95,7 +100,9 @@ private:
     lumen::ReflParams lastRefl;
     bool haveRefl = false;
     std::atomic<bool> needRebuild { true };
-    std::atomic<float> outLevel[2] { { 0.0f }, { 0.0f } };
+    std::atomic<float> outLevel[2] { { 0.0f }, { 0.0f } }, inLevel[2] { { 0.0f }, { 0.0f } };
+    juce::String presetKey;
+    std::vector<float> liveErBuf, liveTailBuf;
     int currentProgram = 0;
     juce::String importedName;
     std::atomic<double> hostBpm { 120.0 };

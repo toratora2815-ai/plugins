@@ -614,7 +614,7 @@ public:
     }
 
     // io: 入力（上書きで出力）、erL/erR: 反射の畳み込み結果
-    void process (float* L, float* R, const float* erL, const float* erR, int n)
+    void process (float* L, float* R, const float* erL, const float* erR, int n, float* erMono = nullptr, float* tailMono = nullptr)
     {
         const float reflG = mixLaw (1.0f - mp.reflRev) * dbOrOff (mp.reflTrimDb);
         const float revG = mixLaw (mp.reflRev) * dbOrOff (mp.revTrimDb);
@@ -643,6 +643,8 @@ public:
             }
             { float mm = 0.5f * (el + er), ss = 0.5f * (el - er) * mp.reflWidth; el = mm + ss; er = mm - ss; }
             float wl = reflG * el + revG * rl, wr = reflG * er + revG * rr;
+            if (erMono != nullptr) erMono[i] = 0.5f * wet * reflG * (el + er);     // LIVE 表示用（EQ の前）
+            if (tailMono != nullptr) tailMono[i] = 0.5f * wet * revG * (rl + rr);
             if (mp.eqOn)
             {
                 for (auto& b : eq[0]) wl = b.process (wl);

@@ -248,8 +248,6 @@ LumenRoomsEditor::LumenRoomsEditor (LumenRoomsProcessor& p) : AudioProcessorEdit
         addAndMakeVisible (tabs[i]);
     }
 
-    loadButton.onClick = [this] { showLoadMenu(); };
-    addAndMakeVisible (loadButton);
     saveButton.onClick = [this] { showSaveDialog(); };
     addAndMakeVisible (saveButton);
     for (auto* b : { &shapeButton, &liveButton })
@@ -264,19 +262,26 @@ LumenRoomsEditor::LumenRoomsEditor (LumenRoomsProcessor& p) : AudioProcessorEdit
     liveButton.setTooltip ("What is playing now: teal = dry input, warm = reverb");
     liveImage.clear (liveImage.getBounds(), juce::Colour (0xff0b0e14));
     setMapMode (juce::SystemStats::getEnvironmentVariable ("LUMEN_MAP", juce::String (proc.mapMode)).getIntValue() == 1 ? 1 : 0);
-    for (int i = 0; i < proc.getNumPrograms(); ++i) presetBox.addItem (proc.getProgramName (i), i + 1);
-    presetBox.setSelectedId (proc.getCurrentProgram() + 1, juce::dontSendNotification);
-    presetBox.onChange = [this] { if (presetBox.getSelectedId() > 0) proc.setCurrentProgram (presetBox.getSelectedId() - 1); };
-    addAndMakeVisible (presetBox);
-    importedLabel.setFont (juce::FontOptions (12.5f));
-    importedLabel.setColour (juce::Label::textColourId, amber);
-    importedLabel.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (importedLabel);
+    prevButton.onClick = [this] { if (! browser) { browser = std::make_unique<PresetBrowser> (proc, look); } browser->step (-1); };
+    nextButton.onClick = [this] { if (! browser) { browser = std::make_unique<PresetBrowser> (proc, look); } browser->step (+1); };
+    nameButton.onClick = [this] { toggleBrowser(); };
+    nameButton.setTooltip ("Browse presets");
+    for (auto* b : { &prevButton, &nextButton, &nameButton }) addAndMakeVisible (b);
+    for (auto* b : { &srcAll, &srcRefl, &srcRev })
+    {
+        b->getProperties().set ("accent", (juce::int64) amber.getARGB());
+        addAndMakeVisible (b);
+    }
+    srcAll.onClick = [this] { proc.liveSource.store (0); };
+    srcRefl.onClick = [this] { proc.liveSource.store (1); };
+    srcRev.onClick = [this] { proc.liveSource.store (2); };
 
     setSize (W, H);
     showPage (juce::jlimit (0, 2, juce::SystemStats::getEnvironmentVariable ("LUMEN_PAGE", "0").getIntValue()));
     worker.request (currentVisualParams());
     startTimerHz (30);
+    setMapMode (proc.mapMode);   // ALL / REFL / REVERB は LIVE のときだけ出す
+    if (juce::SystemStats::getEnvironmentVariable ("LUMEN_BROWSER", "0") == "1") toggleBrowser();   // 確認用
 }
 
 LumenRoomsEditor::~LumenRoomsEditor()
@@ -341,23 +346,23 @@ juce::Rectangle<int> LumenRoomsEditor::cardContent (const juce::String& title) c
 void LumenRoomsEditor::resized()
 {
     // 上の帯
-    auto head = juce::Rectangle<int> (0, 0, W, 58).reduced (18, 15);
-    meterArea = head.removeFromRight (96).reduced (0, 5);
-    head.removeFromRight (14);
-    presetBox.setBounds (head.removeFromRight (200));
-    head.removeFromRight (6);
-    saveButton.setBounds (head.removeFromRight (58));
-    head.removeFromRight (6);
-    loadButton.setBounds (head.removeFromRight (58));
-    head.removeFromRight (10);
-    importedLabel.setBounds (head.removeFromRight (170));
-    for (int i = 0; i < 3; ++i) tabs[i].setBounds (430 + i * 80, head.getY(), 74, head.getHeight());
+    const int hy = 15, hh = 28;
+    for (int i = 0; i < 3; ++i) tabs[i].setBounds (222 + i * 78, hy, 72, hh);
+    prevButton.setBounds (470, hy, 28, hh);
+    nameButton.setBounds (502, hy, 244, hh);
+    nextButton.setBounds (750, hy, 28, hh);
+    saveButton.setBounds (786, hy, 58, hh);
+    meterArea = { 862, 8, W - 18 - 862, 44 };
+    if (browser != nullptr) browser->setBounds (16, 62, W - 32, 400);
 
     // 2 つの表示
     erArea = { 16, 66, 500, 228 };
     mapArea = { 528, 66, W - 16 - 528, 228 };
     shapeButton.setBounds (mapArea.getX() + 104, mapArea.getY() + 10, 66, 22);   // 見出し「REVERB」の右
     liveButton.setBounds (mapArea.getX() + 174, mapArea.getY() + 10, 66, 22);
+    srcAll.setBounds (mapArea.getRight() - 14 - 3 * 70 - 8, mapArea.getY() + 10, 66, 22);
+    srcRefl.setBounds (mapArea.getRight() - 14 - 2 * 70 - 4, mapArea.getY() + 10, 66, 22);
+    srcRev.setBounds (mapArea.getRight() - 14 - 70, mapArea.getY() + 10, 70, 22);
 
     // カード
     const int top = 306, hgt = H - 14 - top;
@@ -388,10 +393,11 @@ void LumenRoomsEditor::resized()
         placeChoice ("pattern", row.removeFromLeft (cw).reduced (4, 0));
         placeChoice ("proximity", row.removeFromLeft (cw).reduced (4, 0));
         placeChoice ("erSlope", row.reduced (4, 0));
-        r.removeFromTop (12);
+        r.removeFromTop (28);
         auto big = r.removeFromTop (150);
         placeKnob ("erSize", { big.getX() + big.getWidth() / 4, big.getCentreY() - 4 });
         placeRow (big.withTrimmedLeft (big.getWidth() / 2), { "reflectivity", "diffusion" });
+        r.removeFromTop (28);
         placeRow (r.removeFromTop (130), { "erWidth", "erRoll", "erTrim" });
 
         auto v = cardContent ("REVERB");
@@ -439,8 +445,8 @@ void LumenRoomsEditor::resized()
         q.removeFromTop (6);
         auto row = q.removeFromTop (40);
         placeChoice ("eqSlope", row.removeFromRight (170).reduced (4, 0));
-        placeRow (q.removeFromTop (108), { "eqLowCut", "eqLsFreq", "eqLsGain", "eqLsQ", "eqMidFreq", "eqMidGain" });
-        placeRow (q.removeFromTop (108), { "eqMidQ", "eqHsFreq", "eqHsGain", "eqHsQ", "eqRoll" });
+        placeRowCols (q.removeFromTop (108), { "eqLowCut", "eqLsFreq", "eqLsGain", "eqLsQ", "eqMidFreq", "eqMidGain" }, 6);
+        placeRowCols (q.removeFromTop (108), { "eqMidQ", "eqHsFreq", "eqHsGain", "eqHsQ", "eqRoll" }, 6);
     }
 }
 
@@ -457,9 +463,6 @@ void LumenRoomsEditor::paint (juce::Graphics& g)
     g.drawText ("LUMEN", 18, 14, 90, 30, juce::Justification::centredLeft);
     g.setColour (amber);
     g.drawText ("ROOMS", 103, 14, 100, 30, juce::Justification::centredLeft);
-    g.setFont (juce::FontOptions (10.5f));
-    g.setColour (faint);
-    g.drawText ("room & reverb designer", 200, 22, 170, 16, juce::Justification::centredLeft);
 
     drawMeters (g, meterArea.toFloat());
 
@@ -705,17 +708,50 @@ void LumenRoomsEditor::drawEqCurve (juce::Graphics& g, juce::Rectangle<float> r)
 
 void LumenRoomsEditor::drawMeters (juce::Graphics& g, juce::Rectangle<float> r)
 {
-    const float h = (r.getHeight() - 4.0f) / 2.0f;
-    for (int c = 0; c < 2; ++c)
+    // IN と OUT：L/R の 2 本ずつ、-48〜0 dB の目盛りと、大きいほうの数字
+    const float gw = (r.getWidth() - 14.0f) / 2.0f;
+    for (int grp = 0; grp < 2; ++grp)
     {
-        auto b = juce::Rectangle<float> (r.getX(), r.getY() + (float) c * (h + 4.0f), r.getWidth(), h);
-        g.setColour (well);
-        g.fillRoundedRectangle (b, 2.0f);
-        const float db = juce::Decibels::gainToDecibels (meter[c], -60.0f);
-        const float w = b.getWidth() * juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f);
-        if (w < 1.0f) continue;
-        g.setGradientFill (juce::ColourGradient (teal, b.getX(), 0, db > -3.0f ? juce::Colour (0xffff6b5a) : amber, b.getRight(), 0, false));
-        g.fillRoundedRectangle (b.withWidth (w), 2.0f);
+        const float* lv = grp == 0 ? meterIn : meter;
+        auto a = juce::Rectangle<float> (r.getX() + (float) grp * (gw + 14.0f), r.getY(), gw, r.getHeight());
+        g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+        g.setColour (dim);
+        g.drawText (grp == 0 ? "IN" : "OUT", a.removeFromLeft (28).toNearestInt(), juce::Justification::centredLeft);
+        const float pk = juce::Decibels::gainToDecibels (juce::jmax (lv[0], lv[1]), -96.0f);
+        auto num = a.removeFromRight (42);
+        g.setFont (juce::FontOptions (11.5f));
+        g.setColour (pk > -1.0f ? juce::Colour (0xffff6b5a) : txt);
+        g.drawText (pk <= -95.0f ? juce::String ("-inf") : juce::String (pk, 1), num.toNearestInt(), juce::Justification::centredRight);
+        a.removeFromRight (6);
+        auto bars = a.removeFromTop (22.0f).withTrimmedTop (4.0f);
+        const float bh = 6.0f;
+        auto toX = [&a] (float db) { return a.getX() + a.getWidth() * juce::jlimit (0.0f, 1.0f, (db + 48.0f) / 48.0f); };
+        for (int c = 0; c < 2; ++c)
+        {
+            auto b = juce::Rectangle<float> (a.getX(), bars.getY() + (float) c * (bh + 3.0f), a.getWidth(), bh);
+            g.setColour (well);
+            g.fillRoundedRectangle (b, 2.0f);
+            const float db = juce::Decibels::gainToDecibels (lv[c], -96.0f);
+            const float w = toX (db) - a.getX();
+            if (w >= 1.0f)
+            {
+                g.setGradientFill (juce::ColourGradient (teal, b.getX(), 0, db > -6.0f ? juce::Colour (0xffff6b5a) : amber, b.getRight(), 0, false));
+                g.fillRoundedRectangle (b.withWidth (w), 2.0f);
+            }
+        }
+        g.setFont (juce::FontOptions (9.5f));
+        const float ty = bars.getY() + 2 * (bh + 3.0f);
+        for (float db : { -48.0f, -36.0f, -24.0f, -12.0f, -6.0f, 0.0f })
+        {
+            g.setColour (faint);
+            g.drawVerticalLine ((int) toX (db), ty, ty + 3.0f);
+        }
+        for (float db : { -48.0f, -24.0f, 0.0f })   // 数字は 3 つだけ（重ならないように）
+        {
+            const float x = toX (db);
+            g.drawText (juce::String ((int) db), (int) x - 12, (int) ty + 3, 24, 11,
+                        db == 0.0f ? juce::Justification::centredRight : (db == -48.0f ? juce::Justification::centredLeft : juce::Justification::centred));
+        }
     }
 }
 
@@ -741,13 +777,15 @@ lumen::VisualParams LumenRoomsEditor::currentVisualParams() const
 
 void LumenRoomsEditor::timerCallback()
 {
-    for (int c = 0; c < 2; ++c) meter[c] = proc.getOutputLevel (c);
+    for (int c = 0; c < 2; ++c) { meter[c] = proc.getOutputLevel (c); meterIn[c] = proc.getInputLevel (c); }
     repaint (meterArea.expanded (2));
 
-    if (presetBox.getSelectedId() != proc.getCurrentProgram() + 1)
-        presetBox.setSelectedId (proc.getCurrentProgram() + 1, juce::dontSendNotification);
-    const auto imp = proc.getImportedName();
-    if (importedLabel.getText() != imp) importedLabel.setText (imp, juce::dontSendNotification);
+    const auto nm = currentPresetName();
+    if (nameButton.getButtonText() != nm) nameButton.setButtonText (nm);
+    const int src = proc.liveSource.load();
+    srcAll.setToggleState (src == 0, juce::dontSendNotification);
+    srcRefl.setToggleState (src == 1, juce::dontSendNotification);
+    srcRev.setToggleState (src == 2, juce::dontSendNotification);
 
     if (proc.mapMode == 1) pullLive();
     worker.request (currentVisualParams());
@@ -862,6 +900,8 @@ void LumenRoomsEditor::setMapMode (int m)
         juce::ignoreUnused (sc);
     }
     proc.liveWanted.store (m == 1);
+    for (auto* b : { &srcAll, &srcRefl, &srcRev }) b->setVisible (m == 1);
+    livePaused = false;
     repaint (mapArea);
 }
 
@@ -873,6 +913,7 @@ void LumenRoomsEditor::pullLive()
     const int ready = t.fifo.getNumReady();
     if (ready <= 0) return;
     const auto sc = t.fifo.read (ready);
+    if (livePaused) return;   // 止めている間は捨てる
     bool changed = false;
     auto consume = [&] (int start, int n)
     {
@@ -924,7 +965,7 @@ void LumenRoomsEditor::pullLive()
 
 void LumenRoomsEditor::drawLiveMap (juce::Graphics& g, juce::Rectangle<float> r)
 {
-    drawCaption (g, r, "REVERB", amber, "teal = dry input   warm = reverb");
+    drawCaption (g, r, "REVERB", amber, "");
     auto plot = mapPlot();
     g.setColour (well);
     g.fillRoundedRectangle (plot, 6.0f);
@@ -956,6 +997,10 @@ void LumenRoomsEditor::drawLiveMap (juce::Graphics& g, juce::Rectangle<float> r)
     }
     g.setColour (faint);
     g.drawText ("now", (int) plot.getRight() - 30, (int) plot.getBottom() + 7, 30, 12, juce::Justification::centredRight);
+    const int src = proc.liveSource.load();
+    const juce::String what = src == 1 ? "warm = reflections" : (src == 2 ? "warm = reverb tail" : "warm = reflections + reverb");
+    if (livePaused) drawHint (g, plot, "PAUSED  -  click to resume");
+    else drawHint (g, plot, "teal = dry input   " + what + "   click = pause");
 }
 
 //==============================================================================
@@ -990,6 +1035,7 @@ static std::pair<const char*, const char*> dragParams (int target)
 
 void LumenRoomsEditor::mouseDown (const juce::MouseEvent& e)
 {
+    if (proc.mapMode == 1 && mapPlot().contains (e.position)) { livePaused = ! livePaused; repaint (mapArea); return; }
     dragTarget = targetAt (e.position, erPlot(), mapPlot(), proc.mapMode);
     if (dragTarget == 0) return;
     const auto ids = dragParams (dragTarget);
@@ -1034,4 +1080,30 @@ void LumenRoomsEditor::mouseDoubleClick (const juce::MouseEvent& e)
         p->setValueNotifyingHost (p->getDefaultValue());
         p->endChangeGesture();
     }
+}
+
+void LumenRoomsEditor::placeRowCols (juce::Rectangle<int> area, std::initializer_list<const char*> ids, int cols)
+{
+    const int cw = area.getWidth() / juce::jmax (1, cols);
+    int i = 0;
+    for (auto id : ids) { placeKnob (id, { area.getX() + cw * i + cw / 2, area.getCentreY() - 4 }); ++i; }
+}
+
+juce::String LumenRoomsEditor::currentPresetName() const
+{
+    const auto imp = proc.getImportedName();
+    return imp.isNotEmpty() ? imp : proc.getProgramName (proc.getCurrentProgram());
+}
+
+void LumenRoomsEditor::toggleBrowser()
+{
+    if (browser != nullptr && browser->isVisible()) { browser->setVisible (false); return; }
+    if (browser == nullptr) browser = std::make_unique<PresetBrowser> (proc, look);
+    browser->onClose = [this] { browser->setVisible (false); };
+    browser->onLoaded = [this] { repaint(); };
+    browser->refresh();
+    addAndMakeVisible (*browser);
+    browser->setBounds (16, 62, W - 32, 400);
+    browser->toFront (true);
+    browser->focusSearch();
 }

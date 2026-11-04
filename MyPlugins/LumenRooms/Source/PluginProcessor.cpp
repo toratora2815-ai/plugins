@@ -269,6 +269,8 @@ void LumenRoomsProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     bufL.setSize (2, maxBlock);
     liveDryBuf.assign ((size_t) maxBlock, 0.0f);
     liveWetBuf.assign ((size_t) maxBlock, 0.0f);
+    liveErBuf.assign ((size_t) maxBlock, 0.0f);
+    liveTailBuf.assign ((size_t) maxBlock, 0.0f);
     bufR.setSize (2, maxBlock);
     haveRefl = false;
     rebuildReflections();
@@ -316,6 +318,12 @@ void LumenRoomsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     if (getTotalNumInputChannels() == 1 && buffer.getNumChannels() > 1)
         buffer.copyFrom (1, 0, buffer, 0, 0, n);
 
+    for (int c = 0; c < 2; ++c)
+    {
+        const float pk = buffer.getMagnitude (c, 0, n);
+        const float old = inLevel[c].load();
+        inLevel[c].store (pk > old ? pk : old * 0.92f);
+    }
     engine.setTail (readTail());
     engine.setMix (readMix());
     engine.setProfiles (profiles.revGains ((int) p ("revColor")), profiles.erGains ((int) p ("erColor")));
@@ -335,11 +343,16 @@ void LumenRoomsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         bufL.addFrom (1, 0, bufR, 1, 0, k);
         const bool live = liveWanted.load (std::memory_order_relaxed);
         if (live) for (int i = 0; i < k; ++i) liveDryBuf[(size_t) i] = 0.5f * (L[start + i] + R[start + i]);
-        engine.process (L + start, R + start, bufL.getReadPointer (0), bufL.getReadPointer (1), k);
+        engine.process (L + start, R + start, bufL.getReadPointer (0), bufL.getReadPointer (1), k,
+                        live ? liveErBuf.data() : nullptr, live ? liveTailBuf.data() : nullptr);
         if (live)
         {
+            const int src = liveSource.load (std::memory_order_relaxed);
             const float dryG = lumen::mixLaw (1.0f - p ("mix") / 100.0f);
-            for (int i = 0; i < k; ++i) liveWetBuf[(size_t) i] = 0.5f * (L[start + i] + R[start + i]) - dryG * liveDryBuf[(size_t) i];
+            for (int i = 0; i < k; ++i)
+                liveWetBuf[(size_t) i] = src == 1 ? liveErBuf[(size_t) i]
+                                       : src == 2 ? liveTailBuf[(size_t) i]
+                                                  : 0.5f * (L[start + i] + R[start + i]) - dryG * liveDryBuf[(size_t) i];
             liveTap.push (liveDryBuf.data(), liveWetBuf.data(), k);
         }
     }
@@ -416,8 +429,10 @@ juce::String LumenRoomsProcessor::saveMyPreset (const juce::String& rawName)
     auto state = apvts.copyState();
     state.setProperty ("presetName", rawName.trim(), nullptr);
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
-    if (xml == nullptr || ! xml->writeTo (dir.getChildFile (name + ".lrpreset"))) return "保存できませんでした";
+    const auto file = dir.getChildFile (name + ".lrpreset");
+    if (xml == nullptr || ! xml->writeTo (file)) return "保存できませんでした";
     importedName = rawName.trim();
+    presetKey = "my:" + file.getFullPathName();
     return {};
 }
 
@@ -527,6 +542,7 @@ void LumenRoomsProcessor::getStateInformation (juce::MemoryBlock& dest)
     auto state = apvts.copyState();
     state.setProperty ("program", currentProgram, nullptr);
     state.setProperty ("imported", importedName, nullptr);
+    state.setProperty ("presetKey", presetKey, nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
 }
 
@@ -538,6 +554,7 @@ void LumenRoomsProcessor::setStateInformation (const void* data, int size)
             auto st = juce::ValueTree::fromXml (*xml);
             currentProgram = (int) st.getProperty ("program", 0);
             importedName = st.getProperty ("imported", "").toString();
+            presetKey = st.getProperty ("presetKey", "").toString();
             apvts.replaceState (st);
         }
 }
