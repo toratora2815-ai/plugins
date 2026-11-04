@@ -6,7 +6,7 @@ class HumKeysApp : public juce::JUCEApplication
 public:
     const juce::String getApplicationName() override    { return "Hum Keys"; }
     const juce::String getApplicationVersion() override { return ProjectInfo::versionString; }
-    bool moreThanOneInstanceAllowed() override           { return false; }
+    bool moreThanOneInstanceAllowed() override           { return getCommandLineParameters().contains ("--snapshot"); }
 
     void initialise (const juce::String& args) override
     {
@@ -23,6 +23,7 @@ public:
                 os.setPosition (0); os.truncate();
                 png.writeImageToStream (c.createComponentSnapshot (c.getLocalBounds(), true, 2.0f), os);
             }
+            c.writeTakeForSnapshot (dir.getChildFile ("humkeys_take.mid"));
             quit();
             return;
         }

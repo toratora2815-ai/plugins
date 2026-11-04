@@ -19,6 +19,7 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
     void showModeForSnapshot (int m);
+    void writeTakeForSnapshot (const juce::File& f) const { writeTakeMidi (f); }
     juce::String savedWindowState() const;
     void saveWindowState (const juce::String&);
 
@@ -80,6 +81,24 @@ private:
     struct Caption { juce::Component* c; juce::String text; };
     std::vector<Caption> captions;
     void caption (juce::Component& c, const juce::String& t) { captions.push_back ({ &c, t }); }
+
+    // ---- 録り逃し防止（テイク） ----
+    struct TNote { double s, e; int n, ch, vel; };
+    std::vector<hum::CapEvent> take;
+    std::vector<TNote> takeNotes;
+    bool takeSaved = false;
+    int64_t takeLastT = 0;
+    double takeRate = 48000;
+    juce::File takeFile;
+    juce::Rectangle<int> takeArea, dragArea;
+    bool dragStarted = false;
+    juce::Slider tempoSlider;
+    juce::TextButton folderButton, newTakeButton;
+    static juce::File takeFolder();
+    void pullCapture();
+    void finishTake();
+    void rebuildTakeNotes();
+    juce::File writeTakeMidi (const juce::File& dest) const;
 
     void refreshButtons();
     void setMode (int m);

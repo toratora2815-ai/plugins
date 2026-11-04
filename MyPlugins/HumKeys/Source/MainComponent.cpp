@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "MicPermission.h"
+#include <map>
 
 namespace
 {
@@ -135,6 +136,21 @@ MainComponent::MainComponent (bool live)
         addChildComponent (nb); addChildComponent (lb); addChildComponent (rb);
     }
 
+    // ---- テイク ----
+    styleSlider (tempoSlider, 40, 240, 1, " BPM");
+    tempoSlider.setTooltip ("Logic の曲のテンポ。ドラッグしたテイクが小節に合うように、この速さで MIDI ファイルを書きます");
+    tempoSlider.onValueChange = [this] { saveSettings(); };
+    addAndMakeVisible (tempoSlider);
+    caption (tempoSlider, "TEMPO");
+    folderButton.setButtonText (juce::String::fromUTF8 ("フォルダ"));
+    folderButton.setTooltip (juce::String::fromUTF8 ("保存したテイク（~/Music/Hum Keys）を Finder で開く"));
+    folderButton.onClick = [] { auto d = takeFolder(); d.createDirectory(); d.startAsProcess(); };
+    newTakeButton.setButtonText ("NEW");
+    newTakeButton.setTooltip (juce::String::fromUTF8 ("今のテイクを保存して、新しいテイクを始める"));
+    newTakeButton.onClick = [this] { finishTake(); take.clear(); takeNotes.clear(); takeSaved = false; repaint(); };
+    addAndMakeVisible (folderButton);
+    addAndMakeVisible (newTakeButton);
+
     for (auto* c : std::initializer_list<juce::Component*> { &keyBox, &scaleBox, &octaveBox, &glueSlider, &holdSlider,
                                                              &velButton, &bendButton, &chanBox, &sensSlider })
         addChildComponent (c);
@@ -171,6 +187,8 @@ MainComponent::MainComponent (bool live)
 MainComponent::~MainComponent()
 {
     stopTimer();
+    pullCapture();
+    finishTake();
     saveSettings();
     devices.removeAudioCallback (this);
     devices.closeAudioDevice();
@@ -243,6 +261,8 @@ void MainComponent::timerCallback()
         if (h.cls >= 0 && h.cls < 3) { padFlash[(size_t) h.cls] = 1.0f; padVel[(size_t) h.cls] = h.velocity; }
     for (auto& p : padFlash) p *= 0.88f;
 
+    pullCapture();
+
     // 表示の中心を、いま鳴っている／歌っている高さへゆっくり寄せる
     const int note = engine.currentNote.load();
     if (note >= 0) viewCenter += 0.06f * ((float) note - viewCenter);
@@ -271,6 +291,21 @@ void MainComponent::refreshButtons()
     velButton.setButtonText (engine.p.dynamicVel.load() ? "DYNAMIC" : "FIXED");
     bendButton.setButtonText (engine.p.bend.load() ? "ON" : "OFF");
     bendButton.setToggleState (engine.p.bend.load(), juce::dontSendNotification);
+
+    // ---- テイク ----
+    styleSlider (tempoSlider, 40, 240, 1, " BPM");
+    tempoSlider.setTooltip ("Logic の曲のテンポ。ドラッグしたテイクが小節に合うように、この速さで MIDI ファイルを書きます");
+    tempoSlider.onValueChange = [this] { saveSettings(); };
+    addAndMakeVisible (tempoSlider);
+    caption (tempoSlider, "TEMPO");
+    folderButton.setButtonText (juce::String::fromUTF8 ("フォルダ"));
+    folderButton.setTooltip (juce::String::fromUTF8 ("保存したテイク（~/Music/Hum Keys）を Finder で開く"));
+    folderButton.onClick = [] { auto d = takeFolder(); d.createDirectory(); d.startAsProcess(); };
+    newTakeButton.setButtonText ("NEW");
+    newTakeButton.setTooltip (juce::String::fromUTF8 ("今のテイクを保存して、新しいテイクを始める"));
+    newTakeButton.onClick = [this] { finishTake(); take.clear(); takeNotes.clear(); takeSaved = false; repaint(); };
+    addAndMakeVisible (folderButton);
+    addAndMakeVisible (newTakeButton);
 
     for (auto* c : std::initializer_list<juce::Component*> { &keyBox, &scaleBox, &octaveBox, &glueSlider, &holdSlider, &bendButton })
         c->setVisible (mode == 0);
@@ -353,6 +388,7 @@ void MainComponent::loadSettings()
     glueSlider.setValue (p.glueMs.load(), juce::dontSendNotification);
     holdSlider.setValue (p.holdMs.load(), juce::dontSendNotification);
     sensSlider.setValue (p.drumSens.load(), juce::dontSendNotification);
+    tempoSlider.setValue (props->getDoubleValue ("tempo", 120.0), juce::dontSendNotification);
     for (int i = 0; i < 3; ++i) drumNoteBox[(size_t) i].setSelectedId (p.drumNote[i].load(), juce::dontSendNotification);
 }
 
@@ -372,6 +408,7 @@ void MainComponent::saveSettings()
     props->setValue ("bend", p.bend.load());
     props->setValue ("channel", p.channel.load());
     props->setValue ("sens", p.drumSens.load());
+    props->setValue ("tempo", tempoSlider.getValue());
     for (int i = 0; i < 3; ++i)
     {
         props->setValue ("drumNote" + juce::String (i), p.drumNote[i].load());
@@ -399,6 +436,11 @@ void MainComponent::showModeForSnapshot (int m)
     }
     histPos = 0; viewCenter = 63; meterDb = -22; peakHoldDb = -12;
     padFlash = { 0.0f, 1.0f, 0.2f }; padVel = { 96, 112, 70 };
+    takeRate = 48000; take.clear();
+    { const int nn[] = { 60, 62, 64, 67, 64, 62, 60, 62, 64, 60 }; int64_t t = 48000;
+      for (int k = 0; k < 10; ++k) { take.push_back ({ t, 0x90, (uint8_t) nn[k], 100, 0 }); t += 20000; take.push_back ({ t, 0x80, (uint8_t) nn[k], 0, 0 }); t += 2000; } }
+    rebuildTakeNotes(); takeSaved = true;
+    tempoSlider.setValue (100.0, juce::dontSendNotification);
     refreshButtons();
     engine.p.mode = keep;
     engine.p.mode = m;
@@ -418,9 +460,21 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
 }
 
 // メーターの上をドラッグ → GATE（これより小さい音は無視）
-void MainComponent::mouseDown (const juce::MouseEvent& e) { mouseDrag (e); }
+void MainComponent::mouseDown (const juce::MouseEvent& e) { dragStarted = false; mouseDrag (e); }
 void MainComponent::mouseDrag (const juce::MouseEvent& e)
 {
+    // テイクを Logic へドラッグ
+    if (dragArea.contains (e.getMouseDownPosition()) || takeArea.contains (e.getMouseDownPosition()))
+    {
+        if (dragStarted || takeNotes.empty() || e.getDistanceFromDragStart() < 4) return;
+        dragStarted = true;
+        auto f = takeSaved && takeFile.existsAsFile()
+                   ? takeFile
+                   : writeTakeMidi (juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Hum Keys take.mid"));
+        if (f.existsAsFile())
+            juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
+        return;
+    }
     if (! meterArea.expanded (8, 0).contains (e.getMouseDownPosition())) return;
     const float db = juce::jmap ((float) e.y, (float) meterArea.getBottom(), (float) meterArea.getY(), minDb, 0.0f);
     engine.p.gateDb = juce::jlimit (-75.0f, -10.0f, std::round (db));
@@ -449,7 +503,20 @@ void MainComponent::resized()
     statusLabel.setBounds (r.removeFromTop (26));
 
     auto bottom = r.removeFromBottom (58);
-    r.removeFromBottom (10);
+    r.removeFromBottom (8);
+    {
+        auto strip = r.removeFromBottom (44);
+        r.removeFromBottom (8);
+        newTakeButton.setBounds (strip.removeFromRight (56).reduced (0, 6));
+        strip.removeFromRight (6);
+        folderButton.setBounds (strip.removeFromRight (78).reduced (0, 6));
+        strip.removeFromRight (6);
+        tempoSlider.setBounds (strip.removeFromRight (110).withTrimmedTop (16).reduced (0, 0).withHeight (26));
+        strip.removeFromRight (10);
+        dragArea = strip.removeFromRight (170);
+        strip.removeFromRight (8);
+        takeArea = strip;
+    }
     displayArea = r;
     meterArea = r.removeFromLeft (26).reduced (0, 6);
     r.removeFromLeft (10);
@@ -501,6 +568,53 @@ void MainComponent::paint (juce::Graphics& g)
     for (auto& c : captions)
         if (c.c->isVisible())
             g.drawText (c.text, c.c->getX(), c.c->getY() - 17, c.c->getWidth(), 14, juce::Justification::left);
+
+    // ---- テイク（録り逃し防止） ----
+    {
+        auto ta = takeArea.toFloat();
+        g.setColour (panel);
+        g.fillRoundedRectangle (ta, 6);
+        g.setColour (dim);
+        g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+        g.drawText ("TAKE", ta.reduced (8, 3).removeFromTop (12), juce::Justification::left);
+        auto roll = ta.reduced (8, 4).withTrimmedTop (12).withTrimmedRight (110);
+        if (takeNotes.empty())
+        {
+            g.setFont (juce::FontOptions (12.0f));
+            g.drawText (juce::String::fromUTF8 ("歌うと、ここに自動でたまります（録音ボタン不要）"), roll, juce::Justification::centredLeft);
+        }
+        else
+        {
+            double t0 = takeNotes.front().s, t1 = t0 + 2.0;
+            int lo = 127, hi = 0;
+            for (auto& n : takeNotes) { t1 = std::max (t1, n.e); lo = std::min (lo, n.n); hi = std::max (hi, n.n); }
+            lo -= 1; hi += 1;
+            for (auto& n : takeNotes)
+            {
+                const float x0 = roll.getX() + (float) ((n.s - t0) / (t1 - t0)) * roll.getWidth();
+                const float x1 = roll.getX() + (float) ((n.e - t0) / (t1 - t0)) * roll.getWidth();
+                const float y = roll.getBottom() - (float) (n.n - lo + 1) / (float) (hi - lo + 1) * roll.getHeight();
+                g.setColour (orange.withAlpha (0.9f));
+                g.fillRect (x0, y, std::max (1.5f, x1 - x0 - 0.5f), std::max (2.0f, roll.getHeight() / (float) (hi - lo + 1) - 0.5f));
+            }
+            g.setColour (textC);
+            g.setFont (juce::FontOptions (12.0f));
+            g.drawFittedText (juce::String ((int) takeNotes.size()) + juce::String::fromUTF8 (" 音 · ")
+                                + juce::String (t1 - t0, 1) + juce::String::fromUTF8 (" 秒")
+                                + (takeSaved ? juce::String::fromUTF8 ("\n保存済み") : juce::String()),
+                              ta.reduced (8, 2).removeFromRight (104).toNearestInt(), juce::Justification::centredRight, 2);
+        }
+
+        auto da = dragArea.toFloat();
+        const bool can = ! takeNotes.empty();
+        g.setColour (can ? orange.withAlpha (0.18f) : panel);
+        g.fillRoundedRectangle (da, 6);
+        g.setColour (can ? orange : line);
+        g.drawRoundedRectangle (da.reduced (1), 6, can ? 1.6f : 1.0f);
+        g.setColour (can ? textC : dim);
+        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        g.drawText (juce::String::fromUTF8 ("⇩ Logic へドラッグ"), da, juce::Justification::centred);
+    }
 
     // ---- 入力メーター＋GATE ----
     g.setColour (panel);
@@ -622,4 +736,132 @@ void MainComponent::paint (juce::Graphics& g)
             g.drawText (juce::String::fromUTF8 ("OFF（スペースで ON）"), rollArea, juce::Justification::centred);
         }
     }
+}
+
+//==============================================================================
+juce::File MainComponent::takeFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Hum Keys");
+}
+
+// 音の処理側でたまった MIDI を受け取って、テイクにまとめる（4 秒黙ったら区切って保存）
+void MainComponent::pullCapture()
+{
+    const double fs = engine.sampleRate();
+    const int64_t gap = (int64_t) (fs * 4.0);
+    hum::CapEvent c;
+    bool changed = false;
+    while (engine.capture.pop (c))
+    {
+        if (! take.empty() && (c.t - takeLastT > gap || c.t < takeLastT - (int64_t) fs))
+        {
+            finishTake();
+            take.clear(); takeSaved = false;
+        }
+        if (take.empty() && ! takeNotes.empty()) { takeNotes.clear(); takeSaved = false; }
+        take.push_back (c);
+        takeLastT = std::max (takeLastT, c.t);
+        if (c.t < takeLastT - (int64_t) fs) takeLastT = c.t;
+        takeRate = fs;
+        changed = true;
+    }
+    if (changed) rebuildTakeNotes();
+
+    if (! take.empty() && ! takeSaved && engine.currentNote.load() < 0
+        && engine.clockNow.load() - takeLastT > gap)
+        finishTake();
+}
+
+void MainComponent::rebuildTakeNotes()
+{
+    takeNotes.clear();
+    std::map<int, size_t> open;   // (ch * 128 + note) → takeNotes の番号
+    long lastOn = -1;
+    const double fs = takeRate;
+    for (auto& c : take)
+    {
+        const int st = c.st & 0xF0, ch = c.st & 0x0F, key = ch * 128 + c.d1;
+        const double t = (double) c.t / fs;
+        if (c.kind == 1)
+        {
+            // 出だしの高さを直す
+            if (lastOn >= 0)
+            {
+                auto& n = takeNotes[(size_t) lastOn];
+                open.erase (n.ch * 128 + n.n);
+                n.n = c.d1;
+                open[n.ch * 128 + n.n] = (size_t) lastOn;
+            }
+            continue;
+        }
+        if (st == 0x90 && c.d2 > 0)
+        {
+            if (auto it = open.find (key); it != open.end()) takeNotes[it->second].e = t;
+            takeNotes.push_back ({ t, -1.0, c.d1, ch, c.d2 });
+            lastOn = (long) takeNotes.size() - 1;
+            open[key] = (size_t) lastOn;
+        }
+        else if (st == 0x80 || (st == 0x90 && c.d2 == 0))
+        {
+            if (auto it = open.find (key); it != open.end())
+            {
+                auto& n = takeNotes[it->second];
+                n.e = std::max (t, n.s + 0.01);
+                open.erase (it);
+            }
+        }
+    }
+    const double now = (double) engine.clockNow.load() / fs;
+    std::vector<TNote> keep;
+    for (auto n : takeNotes)
+    {
+        if (n.e < 0) n.e = std::max (now, n.s + 0.05);   // まだ鳴っている
+        if (n.e - n.s >= 0.02) keep.push_back (n);        // 20 ms 未満のかけらは捨てる
+    }
+    takeNotes = std::move (keep);
+}
+
+juce::File MainComponent::writeTakeMidi (const juce::File& dest) const
+{
+    if (takeNotes.empty()) return {};
+    const double bpm = tempoSlider.getValue();
+    const int ppq = 960;
+    const double t0 = takeNotes.front().s;
+    auto tick = [&] (double t) { return std::max (0.0, (t - t0) * bpm / 60.0 * ppq); };
+
+    juce::MidiMessageSequence seq;
+    seq.addEvent (juce::MidiMessage::textMetaEvent (3, "Hum Keys"), 0);
+    seq.addEvent (juce::MidiMessage::tempoMetaEvent ((int) std::lround (60000000.0 / bpm)), 0);
+    seq.addEvent (juce::MidiMessage::timeSignatureMetaEvent (4, 4), 0);
+    for (auto& n : takeNotes)
+    {
+        seq.addEvent (juce::MidiMessage::noteOn (n.ch + 1, n.n, (juce::uint8) n.vel), tick (n.s));
+        seq.addEvent (juce::MidiMessage::noteOff (n.ch + 1, n.n), tick (n.e));
+    }
+    // ピッチベンド（BEND が ON のとき）
+    for (auto& c : take)
+        if ((c.st & 0xF0) == 0xE0)
+            seq.addEvent (juce::MidiMessage ((int) c.st, (int) c.d1, (int) c.d2), tick ((double) c.t / takeRate));
+    seq.sort();
+    seq.updateMatchedPairs();
+
+    juce::MidiFile mf;
+    mf.setTicksPerQuarterNote (ppq);
+    mf.addTrack (seq);
+    dest.getParentDirectory().createDirectory();
+    dest.deleteFile();
+    juce::FileOutputStream os (dest);
+    if (! os.openedOk() || ! mf.writeTo (os, 1)) return {};
+    return dest;
+}
+
+void MainComponent::finishTake()
+{
+    if (takeSaved || take.empty()) return;
+    rebuildTakeNotes();
+    if (takeNotes.empty()) return;
+    const auto name = "Hum Keys " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S") + ".mid";
+    takeFile = writeTakeMidi (takeFolder().getChildFile (name));
+    takeSaved = takeFile.existsAsFile();
+    repaint();
 }

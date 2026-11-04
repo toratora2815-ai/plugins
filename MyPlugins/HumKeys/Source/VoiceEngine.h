@@ -149,6 +149,9 @@ struct Frame
 
 struct Hit { int cls; int velocity; };
 
+// 記録用の MIDI（t = 本当に鳴り始めたと思われるサンプル位置。kind 1 = 直前のノートの高さを d1 に直す）
+struct CapEvent { int64_t t; uint8_t st, d1, d2, kind; };
+
 //==============================================================================
 class Engine
 {
@@ -156,6 +159,9 @@ public:
     Params p;
     Ring<Frame, 4096> frames;   // 画面用（約 2.7 ms ごと）
     Ring<Hit, 256>    hits;     // 画面用（ドラム）
+    Ring<CapEvent, 8192> capture;  // 録り逃し防止の記録用
+    std::atomic<int64_t> clockNow { 0 };  // 今まで処理したサンプル数
+    double sampleRate() const { return fs; }
     std::atomic<int>  currentNote { -1 };
     std::atomic<int>  learnClass { -1 };  // 0..2 = その音を覚えている途中
     std::atomic<int>  learnCount { 0 };
@@ -190,7 +196,7 @@ public:
         levelCoef = std::exp (-1.0 / (fs * 0.010));
         fastAtt = std::exp (-1.0 / (fs * 0.0003)); fastRel = std::exp (-1.0 / (fs * 0.010));
         slowAtt = std::exp (-1.0 / (fs * 0.015));  slowRel = std::exp (-1.0 / (fs * 0.060));
-        ms2 = 0; fastEnv = slowEnv = 0;
+        ms2 = 0; fastEnv = slowEnv = 0; clock = 0; lastCapT = 0;
         resetMelody(); resetDrums();
     }
 
@@ -203,7 +209,7 @@ public:
         if (! on || mode != lastMode) { stopMelodyNote (out); lastMode = mode; }
         const int ch = std::clamp (p.channel.load(), 1, 16) - 1;
 
-        for (int i = 0; i < n; ++i)
+        for (int i = 0; i < n; ++i, ++clock)
         {
             const float xh = hpIn.process (x[i]);
             ms2 = levelCoef * ms2 + (1 - levelCoef) * (double) xh * xh;
@@ -225,6 +231,7 @@ public:
                 }
             }
         }
+        clockNow.store (clock);
     }
 
     void allOff (MidiSink& out)
@@ -242,6 +249,16 @@ public:
     float lastPitch() const { return lastF0Midi; }
 
 private:
+    int64_t clock = 0, lastCapT = 0;
+    void emit (MidiSink& out, uint8_t st, uint8_t d1, uint8_t d2, int64_t t)
+    {
+        out.send (st, d1, d2);
+        // 記録の時刻は前後しないように（言い直しと音の切り替えが重なったときなど）
+        t = std::clamp (t, lastCapT, clock);
+        lastCapT = t;
+        capture.push ({ t, st, d1, d2, 0 });
+    }
+
     double fs = 48000, fsd = 12000;
     int D = 4, W = 192, tauMin = 10, tauMax = 172, span = 400, hopD = 32;
     std::vector<float> ring, diff, cmnd;
@@ -256,11 +273,18 @@ private:
     float runPeak = -100, dipMin = 0; bool dipped = false;
     float bendSmooth = 0; int lastBendSent = 8192, bendTick = 0;
     float lastF0Midi = -1;
+    std::array<float, 5> rawHist {};      // 直近 5 回の生の音程（-1 = 声なし）
+    std::array<float, 8> filtHist {};     // ならした音程（動いているかを見る）
+    int rawPos = 0, filtPos = 0;
+    int64_t pendStart = 0, unvoicedStart = 0, gateCross = 0, noteStartAt = 0;
+    bool phraseFirst = false;             // 句の最初の音（まだ直してよい）
+    bool aboveGate = false;
 
     void resetMelody()
     {
         curNote = -1; pendCand = -1; pendMs = 0; unvoicedMs = 1e6f; peakSinceStart = -100;
         runPeak = -100; dipped = false; bendSmooth = 0; lastBendSent = 8192; currentNote.store (-1);
+        rawHist.fill (-1); filtHist.fill (-1); rawPos = filtPos = 0; phraseFirst = false; aboveGate = false;
     }
 
     float levelDb() const { return 10.0f * (float) std::log10 (ms2 + 1e-12); }
@@ -309,19 +333,20 @@ private:
         return (float) fsd / t;
     }
 
-    void noteOn (MidiSink& out, int note, int vel, int ch)
+    void noteOn (MidiSink& out, int note, int vel, int ch, int64_t t)
     {
         note = std::clamp (note, 0, 127);
-        out.send ((uint8_t) (0x90 | ch), (uint8_t) note, (uint8_t) std::clamp (vel, 1, 127));
-        curNote = note; curChan = ch; currentNote.store (note);
+        emit (out, (uint8_t) (0x90 | ch), (uint8_t) note, (uint8_t) std::clamp (vel, 1, 127), t);
+        curNote = note; curChan = ch; currentNote.store (note); noteStartAt = clock;
     }
-    void noteOff (MidiSink& out, int note, int ch) { out.send ((uint8_t) (0x80 | ch), (uint8_t) note, 0); }
+    void noteOff (MidiSink& out, int note, int ch, int64_t t) { emit (out, (uint8_t) (0x80 | ch), (uint8_t) note, 0, t); }
 
-    void stopMelodyNote (MidiSink& out)
+    void stopMelodyNote (MidiSink& out, int64_t t = -1)
     {
-        if (curNote >= 0) noteOff (out, curNote, curChan);
-        if (lastBendSent != 8192) { out.send ((uint8_t) (0xE0 | curChan), 0, 64); lastBendSent = 8192; }
-        curNote = -1; currentNote.store (-1); bendSmooth = 0;
+        if (t < 0) t = clock;
+        if (curNote >= 0) noteOff (out, curNote, curChan, t);
+        if (lastBendSent != 8192) { emit (out, (uint8_t) (0xE0 | curChan), 0, 64, t); lastBendSent = 8192; }
+        curNote = -1; currentNote.store (-1); bendSmooth = 0; phraseFirst = false;
     }
 
     int velocityFor (float db) const
@@ -331,6 +356,16 @@ private:
         return (int) std::lround (24 + t * 103);
     }
 
+    // 声の高さを 5 回分の真ん中の値でならす（一瞬の外れやオクターブの飛びを消す）
+    float medianPitch() const
+    {
+        std::array<float, 5> v {}; int n = 0;
+        for (float x : rawHist) if (x > 0) v[(size_t) n++] = x;
+        if (n < 3) return -1;
+        std::sort (v.begin(), v.begin() + n);
+        return n % 2 ? v[(size_t) n / 2] : 0.5f * (v[(size_t) n / 2 - 1] + v[(size_t) n / 2]);
+    }
+
     void melodyFrame (bool active, MidiSink& out, int ch)
     {
         const float dt = (float) (hopD * 1000.0 / fsd);
@@ -338,21 +373,36 @@ private:
         const float gate = p.gateDb.load();
         Frame fr; fr.level = lv;
 
+        // 声が GATE を越えた瞬間（句の始まりの時刻に使う）
+        if (lv > gate && ! aboveGate) gateCross = clock;
+        aboveGate = lv > gate;
+
         if (! active)
         {
             fr.note = -1; frames.push (fr);
             return;
         }
 
-        float aper = 1, m = -1;
+        float aper = 1, raw = -1;
         if (lv > gate)
         {
             const float f0 = yin (aper);
-            if (aper < 0.22f && f0 > 65 && f0 < 1300)
-                m = 69.0f + 12.0f * std::log2 (f0 / 440.0f);
+            // 鳴っている途中は少し甘く（子音や息で途切れにくく）
+            const float thr = curNote >= 0 ? 0.35f : 0.22f;
+            if (aper < thr && f0 > 65 && f0 < 1300)
+                raw = 69.0f + 12.0f * std::log2 (f0 / 440.0f);
         }
+        rawHist[(size_t) rawPos] = raw; rawPos = (rawPos + 1) % (int) rawHist.size();
+        const float m = raw > 0 ? medianPitch() : -1.0f;
         lastF0Midi = m;
         fr.pitch = m;
+
+        // 動いているか（約 16 ms で 0.4 半音以上 = 滑っている途中。そこでは音を変えない）
+        const float older = filtHist[(size_t) filtPos];
+        filtHist[(size_t) filtPos] = m; filtPos = (filtPos + 1) % (int) filtHist.size();
+        const float back = filtHist[(size_t) ((filtPos + 1) % (int) filtHist.size())];
+        (void) older;
+        const bool moving = m > 0 && back > 0 && std::abs (m - back) > 0.4f;
 
         const int key = p.key.load(), sc = p.scale.load();
         const float mm = m + 12.0f * (float) std::clamp (p.octave.load(), -3, 3);
@@ -368,24 +418,30 @@ private:
 
         if (cand >= 0)
         {
-            if (unvoicedMs > 0) { if (curNote < 0) peakSinceStart = lv; }
+            if (unvoicedMs > 0 && curNote < 0) peakSinceStart = lv;
             peakSinceStart = std::max (peakSinceStart, lv);
-            if (cand == pendCand) pendMs += dt; else { pendCand = cand; pendMs = dt; }
+            if (cand == pendCand && ! (moving && cand != curNote)) pendMs += dt;
+            else if (cand != pendCand) { pendCand = cand; pendMs = moving && curNote >= 0 ? 0 : dt; pendStart = clock; }
             unvoicedMs = 0;
         }
         else
         {
+            if (unvoicedMs <= 0.0f) unvoicedStart = clock;
             unvoicedMs += dt; pendCand = -1; pendMs = 0;
         }
 
         const float glue = p.glueMs.load(), hold = p.holdMs.load();
+        const int64_t lag = analysisLag();
 
         if (curNote < 0)
         {
-            if (pendCand >= 0 && pendMs >= glue)
+            // 句の最初は速く鳴らす（違っていたら、あとで高さだけ直す）
+            if (pendCand >= 0 && pendMs >= std::min (glue, 8.0f))
             {
                 sendCenterBend (out, ch);
-                noteOn (out, pendCand, velocityFor (peakSinceStart), ch);
+                const int64_t t0 = std::max (gateCross - (int64_t) (fs * 0.003), clock - lag - (int64_t) (fs * 0.03));
+                noteOn (out, pendCand, velocityFor (peakSinceStart), ch, t0);
+                phraseFirst = true;
                 runPeak = lv; dipped = false; dipMin = lv;
             }
         }
@@ -398,21 +454,36 @@ private:
 
             if (unvoicedMs >= hold)
             {
-                stopMelodyNote (out);
+                stopMelodyNote (out, unvoicedStart - lag);
             }
             else if (pendCand >= 0 && pendCand != curNote && pendMs >= glue)
             {
                 const int old = curNote, oldCh = curChan;
-                noteOn (out, pendCand, velocityFor (lv), ch);   // 先に次の音 → レガート（つながる）
-                noteOff (out, old, oldCh);
+                if (phraseFirst && clock - noteStartAt < (int64_t) (fs * 0.12))
+                {
+                    // 出だしのしゃくりで違う高さになっていた → 鳴らし直し、記録では最初から正しい高さに
+                    out.send ((uint8_t) (0x90 | ch), (uint8_t) pendCand, (uint8_t) velocityFor (peakSinceStart));
+                    out.send ((uint8_t) (0x80 | oldCh), (uint8_t) old, 0);
+                    capture.push ({ 0, (uint8_t) (0x90 | ch), (uint8_t) pendCand, 0, 1 });
+                    curNote = pendCand; curChan = ch; currentNote.store (pendCand);
+                }
+                else
+                {
+                    const int64_t t = pendStart - lag;
+                    noteOn (out, pendCand, velocityFor (lv), ch, t);   // 先に次の音 → レガート（つながる）
+                    noteOff (out, old, oldCh, t);
+                }
+                phraseFirst = false;
                 bendSmooth = 0;
                 runPeak = lv; dipped = false; dipMin = lv;
             }
             else if (dipped && cand >= 0 && lv > dipMin + 8.0f)
             {
                 const int note = curNote, oldCh = curChan;
-                noteOff (out, note, oldCh);
-                noteOn (out, note, velocityFor (runPeak), ch);   // 言い直しは前の山の大きさで
+                const int64_t t = clock - (int64_t) (fs * 0.012);
+                noteOff (out, note, oldCh, t);
+                noteOn (out, note, velocityFor (runPeak), ch, t);   // 言い直しは前の山の大きさで
+                phraseFirst = false;
                 runPeak = lv; dipped = false; dipMin = lv;
             }
 
@@ -426,7 +497,7 @@ private:
                     const int v = std::clamp ((int) std::lround (8192 + bendSmooth / 2.0f * 8191), 0, 16383);
                     if (std::abs (v - lastBendSent) > 24)
                     {
-                        out.send ((uint8_t) (0xE0 | curChan), (uint8_t) (v & 127), (uint8_t) (v >> 7));
+                        emit (out, (uint8_t) (0xE0 | curChan), (uint8_t) (v & 127), (uint8_t) (v >> 7), clock - lag);
                         lastBendSent = v;
                     }
                 }
@@ -436,9 +507,12 @@ private:
         frames.push (fr);
     }
 
+    // 音程を測る窓の真ん中まで ＋ ならし分の遅れ（サンプル）
+    int64_t analysisLag() const { return (int64_t) ((span * 0.5 + hopD * 2.0) * D); }
+
     void sendCenterBend (MidiSink& out, int ch)
     {
-        if (lastBendSent != 8192) { out.send ((uint8_t) (0xE0 | ch), 0, 64); lastBendSent = 8192; }
+        if (lastBendSent != 8192) { emit (out, (uint8_t) (0xE0 | ch), 0, 64, clock); lastBendSent = 8192; }
         bendSmooth = 0;
     }
 
@@ -446,9 +520,9 @@ private:
     double hFast = 0, hSlow = 0, bLow = 0, bHigh = 0, bAll = 0, bCoef = 0;
     Biquad hbF;
     double fastEnv = 0, slowEnv = 0, fastAtt = 0, fastRel = 0, slowAtt = 0, slowRel = 0;
-    bool capturing = false; int capN = 0, capLen = 0, refractory = 0;
+    bool capturing = false; int64_t capStart = 0; int capN = 0, capLen = 0, refractory = 0;
     double eLow = 0, eHigh = 0, eAll = 0; float capPeak = 0;
-    struct PendingOff { int note = 0, ch = 0, samplesLeft = 0; };
+    struct PendingOff { int note = 0, ch = 0, samplesLeft = 0; int64_t offAt = 0; };
     std::array<PendingOff, 3> drumOff {};
     std::vector<std::array<float, 2>> learnBuf;
 
@@ -462,7 +536,7 @@ private:
     {
         for (auto& d : drumOff)
             if (d.samplesLeft > 0 && --d.samplesLeft == 0)
-                out.send ((uint8_t) (0x80 | d.ch), (uint8_t) d.note, 0);
+                emit (out, (uint8_t) (0x80 | d.ch), (uint8_t) d.note, 0, d.offAt);
     }
 
     void drumSample (float xh, MidiSink& out, int ch)
@@ -499,7 +573,7 @@ private:
         const float g = p.gateDb.load() + 6.0f, sens = p.drumSens.load();
         if (refractory == 0 && ((fDb > g && fDb - sDb > sens) || (hfDb > g - 6.0f && hfDb - hsDb > sens + 3.0f)))
         {
-            capturing = true; capN = 0; capLen = (int) (fs * 0.014);
+            capturing = true; capStart = clock; capN = 0; capLen = (int) (fs * 0.014);
             eLow = eHigh = eAll = 0; capPeak = (float) a;
             refractory = (int) (fs * 0.075);
         }
@@ -554,9 +628,10 @@ private:
             vel = (int) std::lround (30 + 97 * std::clamp ((pk - (p.gateDb.load() + 6.0f)) / 36.0f, 0.0f, 1.0f));
         const int note = std::clamp (p.drumNote[cls].load(), 0, 127);
         auto& d = drumOff[(size_t) cls];
-        if (d.samplesLeft > 0) out.send ((uint8_t) (0x80 | d.ch), (uint8_t) d.note, 0);
-        out.send ((uint8_t) (0x90 | ch), (uint8_t) note, (uint8_t) vel);
-        d = { note, ch, (int) (fs * 0.08) };
+        const int64_t t0 = capStart - (int64_t) (fs * 0.002);
+        if (d.samplesLeft > 0) emit (out, (uint8_t) (0x80 | d.ch), (uint8_t) d.note, 0, t0);
+        emit (out, (uint8_t) (0x90 | ch), (uint8_t) note, (uint8_t) vel, t0);
+        d = { note, ch, (int) (fs * 0.08), t0 + (int64_t) (fs * 0.08) };
         hits.push ({ cls, vel });
     }
 };
