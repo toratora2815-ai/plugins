@@ -119,6 +119,12 @@
   v1.19.0: ウィンドウを動かす部分を Windows_mac.mm に分けた（入口は Windows.h の numdeck::win）。メニューバーのアイコン（KeyTap::setStatusMenu: 画面を出す / テンキー ON / いつも手前 / 終了）
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）
 
+- Hum Keys（HumKeys）… 鼻歌・口ドラムをその場で MIDI にする単体 Mac アプリ。仮想 MIDI「Hum Keys」（MidiOutput::createNewDevice）で Logic へ。
+  MELODY: 12 kHz に間引いて YIN で約 2.7 ms ごとに音程 → KEY / SCALE に合わせる（今の音を少しひいき）、GLUE / HOLD / OCTAVE / VELOCITY / BEND（±2 半音）/ MIDI CH、
+  音量のくぼみ→戻りで同じ音を打ち直す。DRUMS: 全体と 3 kHz 以上の包絡の立ち上がりで検出、14 ms の 150 Hz 以下・7 kHz 以上の割合（直前の残りを引く）で
+  KICK / SNARE / HAT（36 / 38 / 42）、LEARN（4 回で声の癖を覚える、settings の protoN_k）、SENS。DSP は VoiceEngine.h（JUCE なし、単体テスト可）。
+  マイク許可は MicPermission_mac.mm（AVCaptureDevice、許可待ちで画面を止めない）。`--snapshot <フォルダ>` で画面を PNG に書き出す（確認用）
+
 ## Claude からの提案（余った利用枠の活用）
 - Claude が自分で「次に作るもの・直すもの」を3つ提案し、本人が「GO」を出したら作る仕組み。指示書は `ideas/PROPOSAL_PROMPT.md`
 - 2つの入口:
