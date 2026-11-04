@@ -356,13 +356,8 @@ void LumenRoomsEditor::resized()
     // 2 つの表示
     erArea = { 16, 66, 500, 228 };
     mapArea = { 528, 66, W - 16 - 528, 228 };
-    {
-        auto row = mapArea.reduced (14, 10).removeFromTop (22);
-        auto bb = row.removeFromLeft (row.getWidth()).withTrimmedLeft (row.getWidth() / 2 - 160).removeFromLeft (128).reduced (0, 1);
-        shapeButton.setBounds (bb.removeFromLeft (62));
-        bb.removeFromLeft (4);
-        liveButton.setBounds (bb.removeFromLeft (62));
-    }
+    shapeButton.setBounds (mapArea.getX() + 104, mapArea.getY() + 10, 66, 22);   // 見出し「REVERB」の右
+    liveButton.setBounds (mapArea.getX() + 174, mapArea.getY() + 10, 66, 22);
 
     // カード
     const int top = 306, hgt = H - 14 - top;
