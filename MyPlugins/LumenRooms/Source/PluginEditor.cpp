@@ -257,7 +257,7 @@ LumenRoomsEditor::LumenRoomsEditor (LumenRoomsProcessor& p) : AudioProcessorEdit
     addAndMakeVisible (importedLabel);
 
     setSize (W, H);
-    showPage (0);
+    showPage (juce::jlimit (0, 2, juce::SystemStats::getEnvironmentVariable ("LUMEN_PAGE", "0").getIntValue()));
     worker.request (currentVisualParams());
     startTimerHz (30);
 }

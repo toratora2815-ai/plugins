@@ -190,6 +190,25 @@ private:
                     peak = std::max (peak, v);
                 }
             }
+            // なめらかにする（時間 3 列 × 周波数 3 行の平均）
+            {
+                std::vector<float> sm (db.size());
+                for (int c = 0; c < cols; ++c)
+                    for (int row = 0; row < kRows; ++row)
+                    {
+                        float acc = 0; int cnt = 0;
+                        const int rr = row < kRows / 3 ? 2 : 1;   // 低い帯域は粗いので広めに
+                        for (int dc = -1; dc <= 1; ++dc)
+                            for (int dr = -rr; dr <= rr; ++dr)
+                            {
+                                const int cc = c + dc, r2 = row + dr;
+                                if (cc < 0 || cc >= cols || r2 < 0 || r2 >= kRows) continue;
+                                acc += db[(size_t) (cc * kRows + r2)]; ++cnt;
+                            }
+                        sm[(size_t) (c * kRows + row)] = acc / (float) cnt;
+                    }
+                db.swap (sm);
+            }
             juce::Image img (juce::Image::ARGB, cols, kRows, false);
             for (int c = 0; c < cols; ++c)
                 for (int row = 0; row < kRows; ++row)
@@ -199,20 +218,40 @@ private:
                 }
             r.map = img;
 
-            // 周波数ごとの残響時間（-20 dB と -50 dB の通過時刻から）
+            // 周波数ごとの残響時間：エネルギーを後ろから積み上げた減衰曲線の -5 dB → -25 dB の傾きから
             r.rtCurve.assign ((size_t) kRows, 0.0f);
+            const float colSec = hop / (float) sr;
+            std::vector<float> raw ((size_t) kRows, 0.0f);
             for (int row = 0; row < kRows; ++row)
             {
-                float mx = -200; int mi = 0;
-                for (int c = 0; c < cols; ++c) if (db[(size_t) (c * kRows + row)] > mx) { mx = db[(size_t) (c * kRows + row)]; mi = c; }
-                int c20 = -1, c50 = -1;
-                for (int c = mi; c < cols; ++c)
+                if (rowFreq (row) < 35.0f) continue;
+                std::vector<double> edc ((size_t) cols, 0.0);
+                double acc = 0;
+                for (int c = cols - 1; c >= 0; --c)
                 {
-                    const float v = db[(size_t) (c * kRows + row)];
-                    if (c20 < 0 && v < mx - 15.0f) c20 = c;
-                    if (c50 < 0 && v < mx - 45.0f) { c50 = c; break; }
+                    const float v = db[(size_t) (c * kRows + row)] - 3.0f * std::log2 (rowFreq (row) / 1000.0f);
+                    acc += std::pow (10.0, v / 10.0);
+                    edc[(size_t) c] = acc;
                 }
-                r.rtCurve[(size_t) row] = (c20 >= 0 && c50 > c20) ? 2.0f * (float) (c50 - c20) * hop / (float) sr : (inf ? 99.0f : 0.0f);
+                int c5 = -1, c25 = -1;
+                for (int c = 0; c < cols; ++c)
+                {
+                    const double rel = 10.0 * std::log10 (edc[(size_t) c] / edc[0] + 1e-30);
+                    if (c5 < 0 && rel < -5.0) c5 = c;
+                    if (c25 < 0 && rel < -25.0) { c25 = c; break; }
+                }
+                raw[(size_t) row] = (c5 >= 0 && c25 > c5) ? 3.0f * (float) (c25 - c5) * colSec : (inf ? 99.0f : 0.0f);
+            }
+            for (int row = 0; row < kRows; ++row)   // 隣どうしで平均してなめらかに
+            {
+                float acc = 0; int cnt = 0;
+                for (int d = -4; d <= 4; ++d)
+                {
+                    const int r2 = row + d;
+                    if (r2 < 0 || r2 >= kRows || raw[(size_t) r2] <= 0.0f) continue;
+                    acc += raw[(size_t) r2]; ++cnt;
+                }
+                r.rtCurve[(size_t) row] = raw[(size_t) row] > 0.0f && cnt > 0 ? acc / (float) cnt : 0.0f;
             }
         }
         return r;
