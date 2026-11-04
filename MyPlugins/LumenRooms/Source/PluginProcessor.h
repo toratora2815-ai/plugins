@@ -53,11 +53,13 @@ public:
     static juce::File defaultPresetFolder();
     static juce::File userPresetFolder();
 
-private:
-    void timerCallback() override;
+    // 今のつまみの値（画面の表示でも使う）
     lumen::ReflParams readRefl() const;
     lumen::TailParams readTail() const;
     lumen::MixParams readMix() const;
+
+private:
+    void timerCallback() override;
     void rebuildReflections();
     float p (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
 

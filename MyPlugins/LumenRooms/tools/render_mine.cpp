@@ -53,7 +53,7 @@ int main (int argc, char** argv)
     mp.eqMidF = get ("eqMidF", 3000); mp.eqMidG = get ("eqMidG", 0); mp.eqMidQ = get ("eqMidQ", 0.7f); mp.eqHsF = get ("eqHsF", 8000); mp.eqHsG = get ("eqHsG", 0);
     mp.eqHsQ = get ("eqHsQ", 0.7f); mp.eqRoll = get ("eqRoll", 18000); mp.eqRollSlope = (int) get ("eqSlope", 1);
 
-    RoomEngine eng; eng.prepare (sr, 512);
+    RoomEngine eng; eng.prepare (sr, 512, (int) get ("seedOff", 0));
     for (int s = 0; s < 2; ++s)
     {
         auto& t = eng.tailAt (s).tune;

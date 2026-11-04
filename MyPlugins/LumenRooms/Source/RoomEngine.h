@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <array>
+#include <complex>
 
 namespace lumen
 {
@@ -104,6 +105,13 @@ struct Biquad
     void reset() { z1 = z2 = 0; }
     void set (double B0, double B1, double B2, double A0, double A1, double A2)
     { b0 = (float) (B0 / A0); b1 = (float) (B1 / A0); b2 = (float) (B2 / A0); a1 = (float) (A1 / A0); a2 = (float) (A2 / A0); }
+    float magDb (double f, double sr) const   // 画面表示用：周波数 f での大きさ（dB）
+    {
+        const double w = 2 * kPi * f / sr;
+        const std::complex<double> z1 = std::polar (1.0, -w), z2 = z1 * z1;
+        const auto h = ((double) b0 + (double) b1 * z1 + (double) b2 * z2) / (1.0 + (double) a1 * z1 + (double) a2 * z2);
+        return (float) (20.0 * std::log10 (std::abs (h) + 1e-12));
+    }
     void lp (double f, double q, double sr) { f = std::min (f, 0.47 * sr); double w = 2 * kPi * f / sr, c = std::cos (w), al = std::sin (w) / (2 * q); set ((1 - c) / 2, 1 - c, (1 - c) / 2, 1 + al, -2 * c, 1 - al); }
     void hp (double f, double q, double sr) { f = std::min (f, 0.47 * sr); double w = 2 * kPi * f / sr, c = std::cos (w), al = std::sin (w) / (2 * q); set ((1 + c) / 2, -(1 + c), (1 + c) / 2, 1 + al, -2 * c, 1 - al); }
     void peak (double f, double q, double db, double sr)
@@ -139,6 +147,13 @@ struct Rolloff
         return x;
     }
     void reset() { for (auto& v : z) v = 0; }
+    float magDb (float f, float sr) const
+    {
+        if (bypass) return 0.0f;
+        const double w = 2 * kPi * f / sr;
+        const auto h = (1.0 - p) / std::abs (1.0 - (double) p * std::polar (1.0, -w));
+        return (float) (slope * 20.0 * std::log10 (h));
+    }
 };
 
 // 音色の型（COLOR）用のグラフィック EQ。帯域は固定、ゲイン（dB）だけ外から入れる
@@ -543,11 +558,11 @@ inline float mixLaw (float v) { return std::min (1.0f, std::pow (std::max (0.0f,
 class RoomEngine
 {
 public:
-    void prepare (double sampleRate, int maxBlock)
+    void prepare (double sampleRate, int maxBlock, int seedOffset = 0)
     {
         sr = (float) sampleRate;
-        tail[0].prepare (sampleRate, 0);
-        tail[1].prepare (sampleRate, 1);
+        tail[0].prepare (sampleRate, 0 + seedOffset);
+        tail[1].prepare (sampleRate, 1 + seedOffset);
         xf[0].init ((int) (0.11f * sr)); xf[1].init ((int) (0.11f * sr));
         erMod[0].init ((int) (0.01f * sr)); erMod[1].init ((int) (0.01f * sr));
         tmpL.assign ((size_t) maxBlock, 0); tmpR.assign ((size_t) maxBlock, 0);
