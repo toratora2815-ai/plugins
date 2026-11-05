@@ -126,18 +126,32 @@ struct Params
     std::atomic<bool>  bend { false };       // 音程の細かいゆれをピッチベンドで送る（±2 半音）
     std::atomic<int>   channel { 1 };        // 1..16
     std::atomic<float> drumSens { 9.0f };    // 何 dB 急に大きくなったら「叩いた」とみなすか（小さいほど敏感）
-    std::atomic<int>   drumNote[3];
-    std::atomic<float> proto[3][2];          // KICK / SNARE / HAT の特徴（低音の割合・高音の割合、log10）
+
+    // 口ドラム 6 音: KICK / SNARE / HAT / OPEN HAT / TOM / CLAP
+    static constexpr int numDrums = 6, numFeat = 6;
+    std::atomic<int>   drumNote[numDrums];
+    std::atomic<float> proto[numDrums][numFeat];   // 6 つの帯域の割合（log10）
+    std::atomic<float> protoSus[numDrums];         // 鳴り始めから 30〜45 ms の残り方（dB、ハイハットの開き/閉じに使う）
+    std::atomic<bool>  has[numDrums];              // 使える音か（OPEN HAT / TOM / CLAP は LEARN してから）
 
     Params()
     {
-        const int notes[3] = { 36, 38, 42 };
-        for (int i = 0; i < 3; ++i) drumNote[i].store (notes[i]);
+        const int notes[numDrums] = { 36, 38, 42, 46, 45, 39 };
+        for (int i = 0; i < numDrums; ++i) drumNote[i].store (notes[i]);
         resetProtos();
     }
-    static constexpr float defaultProto[3][2] = { { -0.4f, -2.5f }, { -1.9f, -0.9f }, { -2.5f, -0.06f } };
-    void resetProto (int c) { proto[c][0].store (defaultProto[c][0]); proto[c][1].store (defaultProto[c][1]); }
-    void resetProtos() { for (int c = 0; c < 3; ++c) resetProto (c); }
+    // 最初の聞き分け（作った音で覚えさせた値）
+    static constexpr float defaultProto[3][numFeat] = { { -0.36f, -0.28f, -1.52f, -2.38f, -2.39f, -2.17f },   // KICK
+                                                                  { -1.95f, -1.65f, -1.40f, -0.62f, -0.32f, -0.90f },   // SNARE
+                                                                  { -2.52f, -2.52f, -2.51f, -2.23f, -1.19f, -0.03f } }; // HAT
+    static constexpr float defaultSus[3] = { -12.0f, -12.0f, -24.0f };
+    void resetProto (int c)
+    {
+        for (int k = 0; k < numFeat; ++k) proto[c][k].store (c < 3 ? defaultProto[c][k] : 0.0f);
+        protoSus[c].store (c < 3 ? defaultSus[c] : -4.0f);
+        has[c].store (c < 3);
+    }
+    void resetProtos() { for (int c = 0; c < numDrums; ++c) resetProto (c); }
 };
 
 struct Frame
@@ -187,11 +201,9 @@ public:
         hpIn.setHP (fs, 50.0, 0.707); hpIn.reset();
         const double fc = std::min (4000.0, 0.42 * fsd);
         aa1.setLP (fs, fc, 0.5412); aa2.setLP (fs, fc, 1.3066); aa1.reset(); aa2.reset();
-        lowF.setLP (fs, 150.0, 0.707); lowF2.setLP (fs, 150.0, 0.707);
-        highF.setHP (fs, 7000.0, 0.707); highF2.setHP (fs, 7000.0, 0.707);
+        setupBands();
         hbF.setHP (fs, 3000.0, 0.707); hbF.reset(); hFast = hSlow = 0;
-        bCoef = std::exp (-1.0 / (fs * 0.008)); bLow = bHigh = bAll = 0;
-        lowF.reset(); lowF2.reset(); highF.reset(); highF2.reset();
+        bCoef = std::exp (-1.0 / (fs * 0.008));
 
         levelCoef = std::exp (-1.0 / (fs * 0.010));
         fastAtt = std::exp (-1.0 / (fs * 0.0003)); fastRel = std::exp (-1.0 / (fs * 0.010));
@@ -263,7 +275,7 @@ private:
     int D = 4, W = 192, tauMin = 10, tauMax = 172, span = 400, hopD = 32;
     std::vector<float> ring, diff, cmnd;
     int ringPos = 0, hopCount = 0, decimCount = 0;
-    Biquad hpIn, aa1, aa2, lowF, lowF2, highF, highF2;
+    Biquad hpIn, aa1, aa2;
     double levelCoef = 0, ms2 = 0;
     int lastMode = 0;
 
@@ -517,18 +529,38 @@ private:
     }
 
     // ---------------- DRUMS ----------------
-    double hFast = 0, hSlow = 0, bLow = 0, bHigh = 0, bAll = 0, bCoef = 0;
+    static constexpr int ND = Params::numDrums, NF = Params::numFeat;
+    double hFast = 0, hSlow = 0, bCoef = 0;
     Biquad hbF;
+    std::array<Biquad, NF> bandA, bandB;          // 6 つの帯域（〜150 / 〜400 / 〜1.2k / 〜3k / 〜7k / 7k〜）
+    std::array<double, NF> base {}, eBand {};     // 鳴る直前の残り / 鳴ってからの量
     double fastEnv = 0, slowEnv = 0, fastAtt = 0, fastRel = 0, slowAtt = 0, slowRel = 0;
-    bool capturing = false; int64_t capStart = 0; int capN = 0, capLen = 0, refractory = 0;
-    double eLow = 0, eHigh = 0, eAll = 0; float capPeak = 0;
+    int capPhase = 0;                             // 0 = 待ち、1 = 14 ms 測る、2 = ハイハットの残り方を 45 ms まで見る
+    int64_t capStart = 0; int capN = 0, capLen = 0, susLen = 0, refractory = 0;
+    double eEarlyHi = 0, eLateHi = 0; float capPeak = 0;
+    int pendingCls = -1;
+    std::array<float, NF> pendingFeat {};
     struct PendingOff { int note = 0, ch = 0, samplesLeft = 0; int64_t offAt = 0; };
-    std::array<PendingOff, 3> drumOff {};
-    std::vector<std::array<float, 2>> learnBuf;
+    std::array<PendingOff, ND> drumOff {};
+    struct Shot { std::array<float, NF> f; float sus; };
+    std::vector<Shot> learnBuf;
+
+    void setupBands()
+    {
+        const double edges[NF + 1] = { 0, 150, 400, 1200, 3000, 7000, 0 };
+        for (int k = 0; k < NF; ++k)
+        {
+            if (k == 0)           { bandA[0].setLP (fs, 150, 0.707); bandB[0].setLP (fs, 150, 0.707); }
+            else if (k == NF - 1) { bandA[(size_t) k].setHP (fs, 7000, 0.707); bandB[(size_t) k].setHP (fs, 7000, 0.707); }
+            else { bandA[(size_t) k].setHP (fs, edges[k], 0.707); bandB[(size_t) k].setLP (fs, std::min (edges[k + 1], fs * 0.45), 0.707); }
+            bandA[(size_t) k].reset(); bandB[(size_t) k].reset();
+        }
+        base.fill (0); eBand.fill (0);
+    }
 
     void resetDrums()
     {
-        capturing = false; refractory = 0; learnBuf.clear();
+        capPhase = 0; refractory = 0; learnBuf.clear(); pendingCls = -1;
         for (auto& d : drumOff) d.samplesLeft = 0;
     }
 
@@ -544,8 +576,6 @@ private:
         const double a = std::abs (xh);
         fastEnv = a > fastEnv ? a + (fastEnv - a) * fastAtt : a + (fastEnv - a) * fastRel;
         slowEnv = a > slowEnv ? a + (slowEnv - a) * slowAtt : a + (slowEnv - a) * slowRel;
-        const float lo = lowF2.process (lowF.process (xh));
-        const float hi = highF2.process (highF.process (xh));
         // 高い所だけの包絡も見る（キックの余韻の上に乗った小さいハイハットも拾う）
         const float hb = hbF.process (xh);
         const double ah = std::abs (hb);
@@ -553,69 +583,121 @@ private:
         hSlow = ah > hSlow ? ah + (hSlow - ah) * slowAtt : ah + (hSlow - ah) * slowRel;
         if (refractory > 0) --refractory;
 
-        if (! capturing)
+        std::array<double, NF> e2 {};
+        for (size_t k = 0; k < (size_t) NF; ++k)
+        {
+            const float y = bandB[k].process (bandA[k].process (xh));
+            e2[k] = (double) y * y;
+        }
+
+        if (capPhase == 0)
         {
             // 鳴る直前の「残っている音」（キックの余韻など）。新しく足された分だけで聞き分けるため
-            bLow  = bCoef * bLow  + (1 - bCoef) * (double) lo * lo;
-            bHigh = bCoef * bHigh + (1 - bCoef) * (double) hi * hi;
-            bAll  = bCoef * bAll  + (1 - bCoef) * (double) xh * xh;
-        }
-        if (capturing)
-        {
-            eLow += (double) lo * lo; eHigh += (double) hi * hi; eAll += (double) xh * xh;
-            capPeak = std::max (capPeak, (float) a);
-            if (++capN >= capLen) { capturing = false; classify (out, ch); }
+            for (size_t k = 0; k < (size_t) NF; ++k) base[k] = bCoef * base[k] + (1 - bCoef) * e2[k];
+
+            const double fDb = 20 * std::log10 (fastEnv + 1e-9), sDb = 20 * std::log10 (slowEnv + 1e-9);
+            const double hfDb = 20 * std::log10 (hFast + 1e-9), hsDb = 20 * std::log10 (hSlow + 1e-9);
+            const float g = p.gateDb.load() + 6.0f, sens = p.drumSens.load();
+            if (refractory == 0 && ((fDb > g && fDb - sDb > sens) || (hfDb > g - 6.0f && hfDb - hsDb > sens + 3.0f)))
+            {
+                capPhase = 1; capStart = clock; capN = 0;
+                capLen = (int) (fs * 0.014); susLen = (int) (fs * 0.045);
+                eBand.fill (0); eEarlyHi = eLateHi = 0; capPeak = (float) a;
+                refractory = (int) (fs * 0.075);
+            }
             return;
         }
 
-        const double fDb = 20 * std::log10 (fastEnv + 1e-9), sDb = 20 * std::log10 (slowEnv + 1e-9);
-        const double hfDb = 20 * std::log10 (hFast + 1e-9), hsDb = 20 * std::log10 (hSlow + 1e-9);
-        const float g = p.gateDb.load() + 6.0f, sens = p.drumSens.load();
-        if (refractory == 0 && ((fDb > g && fDb - sDb > sens) || (hfDb > g - 6.0f && hfDb - hsDb > sens + 3.0f)))
+        ++capN;
+        capPeak = std::max (capPeak, (float) a);
+        const double hiNow = std::max (0.0, e2[4] + e2[5] - base[4] - base[5]);
+        if (capPhase == 1)
         {
-            capturing = true; capStart = clock; capN = 0; capLen = (int) (fs * 0.014);
-            eLow = eHigh = eAll = 0; capPeak = (float) a;
-            refractory = (int) (fs * 0.075);
+            for (size_t k = 0; k < (size_t) NF; ++k) eBand[k] += e2[k];
+            eEarlyHi += hiNow;
+            if (capN >= capLen) firstLook (out, ch);
+        }
+        else
+        {
+            if (capN >= (int) (fs * 0.030)) eLateHi += hiNow;
+            if (capN >= susLen) secondLook (out, ch);
         }
     }
 
 public:
-    // 低音（150 Hz 以下）と高音（5 kHz 以上）の割合（log10）
-    std::array<float, 2> lastFeatures {};
-    int classifyFeatures (float fl, float fh) const
+    std::array<float, NF> lastFeatures {};
+    float lastSustain = 0;
+
+    // 特徴がいちばん近い音（使える音だけ）。HAT と OPEN HAT は同じ組として返す（2）
+    int nearestClass (const std::array<float, NF>& f) const
     {
         int best = 0; float bd = 1e9f;
-        for (int c = 0; c < 3; ++c)
+        for (int c = 0; c < ND; ++c)
         {
-            const float d0 = fl - p.proto[c][0].load(), d1 = fh - p.proto[c][1].load();
-            const float d = 0.25f * d0 * d0 + d1 * d1;   // 高音の割合のほうを重く見る
+            if (! p.has[c].load()) continue;
+            float d = 0;
+            for (int k = 0; k < NF; ++k) { const float x = f[(size_t) k] - p.proto[c][k].load(); d += x * x; }
             if (d < bd) { bd = d; best = c; }
         }
-        return best;
+        return best == 3 ? 2 : best;
+    }
+    bool openHatInUse() const { return p.has[3].load() && p.has[2].load(); }
+    int hatBySustain (float sus) const
+    {
+        const float thr = 0.5f * (p.protoSus[2].load() + p.protoSus[3].load());
+        return sus > thr ? 3 : 2;
     }
 
 private:
-    void classify (MidiSink& out, int ch)
+    void firstLook (MidiSink& out, int ch)
     {
         const double n = (double) capLen;
-        const double l = std::max (0.0, eLow - bLow * n), h = std::max (0.0, eHigh - bHigh * n);
-        const double tot = std::max (eAll - bAll * n, 0.0) + 1e-12;
-        const float fl = (float) std::log10 (std::min (1.0, l / tot) + 3e-3), fh = (float) std::log10 (std::min (1.0, h / tot) + 3e-3);
-        lastFeatures = { fl, fh };
-        int cls = classifyFeatures (fl, fh);
+        std::array<double, NF> e {};
+        double tot = 1e-12;
+        for (size_t k = 0; k < (size_t) NF; ++k) { e[k] = std::max (0.0, eBand[k] - base[k] * n); tot += e[k]; }
+        for (size_t k = 0; k < (size_t) NF; ++k) pendingFeat[k] = (float) std::log10 (e[k] / tot + 3e-3);
+        lastFeatures = pendingFeat;
 
         const int lc = learnClass.load();
-        if (lc >= 0 && lc < 3)
+        pendingCls = (lc >= 0 && lc < ND) ? lc : nearestClass (pendingFeat);
+        const bool hatFamily = pendingCls == 2 || pendingCls == 3;
+        if (hatFamily && (openHatInUse() || lc == 2 || lc == 3))
+        {
+            capPhase = 2;   // 開いたハイハットか、もう少し聞いて決める
+            return;
+        }
+        capPhase = 0;
+        fire (out, ch, pendingCls, 0.0f, false);
+    }
+
+    void secondLook (MidiSink& out, int ch)
+    {
+        capPhase = 0;
+        const double early = eEarlyHi / std::max (1, capLen) + 1e-12;
+        const double late  = eLateHi / std::max (1, susLen - (int) (fs * 0.030)) + 1e-12;
+        const float sus = (float) (10.0 * std::log10 (late / early));
+        lastSustain = sus;
+        const int lc = learnClass.load();
+        const int cls = (lc >= 0) ? lc : hatBySustain (sus);
+        fire (out, ch, cls, sus, true);
+    }
+
+    void fire (MidiSink& out, int ch, int cls, float sus, bool hasSus)
+    {
+        const int lc = learnClass.load();
+        if (lc >= 0 && lc < ND)
         {
             cls = lc;
-            learnBuf.push_back ({ fl, fh });
+            learnBuf.push_back ({ pendingFeat, sus });
             learnCount.store ((int) learnBuf.size());
             if ((int) learnBuf.size() >= learnShots)
             {
-                float s0 = 0, s1 = 0;
-                for (auto& v : learnBuf) { s0 += v[0]; s1 += v[1]; }
-                p.proto[lc][0].store (s0 / (float) learnBuf.size());
-                p.proto[lc][1].store (s1 / (float) learnBuf.size());
+                std::array<float, NF> m {}; float ms = 0;
+                for (auto& v : learnBuf) { for (size_t k = 0; k < (size_t) NF; ++k) m[k] += v.f[k]; ms += v.sus; }
+                const float inv = 1.0f / (float) learnBuf.size();
+                for (int k = 0; k < NF; ++k) p.proto[lc][k].store (m[(size_t) k] * inv);
+                if (hasSus) p.protoSus[lc].store (ms * inv);
+                p.has[lc].store (true);
                 learnBuf.clear();
                 learnClass.store (-1);
             }
@@ -631,7 +713,9 @@ private:
         const int64_t t0 = capStart - (int64_t) (fs * 0.002);
         if (d.samplesLeft > 0) emit (out, (uint8_t) (0x80 | d.ch), (uint8_t) d.note, 0, t0);
         emit (out, (uint8_t) (0x90 | ch), (uint8_t) note, (uint8_t) vel, t0);
-        d = { note, ch, (int) (fs * 0.08), t0 + (int64_t) (fs * 0.08) };
+        const double len = cls == 3 ? 0.30 : 0.08;
+        d = { note, ch, (int) (fs * len) - (int) (clock - capStart), t0 + (int64_t) (fs * len) };
+        if (d.samplesLeft < 1) d.samplesLeft = 1;
         hits.push ({ cls, vel });
     }
 };

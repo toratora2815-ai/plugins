@@ -15,9 +15,9 @@ public:
         {
             const juce::File dir (args.fromFirstOccurrenceOf ("--snapshot", false, false).trim().unquoted());
             MainComponent c (false);
-            for (int m = 0; m < 2; ++m)
+            for (int m = 0; m < 3; ++m)
             {
-                c.showModeForSnapshot (m);
+                c.showSnapshot (m);
                 juce::PNGImageFormat png;
                 juce::FileOutputStream os (dir.getChildFile ("humkeys_" + juce::String (m) + ".png"));
                 os.setPosition (0); os.truncate();
@@ -51,6 +51,7 @@ public:
             if (! restoreWindowStateFromString (content->savedWindowState()))
                 centreWithSize (getWidth(), getHeight());
             setVisible (true);
+            content->applySavedViewState();
         }
         ~MainWindow() override
         {

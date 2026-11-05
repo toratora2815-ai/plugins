@@ -1,6 +1,11 @@
 #pragma once
 #include <JuceHeader.h>
 #include "VoiceEngine.h"
+#include "SyncClock.h"
+#include "Preview.h"
+
+class RemoteCommands;
+class HistoryPanel;
 
 // マイクの音 → VoiceEngine → 仮想 MIDI「Hum Keys」 → Logic
 class MainComponent : public juce::Component,
@@ -18,10 +23,21 @@ public:
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
-    void showModeForSnapshot (int m);
+    // Num Deck などからの命令（"toggle" / "melody" / "drums" / "new" / "preview" / "mini" / "pin" など）
+    void handleCommand (const juce::String& cmd);
+
+    // 確認用（--snapshot）
+    void showSnapshot (int which);
     void writeTakeForSnapshot (const juce::File& f) const { writeTakeMidi (f); }
+
     juce::String savedWindowState() const;
     void saveWindowState (const juce::String&);
+    void applySavedViewState();   // ウィンドウができたあとに MINI / PIN を戻す
+
+    // 履歴の画面から使う
+    static juce::File takeFolder();
+    Preview preview;
+    void closeHistory();
 
 private:
     // ---- 音 ----
@@ -45,6 +61,17 @@ private:
     juce::AudioDeviceManager devices;
     std::vector<float> mono;
     std::atomic<float> inPeak { 0 };
+    int inputLatency = 0;
+
+    // ---- Logic との同期（MIDI クロック） ----
+    SyncClock sync;
+    std::unique_ptr<juce::MidiInput> clockIn;
+    std::atomic<double> mapHostMs { 0 };     // この時刻（ms）に
+    std::atomic<int64_t> mapClock { 0 };     // このサンプル番号の音がマイクに入った
+    int lastStops = 0;
+    double hostMsOf (int64_t sample) const;
+
+    std::unique_ptr<RemoteCommands> remote;
 
     // ---- 設定 ----
     std::unique_ptr<juce::PropertiesFile> props;
@@ -58,15 +85,16 @@ private:
     std::vector<HistFrame> hist;   // 輪（最新 5 秒）
     int histPos = 0;
     float viewCenter = 60, meterDb = -100, peakHoldDb = -100;
-    std::array<float, 3> padFlash {};
-    std::array<int, 3> padVel {};
-    int lastShownNote = -1;
+    std::array<float, 6> padFlash {};
+    std::array<int, 6> padVel {};
+    int lastHitCls = -1;
 
-    juce::Rectangle<int> displayArea, meterArea, rollArea;
-    std::array<juce::Rectangle<int>, 3> padAreas;
+    juce::Rectangle<int> displayArea, meterArea, rollArea, bigArea;
+    std::array<juce::Rectangle<int>, 6> padAreas;
 
     juce::TextButton onButton { "ON" }, melodyTab { "MELODY" }, drumsTab { "DRUMS" },
-                     audioButton, panicButton { "PANIC" };
+                     audioButton, panicButton { "PANIC" }, miniButton { "MINI" }, pinButton { "PIN" },
+                     autoGateButton, autoKeyButton { "AUTO" };
     juce::Label statusLabel;
 
     // MELODY
@@ -75,34 +103,64 @@ private:
     juce::TextButton velButton, bendButton;
     // DRUMS
     juce::Slider sensSlider;
-    std::array<juce::ComboBox, 3> drumNoteBox;
-    std::array<juce::TextButton, 3> learnButton, resetButton;
+    std::array<juce::ComboBox, 6> drumNoteBox;
+    std::array<juce::TextButton, 6> learnButton, resetButton;
 
     struct Caption { juce::Component* c; juce::String text; };
     std::vector<Caption> captions;
     void caption (juce::Component& c, const juce::String& t) { captions.push_back ({ &c, t }); }
 
+    // ---- 自動（GATE / キーとオクターブ） ----
+    double autoGateUntil = 0;
+    std::vector<float> autoGateLevels;
+    std::vector<float> voiced;      // 最近 20 秒ぶんの歌った高さ（輪）
+    size_t voicedPos = 0;
+    bool autoKeyListening = false;
+    static constexpr size_t voicedNeed = 2200;   // 声のある所 約 6 秒
+    void startAutoGate();
+    void finishAutoGate();
+    void autoKey();
+    void applyAutoKey();
+    juce::String flashMsg;
+    double flashUntil = 0;
+    void flash (const juce::String& s, double secs = 6.0);
+
+    // ---- MINI / PIN ----
+    bool mini = false, pinned = false;
+    juce::Rectangle<int> fullBounds;
+    void setMini (bool m);
+    void setPinned (bool p);
+
     // ---- 録り逃し防止（テイク） ----
-    struct TNote { double s, e; int n, ch, vel; };
+    struct TNote { double s, e; int n, ch, vel; double bs, be; };
     std::vector<hum::CapEvent> take;
+    std::vector<double> takeBeats;   // 各イベントが曲の何拍目だったか（同期していなければ NaN）
     std::vector<TNote> takeNotes;
-    bool takeSaved = false;
+    bool takeSaved = false, takeDrums = false;
     int64_t takeLastT = 0;
     double takeRate = 48000;
     juce::File takeFile;
-    juce::Rectangle<int> takeArea, dragArea;
+    juce::Rectangle<int> takeArea, dragArea, playArea;
     bool dragStarted = false;
     juce::Slider tempoSlider;
-    juce::TextButton folderButton, newTakeButton;
-    static juce::File takeFolder();
+    juce::TextButton folderButton, newTakeButton, historyButton;
     void pullCapture();
     void finishTake();
+    void newTake();
     void rebuildTakeNotes();
+    bool takeSynced() const;
+    int takeBar() const;            // 同期しているとき、テイクが始まる小節（1 から）
     juce::File writeTakeMidi (const juce::File& dest) const;
+    void previewTake();
+    void startDragOut();
+
+    std::unique_ptr<HistoryPanel> history;
+    void openHistory();
 
     void refreshButtons();
     void setMode (int m);
     juce::String midiStatus;
+    bool snapshotMode = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
