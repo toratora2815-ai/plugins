@@ -156,6 +156,13 @@
   試し聴き（Preview.h、別の AudioDeviceManager で標準出力、簡単なシンセ・GM ドラム）、履歴（HistoryPanel、▶・ドラッグ・ゴミ箱）、
   MINI（M）/ PIN（P、MacSupport_mac.mm の setFloatOnTop＝Num Deck と同じ Accessory＋全 Space）。分散通知 "com.myplugins.humkeys.command" で
   toggle/on/off/melody/drums/mode/new/preview/history/autoKey/autoGate/octUp/octDown/mini/pin/panic/show を受ける
+  v1.3.0: AUTO（mode 2、音ごとに鼻歌か口ドラム。7 kHz〜の割合 feat[5] > -0.7 ならすぐドラム、ほかは 90 ms 聞いて autoVerdict＝声の割合 0.28 以上・高さの幅（2〜8 割点）3 半音未満・
+  6 dB 以内なら鼻歌。ドラムは ch10（autoDrumChannel）、CapEvent kind 2）。息よけ（breathGuard、3 kHz〜が -12 dB より多いフレームは声なし）。
+  EXPR（expression、CC1 = ビブラートの深さ、CC11 = 声の大きさ）。Metronome.h（CLICK・COUNT-IN、標準出力、耳に届く時刻で拍の目盛り、カウントの小節は負の拍）。
+  テイクの拍は takeSource（Logic / クリック / なし）。exportNotes が拍・小節頭・クオンタイズ（QUANTIZE / STRENGTH、出だしだけ寄せる）をまとめ、保存・ドラッグ・試し聴き・画面が同じものを使う。
+  TIME SIG（4/4〜12/8、settings "sig"）。MIDI はメロディーとドラムの 2 トラック（ドラムのトラックに "Hum Keys drums"）。
+  EDIT（EditPanel、選ぶ・上下・消す・⌘Z・最初の状態。takeLocked = 手直し済み、次の音から新テイク）。命令 auto/click/count/edit/quantize、キー 3/C/R/E/Q。
+  Num Deck 1.21.1 にその 5 つ。Idea Catcher 1.1.1 に VoiceEngine.h を写した
 
 - Plugin Link（MyPlugins/Shared/PluginLink.h・PluginLinkJuce.h）… 自作プラグイン同士の連携。
   ~/Library/Application Support/MyPlugins/PluginLink-v2.bin を mmap した共有メモリの掲示板（64 席・数値 24 個、atomic だけで読み書き、3 秒で不在、10 秒で席を回収）。
@@ -172,7 +179,7 @@
   鼻歌らしさ（音程のとれた割合）でメロディー／ドラム、テンポは出だしの自己相関。SMF（タイプ 1、テンポ・4/4・キー、Melody / Drums(ch10) トラック）を自前で書き、
   NSWorkspace で Logic（com.apple.logic10）に開かせる＝新しいプロジェクトになる。保存は ~/Music/Idea Catcher/<日時>/（.mid・Voice.wav・info.json）。
   分散通知 com.myplugins.ideacatcher.command（toggle / start / stop / show / open）。`--snapshot <フォルダ> [<wav>]` で画面を PNG に
-  （VoiceEngine.h は Hum Keys 1.2.0 の写し。Hum Keys のエンジンを直したら、ここにも写す）
+  （VoiceEngine.h は Hum Keys の写し（今は 1.3.0）。Hum Keys のエンジンを直したら、ここにも写す）
   v1.1.0: さかのぼり録音（設定 preroll、マイクを開いたまま ring に約 32 秒。押した所から前の声のかたまり＝2 秒黙った所まで、直前 5 秒に声がなければなし。"catch" で直前だけ）、
   タップ（録音中だけ Space を registerExtraHotKey(1,…)、idea::tapGrid）、カウントイン（countIn / countBpm / clickDuring、クリックは出力へ。gridT0 = カウント後の 1 拍目＋入出力の遅れ、gridStep 4）、
   重ね録り（Layer = Result＋kind、Voice 2.wav…、info.json の "layers"。前のレイヤーを effectiveGrid で固定して、1 小節目から小節ループで流しながら録る。テンポ・キー固定）、

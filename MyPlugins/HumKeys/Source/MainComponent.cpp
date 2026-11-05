@@ -2,6 +2,7 @@
 #include "MacSupport.h"
 #include "KeyFinder.h"
 #include <map>
+#include <set>
 
 namespace
 {
@@ -62,20 +63,27 @@ bool loadTakeNotes (const juce::File& f, std::vector<Preview::Note>& out, bool& 
     {
         juce::MidiMessageSequence seq (*mf.getTrack (t));
         seq.updateMatchedPairs();
+        bool trackDrums = false;   // "Hum Keys drums" の文字があるトラックはドラム
+        for (int i = 0; i < seq.getNumEvents(); ++i)
+        {
+            const auto& m = seq.getEventPointer (i)->message;
+            if (m.isTextMetaEvent() && m.getTextFromTextMetaEvent().contains ("drums")) trackDrums = true;
+        }
+        drums = drums || trackDrums;
         for (int i = 0; i < seq.getNumEvents(); ++i)
         {
             auto* ev = seq.getEventPointer (i);
             const auto& m = ev->message;
-            if (m.isTextMetaEvent() && m.getTextFromTextMetaEvent().contains ("drums")) drums = true;
             if (m.isNoteOn())
             {
                 const double s = m.getTimeStamp();
                 const double e = ev->noteOffObject != nullptr ? ev->noteOffObject->message.getTimeStamp() : s + 0.2;
-                out.push_back ({ s, e, m.getNoteNumber(), (int) m.getVelocity() });
+                out.push_back ({ s, e, m.getNoteNumber(), (int) m.getVelocity(), trackDrums });
                 lengthSec = std::max (lengthSec, e);
             }
         }
     }
+    std::sort (out.begin(), out.end(), [] (auto& a, auto& b) { return a.s < b.s; });
     if (! out.empty()) lengthSec -= out.front().s;
     return true;
 }
@@ -209,7 +217,7 @@ private:
         if (playRect (h).contains (e.x, e.y) || ! trashRect (w, h).contains (e.x, e.y))
         {
             if (owner.preview.isPlaying() && owner.preview.currentId() == it.file.getFullPathName()) owner.preview.stop();
-            else owner.preview.play (it.notes, it.drums, it.file.getFullPathName());
+            else owner.preview.play (it.notes, it.file.getFullPathName());
         }
         else
         {
@@ -237,6 +245,315 @@ private:
             }
         }
         return {};
+    }
+};
+
+//==============================================================================
+// テイクの手直し。音をクリックで選ぶ（shift で足す）→ 上下にドラッグ／矢印キーで高さ（ドラムは音の種類）、
+// delete で消す、⌘Z で 1 つ戻す。選んでいないときの「↑ ↓ OCT」は全部の音に効く
+class EditPanel : public juce::Component, private juce::Timer
+{
+public:
+    explicit EditPanel (MainComponent& o) : owner (o)
+    {
+        const char* labels[] = { "▶", "↑", "↓", "OCT ↑", "OCT ↓", "消す", "1 つ戻す", "最初の状態", "閉じる" };
+        const char* tips[] = { "試し聴き（スペース）", "半音上げる（↑ キー）。ドラムは 1 つ上の音へ", "半音下げる（↓ キー）。ドラムは 1 つ下の音へ",
+                               "1 オクターブ上げる（shift + ↑）", "1 オクターブ下げる（shift + ↓）", "選んだ音を消す（delete）",
+                               "1 つ前に戻す（⌘Z）", "手直しを全部やめて、録ったままに戻す", "手直しの画面を閉じる（esc）。直した内容はテイクに残ります" };
+        for (int i = 0; i < numButtons; ++i)
+        {
+            auto& b = buttons[(size_t) i];
+            b.setButtonText (jp (labels[i]));
+            b.setTooltip (jp (tips[i]));
+            b.setWantsKeyboardFocus (false);
+            b.onClick = [this, i] { press (i); };
+            addAndMakeVisible (b);
+        }
+        setWantsKeyboardFocus (true);
+        startTimerHz (30);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (panel);
+        g.fillRoundedRectangle (getLocalBounds().toFloat(), 8);
+        g.setColour (textC);
+        g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+        g.drawText (jp ("テイクの手直し"), 14, 8, 160, 24, juce::Justification::centredLeft);
+        g.setColour (dim);
+        g.setFont (juce::FontOptions (12.0f));
+        g.drawText (jp ("クリックで選ぶ（shift で足す）・上下にドラッグで高さ・delete で消す ・ ⌘Z で戻す")
+                      + (owner.takeIsEdited() ? jp ("   ● 直しました") : juce::String()),
+                    170, 8, getWidth() - 180, 24, juce::Justification::centredLeft);
+
+        auto ra = roll.toFloat();
+        g.setColour (panel2.withAlpha (0.5f));
+        g.fillRect (ra);
+        layoutRows();
+        const auto ev = owner.exportNotes();
+        if (ev.empty())
+        {
+            g.setColour (dim);
+            g.setFont (juce::FontOptions (14.0f));
+            g.drawText (jp ("まだテイクがありません（歌うと自動でたまります）"), roll, juce::Justification::centred);
+            return;
+        }
+
+        // 行（上がメロディーの高い音、下がドラム）
+        for (int r = 0; r < numRows; ++r)
+        {
+            const float y = ra.getY() + (float) r * rowH;
+            const bool drumRow = r >= melRows;
+            const int label = drumRow ? 5 - (r - melRows) : hiNote - r;
+            if (! drumRow && hum::inScale (label, 0, hum::scMajor)) { g.setColour (panel2); g.fillRect (ra.getX(), y, ra.getWidth(), rowH - 0.5f); }
+            if (drumRow) { g.setColour (padCol[label].withAlpha (0.07f)); g.fillRect (ra.getX(), y, ra.getWidth(), rowH - 0.5f); }
+            if (rowH >= 9.0f)
+            {
+                g.setColour (drumRow ? padCol[label].withAlpha (0.8f) : dim.withAlpha (label % 12 == 0 ? 1.0f : 0.6f));
+                g.setFont (juce::FontOptions (juce::jmin (11.0f, rowH - 1.0f)));
+                g.drawText (drumRow ? juce::String (padName[label]) : noteName (label), (int) ra.getX() + 4, (int) y, labelW - 6, (int) rowH,
+                            juce::Justification::centredLeft);
+            }
+        }
+        if (melRows > 0 && melRows < numRows)
+        {
+            g.setColour (line);
+            g.fillRect (ra.getX(), ra.getY() + (float) melRows * rowH - 1.0f, ra.getWidth(), 2.0f);
+        }
+
+        // 小節と拍の線
+        const double barQ = owner.barQuarters();
+        for (double b = 0; b <= lenBeats + 1e-6; b += 1.0)
+        {
+            const float x = xOf (b);
+            const bool bar = std::fmod (b + 1e-6, barQ) < 1e-3;
+            g.setColour (bar ? line.brighter (0.4f) : line.withAlpha (0.5f));
+            g.fillRect (x, ra.getY(), bar ? 1.5f : 1.0f, ra.getHeight());
+            if (bar)
+            {
+                g.setColour (dim);
+                g.setFont (juce::FontOptions (10.0f));
+                g.drawText (juce::String ((int) std::lround (b / barQ) + 1), (int) x + 3, (int) ra.getY() + 2, 30, 12, juce::Justification::left);
+            }
+        }
+
+        // 音
+        for (auto& e : ev)
+        {
+            auto r = rectOf (e);
+            const bool sel = selected.count (e.src) > 0;
+            const auto c = e.drum ? padCol[juce::jlimit (0, 5, owner.drumClassOf (e.n))] : orange;
+            g.setColour (c.withAlpha (sel ? 1.0f : 0.55f + 0.4f * (float) e.vel / 127.0f));
+            g.fillRoundedRectangle (r, 2.5f);
+            if (sel) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r.expanded (1.0f), 3.0f, 1.6f); }
+        }
+
+        // 試し聴きの位置
+        if (owner.preview.isPlaying() && owner.preview.currentId() == "take")
+        {
+            double last = 0; for (auto& e : ev) last = std::max (last, e.be);
+            const double first = ev.front().bs;
+            const float x = xOf (first + owner.preview.progress() * (last - first + 0.4 * owner.takeBpm() / 60.0));
+            g.setColour (cyan);
+            g.fillRect (x, ra.getY(), 1.5f, ra.getHeight());
+        }
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (8);
+        r.removeFromTop (32);
+        auto bar = r.removeFromBottom (32);
+        r.removeFromBottom (6);
+        roll = r;
+        const int widths[numButtons] = { 40, 40, 40, 62, 62, 56, 80, 90, 70 };
+        for (int i = 0; i < numButtons; ++i)
+        {
+            if (i == numButtons - 1) { buttons[(size_t) i].setBounds (bar.removeFromRight (widths[i])); continue; }
+            buttons[(size_t) i].setBounds (bar.removeFromLeft (widths[i]));
+            bar.removeFromLeft (i == 0 || i == 4 || i == 5 ? 14 : 4);
+        }
+    }
+
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        const bool cmd = k.getModifiers().isCommandDown(), shift = k.getModifiers().isShiftDown();
+        if (k == juce::KeyPress::escapeKey) { owner.closeEditor(); return true; }
+        if (k == juce::KeyPress::upKey)   { transpose (shift ? 12 : 1); return true; }
+        if (k == juce::KeyPress::downKey) { transpose (shift ? -12 : -1); return true; }
+        if (k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey) { removeSelected(); return true; }
+        if (k == juce::KeyPress::spaceKey || k == juce::KeyPress::returnKey) { owner.previewTake(); return true; }
+        if (cmd && (k.getKeyCode() == 'Z' || k.getKeyCode() == 'z')) { if (owner.undoEdit()) selected.clear(); repaint(); return true; }
+        if (cmd && (k.getKeyCode() == 'A' || k.getKeyCode() == 'a'))
+        {
+            selected.clear(); for (size_t i = 0; i < owner.takeNotes.size(); ++i) selected.insert (i);
+            repaint(); return true;
+        }
+        return false;
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        grabKeyboardFocus();
+        dragging = false; moved = 0;
+        const auto hit = noteAt (e.position);
+        if (hit < 0) { if (! e.mods.isShiftDown()) selected.clear(); repaint(); return; }
+        const auto idx = (size_t) hit;
+        if (e.mods.isShiftDown()) { if (selected.count (idx)) selected.erase (idx); else selected.insert (idx); }
+        else if (! selected.count (idx)) { selected.clear(); selected.insert (idx); }
+        dragging = true; startY = e.position.y;
+        repaint();
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! dragging || rowH <= 0) return;
+        const int rows = (int) std::lround ((startY - e.position.y) / rowH);
+        if (rows != moved)
+        {
+            if (moved == 0) owner.beginEdit();
+            shiftNotes (rows - moved);
+            moved = rows;
+            repaint();
+        }
+    }
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        if (dragging && moved != 0) owner.editDone();
+        dragging = false;
+    }
+
+private:
+    static constexpr int numButtons = 9;
+    MainComponent& owner;
+    std::array<juce::TextButton, numButtons> buttons;
+    juce::Rectangle<int> roll;
+    std::set<size_t> selected;
+    size_t lastCount = 0;
+    double lastFirst = -1;
+    bool dragging = false;
+    int moved = 0;
+    float startY = 0;
+    // 行の割り当て（paint のたびに作り直す）
+    int hiNote = 72, melRows = 0, numRows = 1;
+    float rowH = 10;
+    double lenBeats = 4;
+    static constexpr int labelW = 58;
+
+    void timerCallback() override
+    {
+        // 新しいテイクになったら選び直し
+        const double first = owner.takeNotes.empty() ? -1 : owner.takeNotes.front().s;
+        if (owner.takeNotes.size() != lastCount || std::abs (first - lastFirst) > 1e-9)
+        {
+            if (std::abs (first - lastFirst) > 1e-9) selected.clear();
+            lastCount = owner.takeNotes.size(); lastFirst = first;
+            for (auto it = selected.begin(); it != selected.end();) it = *it >= lastCount ? selected.erase (it) : std::next (it);
+        }
+        repaint();
+    }
+
+    void layoutRows()
+    {
+        const auto ev = owner.exportNotes();
+        int lo = 127, hi = 0; bool anyMel = false, anyDrum = false;
+        lenBeats = owner.barQuarters();
+        for (auto& e : ev)
+        {
+            lenBeats = std::max (lenBeats, e.be);
+            if (e.drum) anyDrum = true;
+            else { anyMel = true; lo = std::min (lo, e.n); hi = std::max (hi, e.n); }
+        }
+        const double barQ = owner.barQuarters();
+        lenBeats = std::ceil (lenBeats / barQ - 1e-6) * barQ;
+        if (anyMel)
+        {
+            lo -= 2; hi += 2;
+            while (hi - lo + 1 < 13) { --lo; ++hi; }
+            hiNote = juce::jlimit (0, 127, hi); lo = juce::jlimit (0, 127, lo);
+            melRows = hiNote - lo + 1;
+        }
+        else melRows = 0;
+        numRows = melRows + (anyDrum ? 6 : 0);
+        if (numRows == 0) numRows = 1;
+        rowH = (float) roll.getHeight() / (float) numRows;
+    }
+
+    float xOf (double beat) const
+    {
+        const float x0 = (float) roll.getX() + labelW, w = (float) roll.getWidth() - labelW - 4;
+        return x0 + (float) (beat / std::max (1.0, lenBeats)) * w;
+    }
+    int rowOf (const MainComponent::ENote& e) const
+    {
+        if (e.drum) return melRows + (5 - juce::jlimit (0, 5, owner.drumClassOf (e.n)));
+        return juce::jlimit (0, juce::jmax (0, melRows - 1), hiNote - e.n);
+    }
+    juce::Rectangle<float> rectOf (const MainComponent::ENote& e) const
+    {
+        const float x0 = xOf (e.bs), x1 = e.drum ? x0 + juce::jmax (6.0f, rowH * 0.8f) : xOf (e.be);
+        const float y = (float) roll.getY() + (float) rowOf (e) * rowH;
+        return { x0, y + 1, juce::jmax (4.0f, x1 - x0 - 1), juce::jmax (2.0f, rowH - 2) };
+    }
+    int noteAt (juce::Point<float> p) const
+    {
+        const auto ev = owner.exportNotes();
+        for (int i = (int) ev.size() - 1; i >= 0; --i)
+            if (rectOf (ev[(size_t) i]).expanded (2, 1).contains (p)) return (int) ev[(size_t) i].src;
+        return -1;
+    }
+
+    // 選んだ音（なければ全部）を動かす。ドラムは音の種類を 1 つずつ
+    void shiftNotes (int d)
+    {
+        auto& tn = owner.takeNotes;
+        for (size_t i = 0; i < tn.size(); ++i)
+        {
+            if (! selected.empty() && ! selected.count (i)) continue;
+            auto& n = tn[i];
+            if (n.drum)
+            {
+                if (std::abs (d) >= 12) continue;
+                n.n = owner.drumNoteAt (juce::jlimit (0, 5, owner.drumClassOf (n.n) + d));
+            }
+            else n.n = juce::jlimit (0, 127, n.n + d);
+        }
+    }
+    void transpose (int d)
+    {
+        if (owner.takeNotes.empty()) return;
+        owner.beginEdit();
+        shiftNotes (d);
+        owner.editDone();
+        repaint();
+    }
+    void removeSelected()
+    {
+        if (selected.empty()) return;
+        owner.beginEdit();
+        auto& tn = owner.takeNotes;
+        for (auto it = selected.rbegin(); it != selected.rend(); ++it)
+            if (*it < tn.size()) tn.erase (tn.begin() + (long) *it);
+        selected.clear();
+        owner.editDone();
+        repaint();
+    }
+    void press (int i)
+    {
+        switch (i)
+        {
+            case 0: owner.previewTake(); break;
+            case 1: transpose (1); break;
+            case 2: transpose (-1); break;
+            case 3: transpose (12); break;
+            case 4: transpose (-12); break;
+            case 5: removeSelected(); break;
+            case 6: if (owner.undoEdit()) selected.clear(); break;
+            case 7: owner.revertEdits(); selected.clear(); break;
+            case 8: owner.closeEditor(); return;
+            default: break;
+        }
+        grabKeyboardFocus();
+        repaint();
     }
 };
 
@@ -269,15 +586,20 @@ MainComponent::MainComponent (bool live) : snapshotMode (! live)
     props = std::make_unique<juce::PropertiesFile> (o);
 
     // ---- 上の行 ----
-    for (auto* b : { &onButton, &melodyTab, &drumsTab, &miniButton, &pinButton })
+    for (auto* b : { &onButton, &melodyTab, &drumsTab, &autoTab, &miniButton, &pinButton })
     {
         b->setClickingTogglesState (false);
         addAndMakeVisible (*b);
     }
     onButton.setTooltip (jp ("MIDI を出す／止める（スペースキー）"));
     onButton.onClick = [this] { engine.p.enabled = ! engine.p.enabled.load(); refreshButtons(); saveSettings(); };
-    melodyTab.onClick = [this] { setMode (mini ? 1 - engine.p.mode.load() : 0); };
+    melodyTab.onClick = [this] { setMode (mini ? (engine.p.mode.load() + 1) % 3 : 0); };
     drumsTab.onClick  = [this] { setMode (1); };
+    autoTab.onClick   = [this] { setMode (2); };
+    melodyTab.setTooltip (jp ("鼻歌 → メロディー（1 キー）"));
+    drumsTab.setTooltip (jp ("口ドラム → ドラム（2 キー）"));
+    autoTab.setTooltip (jp ("鼻歌か口ドラムかを音ごとに自動で決める（3 キー）。ドラムは MIDI チャンネル 10 で出ます。"
+                            "鳴り始めを少し聞いて決めるので、その場の音は少し遅れます（テイクの記録は正しい位置）"));
     miniButton.setTooltip (jp ("小さい表示にする／戻す（M キー）"));
     miniButton.onClick = [this] { setMini (! mini); };
     pinButton.setTooltip (jp ("いつも手前に出す（Logic の全画面の上にも）。ON のあいだ Dock とメニューバーからは消えます（P キー）"));
@@ -318,11 +640,14 @@ MainComponent::MainComponent (bool live) : snapshotMode (! live)
     velButton.onClick  = [this] { engine.p.dynamicVel = ! engine.p.dynamicVel.load(); refreshButtons(); saveSettings(); };
     bendButton.onClick = [this] { engine.p.bend = ! engine.p.bend.load(); engine.panicRequest = true; refreshButtons(); saveSettings(); };
     velButton.setTooltip (jp ("DYNAMIC: 声の大きさで強弱が付く／FIXED: いつも 100"));
+    exprButton.onClick = [this] { engine.p.expression = ! engine.p.expression.load(); refreshButtons(); saveSettings(); };
+    exprButton.setTooltip (jp ("ON にすると、声のゆれ（ビブラート）を CC1（モジュレーション）、声の大きさを CC11（エクスプレッション）で送る。"
+                               "ストリングスや管楽器の音源で、のばした音に表情が付きます"));
     bendButton.setTooltip (jp ("ON にすると、音程の細かいゆれ（ビブラートなど）をピッチベンドで送る（音源のベンド幅を ±2 に）"));
 
     caption (keyBox, "KEY"); caption (scaleBox, "SCALE"); caption (octaveBox, "OCTAVE");
     caption (glueSlider, "GLUE"); caption (holdSlider, "HOLD"); caption (velButton, "VELOCITY");
-    caption (bendButton, "BEND"); caption (chanBox, "MIDI CH");
+    caption (bendButton, "BEND"); caption (exprButton, "EXPR"); caption (chanBox, "MIDI CH");
 
     // ---- DRUMS ----
     styleSlider (sensSlider, 3, 20, 0.5, " dB");
@@ -353,9 +678,36 @@ MainComponent::MainComponent (bool live) : snapshotMode (! live)
     // ---- テイク ----
     styleSlider (tempoSlider, 40, 240, 0.1, " BPM");
     tempoSlider.setTooltip (jp ("曲のテンポ。Logic から MIDI クロックが来ていれば自動で合います"));
-    tempoSlider.onValueChange = [this] { saveSettings(); };
+    tempoSlider.onValueChange = [this] { metro.setBpm (tempoSlider.getValue()); saveSettings(); };
     addAndMakeVisible (tempoSlider);
     caption (tempoSlider, "TEMPO");
+
+    // ---- 拍子・クリック・カウントイン・クオンタイズ ----
+    for (auto* t : { "4/4", "3/4", "2/4", "5/4", "6/8", "7/8", "12/8" }) sigBox.addItem (t, sigBox.getNumItems() + 1);
+    sigBox.setTooltip (jp ("拍子。小節の頭の位置・クリックの強拍・MIDI ファイルの拍子に使います"));
+    sigBox.onChange = [this] { applySignature(); saveSettings(); resaveIfNeeded(); repaint(); };
+    caption (sigBox, "TIME SIG");
+    clickButton.setTooltip (jp ("メトロノーム（C キー）。TEMPO で鳴ります。マイクが拾わないようヘッドホンで。"
+                                "鳴らしている間のテイクは、クリックの小節に合わせて保存されます（Logic の再生中は Logic のクリックを使います）"));
+    clickButton.onClick = [this] { setClick (! clickOn); };
+    caption (clickButton, "CLICK");
+    countButton.setButtonText ("COUNT-IN");
+    countButton.setTooltip (jp ("1 小節カウントしてから録る（R キー）。新しいテイクになり、カウントのあとの小節の頭から始まります"));
+    countButton.onClick = [this] { countIn(); };
+    for (auto* t : { "OFF", "1/4", "1/8", "1/16", "1/8 3連", "1/16 3連" }) quantBox.addItem (jp (t), quantBox.getNumItems() + 1);
+    quantBox.setTooltip (jp ("クオンタイズ：音の出だしを、選んだ細かさの拍に寄せる（Q キーで切替）。ドラッグ・保存・試し聴きに効きます"));
+    quantBox.onChange = [this] { quantize = quantBox.getSelectedId() - 1; saveSettings(); resaveIfNeeded(); repaint(); };
+    caption (quantBox, "QUANTIZE");
+    for (auto* t : { "100%", "75%", "50%" }) strengthBox.addItem (t, strengthBox.getNumItems() + 1);
+    strengthBox.setTooltip (jp ("どれだけ寄せるか。100% = ぴったり、50% = ずれを半分に（人っぽさが残る）"));
+    strengthBox.onChange = [this]
+    {
+        quantStrength = strengthBox.getSelectedId() == 3 ? 0.5f : strengthBox.getSelectedId() == 2 ? 0.75f : 1.0f;
+        saveSettings(); resaveIfNeeded(); repaint();
+    };
+    caption (strengthBox, "STRENGTH");
+    for (auto* c : std::initializer_list<juce::Component*> { &sigBox, &clickButton, &countButton, &quantBox, &strengthBox })
+        addAndMakeVisible (c);
     folderButton.setButtonText (jp ("フォルダ"));
     folderButton.setTooltip (jp ("保存したテイク（~/Music/Hum Keys）を Finder で開く"));
     folderButton.onClick = [] { auto d = takeFolder(); d.createDirectory(); d.startAsProcess(); };
@@ -365,12 +717,16 @@ MainComponent::MainComponent (bool live) : snapshotMode (! live)
     newTakeButton.setButtonText ("NEW");
     newTakeButton.setTooltip (jp ("今のテイクを保存して、新しいテイクを始める（N キー）"));
     newTakeButton.onClick = [this] { newTake(); };
+    editButton.setButtonText ("EDIT");
+    editButton.setTooltip (jp ("今のテイクを手直しする（E キー）：いらない音を消す・高さを変える・ドラムの音を差し替える"));
+    editButton.onClick = [this] { if (editor != nullptr) closeEditor(); else openEditor(); };
+    addAndMakeVisible (editButton);
     addAndMakeVisible (folderButton);
     addAndMakeVisible (historyButton);
     addAndMakeVisible (newTakeButton);
 
     for (auto* c : std::initializer_list<juce::Component*> { &keyBox, &autoKeyButton, &scaleBox, &octaveBox, &glueSlider, &holdSlider,
-                                                             &velButton, &bendButton, &chanBox, &sensSlider })
+                                                             &velButton, &bendButton, &exprButton, &chanBox, &sensSlider })
         addChildComponent (c);
 
     loadSettings();
@@ -410,7 +766,9 @@ MainComponent::~MainComponent()
 {
     stopTimer();
     history = nullptr;
+    editor = nullptr;
     preview.stop();
+    metro.close();
     if (! snapshotMode)
     {
         pullCapture();
@@ -493,7 +851,7 @@ void MainComponent::timerCallback()
     const bool gateCollect = autoGateUntil > 0;
     while (engine.frames.pop (f))
     {
-        hist[(size_t) histPos] = { f.pitch, f.level, f.note };
+        hist[(size_t) histPos] = { f.pitch, f.level, f.note, -1 };
         histPos = (histPos + 1) % (int) hist.size();
         meterDb = juce::jmax (meterDb - 0.6f, f.level);
         if (gateCollect) autoGateLevels.push_back (f.level);
@@ -511,7 +869,11 @@ void MainComponent::timerCallback()
 
     hum::Hit h;
     while (engine.hits.pop (h))
-        if (h.cls >= 0 && h.cls < numPads) { padFlash[(size_t) h.cls] = 1.0f; padVel[(size_t) h.cls] = h.velocity; lastHitCls = h.cls; }
+        if (h.cls >= 0 && h.cls < numPads)
+        {
+            padFlash[(size_t) h.cls] = 1.0f; padVel[(size_t) h.cls] = h.velocity; lastHitCls = h.cls;
+            hist[(size_t) ((histPos + (int) hist.size() - 1) % (int) hist.size())].hit = h.cls;   // AUTO のロールに印
+        }
     for (auto& p : padFlash) p *= 0.88f;
 
     if (gateCollect && nowMs() > autoGateUntil) finishAutoGate();
@@ -527,6 +889,21 @@ void MainComponent::timerCallback()
     const double bpm = sync.bpm();
     if (bpm > 0 && std::abs (bpm - tempoSlider.getValue()) > 0.05)
         tempoSlider.setValue (std::round (bpm * 10.0) / 10.0, juce::dontSendNotification);
+    metro.setBpm (tempoSlider.getValue());
+    metro.setMuted (sync.isRunning());   // Logic の再生中は Logic のクリックを使う
+
+    // カウントイン中は残りの拍を出す
+    {
+        const double nb = metro.nowBeat();
+        juce::String ct = "COUNT-IN";
+        if (std::isfinite (nb) && nb < 0)
+        {
+            const double unit = 1.0;
+            ct = jp ("カウント ") + juce::String ((int) std::ceil (-nb / unit - 1e-6));
+        }
+        if (countButton.getButtonText() != ct) countButton.setButtonText (ct);
+        countButton.setToggleState (std::isfinite (nb) && nb < 0, juce::dontSendNotification);
+    }
 
     // 表示の中心を、いま鳴っている／歌っている高さへゆっくり寄せる
     const int note = engine.currentNote.load();
@@ -607,6 +984,7 @@ void MainComponent::setMini (bool m)
     auto* w = dynamic_cast<juce::ResizableWindow*> (getTopLevelComponent());
     if (m == mini && ! (m && w != nullptr && w->getWidth() > 600)) return;
     closeHistory();
+    closeEditor();
     if (m)
     {
         if (! mini && w != nullptr) fullBounds = w->getBounds();
@@ -665,7 +1043,12 @@ void MainComponent::handleCommand (const juce::String& c)
     else if (c == "off")      { engine.p.enabled = false; refreshButtons(); saveSettings(); }
     else if (c == "melody")   setMode (0);
     else if (c == "drums")    setMode (1);
-    else if (c == "mode")     setMode (1 - engine.p.mode.load());
+    else if (c == "mode")     setMode (engine.p.mode.load() == 0 ? 1 : 0);
+    else if (c == "auto")     setMode (2);
+    else if (c == "click")    setClick (! clickOn);
+    else if (c == "count")    countIn();
+    else if (c == "edit")     { if (editor != nullptr) closeEditor(); else openEditor(); }
+    else if (c == "quantize") quantBox.setSelectedId ((quantize + 1) % 6 + 1);
     else if (c == "new")      newTake();
     else if (c == "panic")    engine.panicRequest = true;
     else if (c == "autoKey")  autoKey();
@@ -693,9 +1076,15 @@ void MainComponent::refreshButtons()
     onButton.setButtonText (on ? "ON" : "OFF");
     onButton.setToggleState (on, juce::dontSendNotification);
     const int mode = engine.p.mode.load();
-    melodyTab.setButtonText (mini ? (mode == 0 ? "MELODY" : "DRUMS") : "MELODY");
+    melodyTab.setButtonText (mini ? (mode == 0 ? "MELODY" : mode == 1 ? "DRUMS" : "AUTO") : "MELODY");
     melodyTab.setToggleState (mini || mode == 0, juce::dontSendNotification);
     drumsTab.setToggleState (mode == 1, juce::dontSendNotification);
+    autoTab.setToggleState (mode == 2, juce::dontSendNotification);
+    clickButton.setToggleState (clickOn, juce::dontSendNotification);
+    clickButton.setButtonText (clickOn ? "ON" : "OFF");
+    editButton.setToggleState (editor != nullptr, juce::dontSendNotification);
+    exprButton.setButtonText (engine.p.expression.load() ? "ON" : "OFF");
+    exprButton.setToggleState (engine.p.expression.load(), juce::dontSendNotification);
     miniButton.setButtonText (mini ? "FULL" : "MINI");
     pinButton.setToggleState (pinned, juce::dontSendNotification);
 
@@ -704,17 +1093,18 @@ void MainComponent::refreshButtons()
     bendButton.setToggleState (engine.p.bend.load(), juce::dontSendNotification);
 
     const bool full = ! mini;
-    for (auto* c : std::initializer_list<juce::Component*> { &keyBox, &autoKeyButton, &scaleBox, &octaveBox, &glueSlider, &holdSlider, &bendButton })
-        c->setVisible (full && mode == 0);
+    for (auto* c : std::initializer_list<juce::Component*> { &keyBox, &autoKeyButton, &scaleBox, &octaveBox, &glueSlider, &holdSlider, &bendButton, &exprButton })
+        c->setVisible (full && mode != 1);
     sensSlider.setVisible (full && mode == 1);
     for (auto* c : std::initializer_list<juce::Component*> { &velButton, &chanBox, &audioButton, &panicButton, &statusLabel, &autoGateButton,
-                                                             &tempoSlider, &folderButton, &historyButton, &newTakeButton, &drumsTab })
+                                                             &tempoSlider, &folderButton, &historyButton, &newTakeButton, &drumsTab, &autoTab,
+                                                             &editButton, &sigBox, &clickButton, &countButton, &quantBox, &strengthBox })
         c->setVisible (full);
 
     const int lc = engine.learnClass.load();
     for (int i = 0; i < numPads; ++i)
     {
-        const bool show = full && mode == 1 && history == nullptr;
+        const bool show = full && mode == 1 && history == nullptr && editor == nullptr;
         drumNoteBox[(size_t) i].setVisible (show);
         learnButton[(size_t) i].setVisible (show);
         resetButton[(size_t) i].setVisible (show);
@@ -774,6 +1164,15 @@ void MainComponent::loadSettings()
     p.bend       = props->getBoolValue ("bend", false);
     p.channel    = props->getIntValue ("channel", 1);
     p.drumSens   = (float) props->getDoubleValue ("sens", 9.0);
+    p.expression = props->getBoolValue ("expr", false);
+    p.breathGuard = props->getBoolValue ("breathGuard", true);
+    p.autoDrumChannel = props->getIntValue ("autoDrumCh", 10);
+    sigBox.setSelectedId (juce::jlimit (1, 7, props->getIntValue ("sig", 1)), juce::dontSendNotification);
+    quantize = juce::jlimit (0, 5, props->getIntValue ("quant", 0));
+    quantBox.setSelectedId (quantize + 1, juce::dontSendNotification);
+    strengthBox.setSelectedId (juce::jlimit (1, 3, props->getIntValue ("qstrength", 1)), juce::dontSendNotification);
+    quantStrength = strengthBox.getSelectedId() == 3 ? 0.5f : strengthBox.getSelectedId() == 2 ? 0.75f : 1.0f;
+    applySignature();
     for (int i = 0; i < numPads; ++i)
     {
         const auto c = juce::String (i);
@@ -796,6 +1195,7 @@ void MainComponent::loadSettings()
     holdSlider.setValue (p.holdMs.load(), juce::dontSendNotification);
     sensSlider.setValue (p.drumSens.load(), juce::dontSendNotification);
     tempoSlider.setValue (props->getDoubleValue ("tempo", 120.0), juce::dontSendNotification);
+    metro.setBpm (tempoSlider.getValue());
     for (int i = 0; i < numPads; ++i) drumNoteBox[(size_t) i].setSelectedId (p.drumNote[i].load(), juce::dontSendNotification);
 }
 
@@ -816,6 +1216,12 @@ void MainComponent::saveSettings()
     props->setValue ("channel", p.channel.load());
     props->setValue ("sens", p.drumSens.load());
     props->setValue ("tempo", tempoSlider.getValue());
+    props->setValue ("expr", p.expression.load());
+    props->setValue ("breathGuard", p.breathGuard.load());
+    props->setValue ("autoDrumCh", p.autoDrumChannel.load());
+    props->setValue ("sig", sigBox.getSelectedId());
+    props->setValue ("quant", quantize);
+    props->setValue ("qstrength", strengthBox.getSelectedId());
     for (int i = 0; i < numPads; ++i)
     {
         const auto c = juce::String (i);
@@ -856,9 +1262,18 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
 {
     const auto ch = k.getTextCharacter();
     if (k == juce::KeyPress::spaceKey) { onButton.triggerClick(); return true; }
-    if (k == juce::KeyPress::escapeKey) { if (history != nullptr) closeHistory(); else engine.panicRequest = true; return true; }
+    if (k == juce::KeyPress::escapeKey)
+    {
+        if (editor != nullptr) closeEditor(); else if (history != nullptr) closeHistory(); else engine.panicRequest = true;
+        return true;
+    }
     if (ch == '1') { setMode (0); return true; }
     if (ch == '2') { setMode (1); return true; }
+    if (ch == '3') { setMode (2); return true; }
+    if (ch == 'e' || ch == 'E') { if (editor != nullptr) closeEditor(); else openEditor(); return true; }
+    if (ch == 'c' || ch == 'C') { setClick (! clickOn); return true; }
+    if (ch == 'r' || ch == 'R') { countIn(); return true; }
+    if (ch == 'q' || ch == 'Q') { quantBox.setSelectedId ((quantize + 1) % 6 + 1); return true; }
     if (ch == 'm' || ch == 'M') { setMini (! mini); return true; }
     if (ch == 'p' || ch == 'P') { setPinned (! pinned); return true; }
     if (ch == 'n' || ch == 'N') { newTake(); return true; }
@@ -926,16 +1341,18 @@ void MainComponent::resized()
     auto top = r.removeFromTop (34);
     onButton.setBounds (top.removeFromLeft (72));
     top.removeFromLeft (14);
-    melodyTab.setBounds (top.removeFromLeft (96));
+    melodyTab.setBounds (top.removeFromLeft (88));
     top.removeFromLeft (4);
-    drumsTab.setBounds (top.removeFromLeft (96));
+    drumsTab.setBounds (top.removeFromLeft (88));
+    top.removeFromLeft (4);
+    autoTab.setBounds (top.removeFromLeft (72));
     panicButton.setBounds (top.removeFromRight (66));
     top.removeFromRight (8);
     miniButton.setBounds (top.removeFromRight (58));
     top.removeFromRight (6);
     pinButton.setBounds (top.removeFromRight (50));
     top.removeFromRight (8);
-    audioButton.setBounds (top.removeFromRight (juce::jmax (80, juce::jmin (230, top.getWidth() - 20))));
+    audioButton.setBounds (top.removeFromRight (juce::jmax (60, juce::jmin (230, top.getWidth() - 12))));
 
     auto st = r.removeFromTop (30);
     autoGateButton.setBounds (st.removeFromRight (104).reduced (0, 3));
@@ -945,20 +1362,28 @@ void MainComponent::resized()
     r.removeFromBottom (8);
     {
         auto strip = r.removeFromBottom (46);
-        r.removeFromBottom (8);
+        r.removeFromBottom (6);
         newTakeButton.setBounds (strip.removeFromRight (52).reduced (0, 7));
         strip.removeFromRight (5);
         folderButton.setBounds (strip.removeFromRight (70).reduced (0, 7));
         strip.removeFromRight (5);
         historyButton.setBounds (strip.removeFromRight (56).reduced (0, 7));
-        strip.removeFromRight (8);
-        tempoSlider.setBounds (strip.removeFromRight (112).withTrimmedTop (17).withHeight (26));
+        strip.removeFromRight (5);
+        editButton.setBounds (strip.removeFromRight (52).reduced (0, 7));
         strip.removeFromRight (8);
         dragArea = strip.removeFromRight (148);
         strip.removeFromRight (6);
         playArea = strip.removeFromRight (46);
         strip.removeFromRight (6);
         takeArea = strip;
+
+        // 拍子・クリック・カウントイン・クオンタイズ（上 18px に名前）
+        auto rh = r.removeFromBottom (48);
+        r.removeFromBottom (4);
+        rh.removeFromTop (18);
+        auto put = [&rh] (juce::Component& c, int w, int gap = 10) { c.setBounds (rh.removeFromLeft (w)); rh.removeFromLeft (gap); };
+        put (tempoSlider, 112); put (sigBox, 72); put (clickButton, 62, 4); put (countButton, 96, 18);
+        put (quantBox, 104); put (strengthBox, 74);
     }
     displayArea = r;
     meterArea = r.removeFromLeft (26).reduced (0, 6);
@@ -966,17 +1391,18 @@ void MainComponent::resized()
     rollArea = r;
     bigArea = {};
     if (history != nullptr) history->setBounds (displayArea);
+    if (editor != nullptr) editor->setBounds (displayArea);
 
     // 下のつまみ類（上 18px に名前）
     bottom.removeFromTop (18);
     auto place = [&bottom] (juce::Component& c, int w, int gap = 8) { c.setBounds (bottom.removeFromLeft (w).withHeight (30)); bottom.removeFromLeft (gap); };
-    if (engine.p.mode.load() == 0)
+    if (engine.p.mode.load() != 1)
     {
         const int w = bottom.getWidth();
-        const int unit = (w - 8 * 8 - 50) / 10;
+        const int unit = (w - 9 * 8 - 50) / 11;
         place (keyBox, unit - 6, 4); place (autoKeyButton, 50); place (scaleBox, unit * 2 + 6); place (octaveBox, unit - 10);
         place (glueSlider, unit + 10); place (holdSlider, unit + 10);
-        place (velButton, unit + 5); place (bendButton, unit - 15);
+        place (velButton, unit + 5); place (bendButton, unit - 15); place (exprButton, unit - 10);
         place (chanBox, bottom.getWidth());
     }
     else
@@ -1032,22 +1458,49 @@ void MainComponent::paint (juce::Graphics& g)
         }
         else
         {
-            double t0 = takeNotes.front().s, t1 = t0 + 2.0;
-            int lo = 127, hi = 0;
-            for (auto& n : takeNotes) { t1 = std::max (t1, n.e); lo = std::min (lo, n.n); hi = std::max (hi, n.n); }
-            lo -= 1; hi += 1;
-            for (auto& n : takeNotes)
+            // 書き出す形（拍・クオンタイズ済み）で描く。縦線 = 小節
+            const auto ev = exportNotes();
+            const double barQ = barQuarters();
+            double len = barQ;
+            int lo = 127, hi = 0; bool anyDrum = false, anyMel = false;
+            for (auto& e : ev)
             {
-                const float x0 = roll.getX() + (float) ((n.s - t0) / (t1 - t0)) * roll.getWidth();
-                const float x1 = roll.getX() + (float) ((n.e - t0) / (t1 - t0)) * roll.getWidth();
-                const float y = roll.getBottom() - (float) (n.n - lo + 1) / (float) (hi - lo + 1) * roll.getHeight();
+                len = std::max (len, e.be);
+                if (e.drum) anyDrum = true; else { anyMel = true; lo = std::min (lo, e.n); hi = std::max (hi, e.n); }
+            }
+            len = std::ceil (len / barQ - 1e-6) * barQ;
+            if (! anyMel) { lo = 60; hi = 60; }
+            lo -= 1; hi += 1;
+            const float drumH = anyDrum ? (anyMel ? roll.getHeight() * 0.3f : roll.getHeight()) : 0.0f;
+            auto mel = roll.withTrimmedBottom (drumH);
+            if (len / barQ <= 64)
+                for (double b = barQ; b < len - 1e-6; b += barQ)
+                {
+                    g.setColour (line);
+                    g.fillRect (roll.getX() + (float) (b / len) * roll.getWidth(), roll.getY(), 1.0f, roll.getHeight());
+                }
+            for (auto& e : ev)
+            {
+                const float x0 = roll.getX() + (float) (e.bs / len) * roll.getWidth();
+                const float x1 = roll.getX() + (float) (e.be / len) * roll.getWidth();
+                if (e.drum)
+                {
+                    const int c = juce::jlimit (0, 5, drumClassOf (e.n));
+                    const float h = drumH / 6.0f, y = roll.getBottom() - (float) (c + 1) * h;
+                    g.setColour (padCol[c]);
+                    g.fillRect (x0, y, 2.5f, std::max (2.0f, h - 0.5f));
+                    continue;
+                }
+                const float y = mel.getBottom() - (float) (e.n - lo + 1) / (float) (hi - lo + 1) * mel.getHeight();
                 g.setColour (orange.withAlpha (0.9f));
-                g.fillRect (x0, y, std::max (1.5f, x1 - x0 - 0.5f), std::max (2.0f, roll.getHeight() / (float) (hi - lo + 1) - 0.5f));
+                g.fillRect (x0, y, std::max (1.5f, x1 - x0 - 0.5f), std::max (2.0f, mel.getHeight() / (float) (hi - lo + 1) - 0.5f));
             }
             g.setColour (textC);
             g.setFont (juce::FontOptions (12.0f));
-            juce::String info = juce::String ((int) takeNotes.size()) + jp (" 音 · ") + juce::String (t1 - t0, 1) + jp (" 秒");
+            juce::String info = juce::String ((int) takeNotes.size()) + jp (" 音 · ") + juce::String (len / barQ, 0) + jp (" 小節");
             if (takeSynced()) info += "\n" + juce::String (takeBar()) + jp (" 小節目から");
+            else if (takeLocked) info += jp ("\n手直し済み");
+            else if (takeSource == srcClick) info += jp ("\nクリックに合わせた");
             else if (takeSaved) info += jp ("\n保存済み");
             g.drawFittedText (info, ta.reduced (8, 2).removeFromRight (106).toNearestInt(), juce::Justification::centredRight, 2);
         }
@@ -1082,6 +1535,8 @@ void MainComponent::paint (juce::Graphics& g)
     }
 
     // ---- 入力メーター＋GATE ----
+    if (editor == nullptr || mini)
+    {
     g.setColour (panel);
     g.fillRoundedRectangle (meterArea.toFloat(), 4);
     const float gate = engine.p.gateDb.load();
@@ -1107,6 +1562,7 @@ void MainComponent::paint (juce::Graphics& g)
             g.fillRoundedRectangle (meterArea.toFloat(), 4);
         }
     }
+    }
 
     if (mini)
     {
@@ -1114,7 +1570,8 @@ void MainComponent::paint (juce::Graphics& g)
         auto ba = bigArea.toFloat();
         g.setColour (panel);
         g.fillRoundedRectangle (ba, 8);
-        if (mode == 0)
+        const bool showNote = mode == 0 || (mode == 2 && (engine.currentNote.load() >= 0 || lastHitCls < 0 || padFlash[(size_t) lastHitCls] < 0.1f));
+        if (showNote)
         {
             const int note = engine.currentNote.load();
             g.setColour (note >= 0 ? orange : dim.withAlpha (0.5f));
@@ -1150,7 +1607,9 @@ void MainComponent::paint (juce::Graphics& g)
 
     if (history != nullptr) return;
 
-    if (mode == 0)
+    if (editor != nullptr) return;
+
+    if (mode != 1)
     {
         // ---- ピアノロール ----
         auto ra = rollArea;
@@ -1196,8 +1655,29 @@ void MainComponent::paint (juce::Graphics& g)
                 g.setColour (cyan);
                 g.fillEllipse (x - 1.2f, yOf (h.pitch + (float) oct) - 1.2f, 2.4f, 2.4f);
             }
+            if (h.hit >= 0 && mode == 2)
+            {
+                // AUTO：ドラムと決めた音を下に印で
+                g.setColour (padCol[h.hit]);
+                g.fillRoundedRectangle (x - 7, (float) ra.getBottom() - 20, 14, 14, 3);
+                g.setColour (juce::Colours::black);
+                g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+                g.drawText (juce::String (padName[h.hit]).substring (0, h.hit == 3 ? 2 : 1), (int) x - 7, ra.getBottom() - 20, 14, 14,
+                            juce::Justification::centred);
+            }
         }
         g.restoreState();
+
+        if (mode == 2 && lastHitCls >= 0 && padFlash[(size_t) lastHitCls] > 0.05f)
+        {
+            const auto c = padCol[lastHitCls];
+            auto box = ra.withSizeKeepingCentre (0, 0).withPosition (ra.getX() + 56, ra.getY() + 12).withSize (130, 40).toFloat();
+            g.setColour (c.withAlpha (0.25f + 0.7f * padFlash[(size_t) lastHitCls]));
+            g.fillRoundedRectangle (box, 8);
+            g.setColour (juce::Colours::black);
+            g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+            g.drawText (padName[lastHitCls], box, juce::Justification::centred);
+        }
 
         // 今の音
         const int note = engine.currentNote.load();
@@ -1268,20 +1748,23 @@ void MainComponent::pullCapture()
     bool changed = false;
     while (engine.capture.pop (c))
     {
-        if (! take.empty() && (c.t - takeLastT > gap || c.t < takeLastT - (int64_t) fs))
+        // 手直ししたテイクには足さない（次の音から新しいテイク）
+        if (! take.empty() && (takeLocked || c.t - takeLastT > gap || c.t < takeLastT - (int64_t) fs))
             newTake();
+        const double ms = hostMsOf (c.t);
         if (take.empty())
         {
             takeNotes.clear(); takeSaved = false; takeLastT = c.t;
-            takeDrums = engine.p.mode.load() == 1;
+            // 拍をどこから取るか：Logic の再生中 → Logic、クリック（カウントイン）中 → クリック
+            takeSource = std::isfinite (sync.beatAt (ms)) ? srcLogic : std::isfinite (metro.beatAt (ms)) ? srcClick : srcNone;
         }
         take.push_back (c);
-        takeBeats.push_back (sync.beatAt (hostMsOf (c.t)));
+        takeBeats.push_back (takeSource == srcLogic ? sync.beatAt (ms) : takeSource == srcClick ? metro.beatAt (ms) : std::nan (""));
         takeLastT = std::max (takeLastT, c.t);
         takeRate = fs;
         changed = true;
     }
-    if (changed) rebuildTakeNotes();
+    if (changed && ! takeLocked) rebuildTakeNotes();
 
     // Logic が止まった → そこまでを 1 テイクに
     const int stops = sync.stops();
@@ -1293,14 +1776,18 @@ void MainComponent::pullCapture()
 
     if (! take.empty() && ! takeSaved && engine.currentNote.load() < 0
         && engine.clockNow.load() - takeLastT > gap)
+    {
         finishTake();
+        if (! clickOn && takeSource == srcClick) metro.stop();   // カウントインだけの目盛りは、そのテイクで終わり
+    }
 }
 
 void MainComponent::newTake()
 {
     finishTake();
     take.clear(); takeBeats.clear();
-    takeSaved = false;
+    takeSaved = false; takeLocked = false; undoStack.clear();
+    takeSource = srcNone;
     repaint();
 }
 
@@ -1331,9 +1818,9 @@ void MainComponent::rebuildTakeNotes()
         if (st == 0x90 && c.d2 > 0)
         {
             if (auto it = open.find (key); it != open.end()) { takeNotes[it->second].e = t; takeNotes[it->second].be = b; }
-            takeNotes.push_back ({ t, -1.0, c.d1, ch, c.d2, b, std::nan ("") });
-            lastOn = (long) takeNotes.size() - 1;
-            open[key] = (size_t) lastOn;
+            takeNotes.push_back ({ t, -1.0, c.d1, ch, c.d2, b, std::nan (""), c.kind == 2 });
+            if (c.kind != 2) lastOn = (long) takeNotes.size() - 1;
+            open[key] = takeNotes.size() - 1;
         }
         else if (st == 0x80 || (st == 0x90 && c.d2 == 0))
         {
@@ -1347,7 +1834,7 @@ void MainComponent::rebuildTakeNotes()
         }
     }
     const double now = (double) engine.clockNow.load() / fs;
-    const double bpm = sync.bpm() > 0 ? sync.bpm() : tempoSlider.getValue();
+    const double bpm = takeBpm();
     std::vector<TNote> keep;
     for (auto n : takeNotes)
     {
@@ -1358,11 +1845,19 @@ void MainComponent::rebuildTakeNotes()
     takeNotes = std::move (keep);
 }
 
-bool MainComponent::takeSynced() const
+bool MainComponent::takeHasBeats() const
 {
-    if (takeNotes.empty()) return false;
+    if (takeNotes.empty() || takeSource == srcNone) return false;
     for (auto& n : takeNotes) if (! std::isfinite (n.bs)) return false;
     return true;
+}
+bool MainComponent::takeSynced() const { return takeSource == srcLogic && takeHasBeats(); }
+
+double MainComponent::barQuarters() const { return sigNum * 4.0 / sigDen; }
+double MainComponent::takeBpm() const
+{
+    const double b = sync.bpm();
+    return b > 0 ? b : tempoSlider.getValue();
 }
 
 int MainComponent::takeBar() const
@@ -1370,45 +1865,133 @@ int MainComponent::takeBar() const
     if (! takeSynced()) return 0;
     double first = 1e18;
     for (auto& n : takeNotes) first = std::min (first, n.bs);
-    return (int) std::floor (first / 4.0) + 1;   // 4/4 として
+    return (int) std::floor (first / barQuarters() + 1e-9) + 1;
+}
+
+double MainComponent::quantUnit() const
+{
+    switch (quantize)
+    {
+        case 1: return 1.0;
+        case 2: return 0.5;
+        case 3: return 0.25;
+        case 4: return 1.0 / 3.0;
+        case 5: return 1.0 / 6.0;
+        default: return 0.0;
+    }
+}
+
+int MainComponent::drumClassOf (int note) const
+{
+    for (int c = 0; c < numPads; ++c) if (engine.p.drumNote[c].load() == note) return c;
+    // 割り当てにないノート：近い番号の音
+    int best = 0, bd = 999;
+    for (int c = 0; c < numPads; ++c) { const int d = std::abs (engine.p.drumNote[c].load() - note); if (d < bd) { bd = d; best = c; } }
+    return best;
+}
+
+// テイクを「拍」の並びにする。ファイルの頭 = 0。
+//  - Logic / クリックの拍が分かっている → 最初の音がある小節の頭が 0
+//  - 分からない → 最初の音が 0（TEMPO で拍に直す）
+//  - クオンタイズ：出だしを拍に寄せ、長さはそのまま（同じ音が重なったら前を切る）
+std::vector<MainComponent::ENote> MainComponent::exportNotes (double* startOut, double* t0Out) const
+{
+    std::vector<ENote> v;
+    if (takeNotes.empty()) return v;
+    const double bpm = takeBpm();
+    const bool beats = takeHasBeats();
+    double t0 = 1e18;
+    for (auto& n : takeNotes) t0 = std::min (t0, n.s);
+    double first = 1e18;
+    for (size_t i = 0; i < takeNotes.size(); ++i)
+    {
+        const auto& n = takeNotes[i];
+        const double bs = beats ? n.bs : (n.s - t0) * bpm / 60.0;
+        const double be = beats ? n.be : (n.e - t0) * bpm / 60.0;
+        v.push_back ({ bs, std::max (be, bs + 0.02), n.n, n.ch, n.vel, n.drum, i, 0.0 });
+        first = std::min (first, bs);
+    }
+    const double barQ = barQuarters();
+    const double start = beats ? std::floor (first / barQ + 1e-9) * barQ : first;
+    if (startOut != nullptr) *startOut = start;
+    if (t0Out != nullptr) *t0Out = t0;
+    const double u = quantUnit();
+    for (auto& e : v)
+    {
+        e.bs -= start; e.be -= start;
+        if (u > 0)
+        {
+            const double q = std::round (e.bs / u) * u;
+            e.shift = (q - e.bs) * quantStrength;
+            e.bs += e.shift; e.be += e.shift;
+        }
+        if (e.bs < 0) { e.be -= e.bs; e.bs = 0; }
+    }
+    std::stable_sort (v.begin(), v.end(), [] (const ENote& a, const ENote& b) { return a.bs < b.bs; });
+    for (size_t i = 0; i < v.size(); ++i)
+        for (size_t j = i + 1; j < v.size() && v[j].bs < v[i].be; ++j)
+            if (v[j].n == v[i].n && v[j].ch == v[i].ch && v[j].drum == v[i].drum)
+            {
+                v[i].be = std::max (v[i].bs + 0.01, v[j].bs);
+                break;
+            }
+    return v;
 }
 
 juce::File MainComponent::writeTakeMidi (const juce::File& dest) const
 {
-    if (takeNotes.empty()) return {};
-    const bool synced = takeSynced();
-    const double bpm = sync.bpm() > 0 ? sync.bpm() : tempoSlider.getValue();
+    double start = 0, t0 = 0;
+    const auto ev = exportNotes (&start, &t0);
+    if (ev.empty()) return {};
+    const bool beats = takeHasBeats();
+    const double bpm = takeBpm();
     const int ppq = 960;
-    const double t0 = takeNotes.front().s;
-    const double barStart = synced ? (takeBar() - 1) * 4.0 : 0.0;
-    auto tickSec = [&] (double t) { return std::max (0.0, (t - t0) * bpm / 60.0 * ppq); };
-    auto tickBeat = [&] (double b) { return std::max (0.0, (b - barStart) * ppq); };
+    auto tick = [&] (double b) { return std::max (0.0, b * ppq); };
 
-    juce::MidiMessageSequence seq;
-    seq.addEvent (juce::MidiMessage::textMetaEvent (3, "Hum Keys"), 0);
-    if (takeDrums) seq.addEvent (juce::MidiMessage::textMetaEvent (1, "Hum Keys drums"), 0);
-    seq.addEvent (juce::MidiMessage::tempoMetaEvent ((int) std::lround (60000000.0 / bpm)), 0);
-    seq.addEvent (juce::MidiMessage::timeSignatureMetaEvent (4, 4), 0);
-    for (auto& n : takeNotes)
+    bool anyDrum = false, anyMel = false;
+    for (auto& e : ev) (e.drum ? anyDrum : anyMel) = true;
+
+    juce::MidiMessageSequence mel, drm;
+    auto& head = anyMel ? mel : drm;
+    head.addEvent (juce::MidiMessage::textMetaEvent (3, anyMel ? "Hum Keys" : "Hum Keys Drums"), 0);
+    head.addEvent (juce::MidiMessage::tempoMetaEvent ((int) std::lround (60000000.0 / bpm)), 0);
+    head.addEvent (juce::MidiMessage::timeSignatureMetaEvent (sigNum, sigDen), 0);
+    if (anyDrum)
     {
-        seq.addEvent (juce::MidiMessage::noteOn (n.ch + 1, n.n, (juce::uint8) n.vel), synced ? tickBeat (n.bs) : tickSec (n.s));
-        seq.addEvent (juce::MidiMessage::noteOff (n.ch + 1, n.n), synced ? tickBeat (n.be) : tickSec (n.e));
+        if (anyMel) drm.addEvent (juce::MidiMessage::textMetaEvent (3, "Hum Keys Drums"), 0);
+        drm.addEvent (juce::MidiMessage::textMetaEvent (1, "Hum Keys drums"), 0);
     }
-    // ピッチベンド（BEND が ON のとき）
+    for (auto& e : ev)
+    {
+        auto& sq = e.drum ? drm : mel;
+        sq.addEvent (juce::MidiMessage::noteOn (e.ch + 1, e.n, (juce::uint8) e.vel), tick (e.bs));
+        sq.addEvent (juce::MidiMessage::noteOff (e.ch + 1, e.n), tick (e.be));
+    }
+
+    // ピッチベンドと CC（BEND / EXPR が ON のとき）。直前のメロディーの音と同じだけずらす
+    std::vector<std::pair<double, double>> shifts;   // (元の拍, ずらした量)
+    for (auto& e : ev) if (! e.drum) shifts.push_back ({ e.bs - e.shift, e.shift });
+    std::sort (shifts.begin(), shifts.end());
     for (size_t i = 0; i < take.size(); ++i)
     {
         const auto& c = take[i];
-        if ((c.st & 0xF0) != 0xE0) continue;
-        const double b = i < takeBeats.size() ? takeBeats[i] : std::nan ("");
-        seq.addEvent (juce::MidiMessage ((int) c.st, (int) c.d1, (int) c.d2),
-                      synced && std::isfinite (b) ? tickBeat (b) : tickSec ((double) c.t / takeRate));
+        const int st = c.st & 0xF0;
+        if (st != 0xE0 && st != 0xB0) continue;
+        const double b0 = (beats && i < takeBeats.size() && std::isfinite (takeBeats[i]) ? takeBeats[i]
+                                                                                       : ((double) c.t / takeRate - t0) * bpm / 60.0) - start;
+        double sh = 0;
+        for (auto& p : shifts) { if (p.first <= b0 + 0.02) sh = p.second; else break; }
+        const double b = b0 + sh;
+        if (b < -0.05) continue;
+        mel.addEvent (juce::MidiMessage ((int) c.st, (int) c.d1, (int) c.d2), tick (b));
     }
-    seq.sort();
-    seq.updateMatchedPairs();
+    mel.sort(); mel.updateMatchedPairs();
+    drm.sort(); drm.updateMatchedPairs();
 
     juce::MidiFile mf;
     mf.setTicksPerQuarterNote (ppq);
-    mf.addTrack (seq);
+    if (anyMel) mf.addTrack (mel);
+    if (anyDrum) mf.addTrack (drm);
     dest.getParentDirectory().createDirectory();
     dest.deleteFile();
     juce::FileOutputStream os (dest);
@@ -1419,7 +2002,7 @@ juce::File MainComponent::writeTakeMidi (const juce::File& dest) const
 void MainComponent::finishTake()
 {
     if (takeSaved || take.empty()) return;
-    rebuildTakeNotes();
+    if (! takeLocked) rebuildTakeNotes();
     if (takeNotes.empty()) return;
     auto name = "Hum Keys " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S");
     if (takeSynced()) name += " bar" + juce::String (takeBar());
@@ -1428,13 +2011,20 @@ void MainComponent::finishTake()
     repaint();
 }
 
+void MainComponent::resaveIfNeeded()
+{
+    if (takeSaved && takeFile.existsAsFile()) writeTakeMidi (takeFile);
+}
+
 void MainComponent::previewTake()
 {
     if (preview.isPlaying() && preview.currentId() == "take") { preview.stop(); return; }
-    if (takeNotes.empty()) return;
+    const auto ev = exportNotes();
+    if (ev.empty()) return;
+    const double spb = 60.0 / takeBpm();
     std::vector<Preview::Note> ns;
-    for (auto& n : takeNotes) ns.push_back ({ n.s, n.e, n.n, n.vel });
-    preview.play (std::move (ns), takeDrums, "take");
+    for (auto& e : ev) ns.push_back ({ e.bs * spb, e.be * spb, e.n, e.vel, e.drum });
+    preview.play (std::move (ns), "take");
 }
 
 void MainComponent::startDragOut()
@@ -1448,8 +2038,69 @@ void MainComponent::startDragOut()
         juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
 }
 
+//==============================================================================
+void MainComponent::beginEdit()
+{
+    undoStack.push_back (takeNotes);
+    if (undoStack.size() > 60) undoStack.erase (undoStack.begin());
+    takeLocked = true;
+}
+void MainComponent::editDone() { resaveIfNeeded(); repaint(); }
+bool MainComponent::undoEdit()
+{
+    if (undoStack.empty()) return false;
+    takeNotes = undoStack.back();
+    undoStack.pop_back();
+    editDone();
+    return true;
+}
+void MainComponent::revertEdits()
+{
+    if (take.empty()) return;
+    beginEdit();
+    rebuildTakeNotes();
+    editDone();
+}
+
+//==============================================================================
+void MainComponent::applySignature()
+{
+    static const int nums[] = { 4, 3, 2, 5, 6, 7, 12 }, dens[] = { 4, 4, 4, 4, 8, 8, 8 };
+    const int i = juce::jlimit (0, 6, sigBox.getSelectedId() - 1);
+    sigNum = nums[i]; sigDen = dens[i];
+    metro.setSignature (sigNum, sigDen);
+}
+
+void MainComponent::setClick (bool on)
+{
+    clickOn = on;
+    if (on)
+    {
+        metro.setBpm (tempoSlider.getValue());
+        if (metro.isAlive()) metro.setAudible (true);
+        else metro.start (true, 0);
+        if (! take.empty() && takeSource == srcNone) newTake();   // ここからクリックに合わせたテイク
+    }
+    else metro.stop();
+    refreshButtons();
+    flash (on ? (sync.isRunning() ? jp ("CLICK ON（Logic の再生中は Logic のクリックを使います）")
+                                  : jp ("CLICK ON  ♩=") + juce::String (tempoSlider.getValue(), 1) + jp ("（ヘッドホンで聞いてください）"))
+              : jp ("CLICK OFF"), 3.0);
+}
+
+void MainComponent::countIn()
+{
+    if (sync.isRunning()) { flash (jp ("Logic の再生中は、Logic のカウントインを使ってください")); return; }
+    newTake();
+    metro.setBpm (tempoSlider.getValue());
+    metro.start (clickOn, 1);
+    refreshButtons();
+}
+
+//==============================================================================
 void MainComponent::openHistory()
 {
+    closeEditor();
     if (mini) setMini (false);
     finishTake();
     history = std::make_unique<HistoryPanel> (*this);
@@ -1468,6 +2119,25 @@ void MainComponent::closeHistory()
     refreshButtons();
 }
 
+void MainComponent::openEditor()
+{
+    closeHistory();
+    if (mini) setMini (false);
+    editor = std::make_unique<EditPanel> (*this);
+    addAndMakeVisible (*editor);
+    refreshButtons();
+    editor->grabKeyboardFocus();
+}
+
+void MainComponent::closeEditor()
+{
+    if (editor == nullptr) return;
+    removeChildComponent (editor.get());
+    editor = nullptr;
+    refreshButtons();
+    grabKeyboardFocus();
+}
+
 //==============================================================================
 void MainComponent::showSnapshot (int which)
 {
@@ -1484,22 +2154,36 @@ void MainComponent::showSnapshot (int which)
     padFlash = { 0.0f, 1.0f, 0.2f, 0.0f, 0.0f, 0.0f }; padVel = { 96, 112, 70, 0, 0, 0 };
     lastHitCls = 1;
     engine.p.has[4] = true;   // TOM は覚えた、OPEN HAT と CLAP はまだ、の見本
-    takeRate = 48000; take.clear(); takeBeats.clear();
+    takeRate = 48000; take.clear(); takeBeats.clear(); takeLocked = false; closeEditor();
     { const int nn[] = { 60, 62, 64, 67, 64, 62, 60, 62, 64, 60 }; int64_t t = 48000;
       for (int k = 0; k < 10; ++k)
       {
-          take.push_back ({ t, 0x90, (uint8_t) nn[k], 100, 0 }); takeBeats.push_back (64.0 + k * 0.75);
+          // 少しずれた出だし（クオンタイズの見本）
+          const double off = 0.07 * std::sin (k * 1.7);
+          take.push_back ({ t, 0x90, (uint8_t) nn[k], 100, 0 }); takeBeats.push_back (64.0 + k * 0.75 + off);
+          if (which >= 3 && k % 2 == 0)
+          {
+              take.push_back ({ t + 10, 0x99, (uint8_t) (k % 4 == 0 ? 36 : 38), 110, 2 }); takeBeats.push_back (64.0 + k * 0.75 + off);
+              take.push_back ({ t + 4000, 0x89, (uint8_t) (k % 4 == 0 ? 36 : 38), 0, 2 }); takeBeats.push_back (64.0 + k * 0.75 + off + 0.1);
+          }
           t += 20000;
-          take.push_back ({ t, 0x80, (uint8_t) nn[k], 0, 0 }); takeBeats.push_back (64.0 + k * 0.75 + 0.6);
+          take.push_back ({ t, 0x80, (uint8_t) nn[k], 0, 0 }); takeBeats.push_back (64.0 + k * 0.75 + off + 0.6);
           t += 2000;
       } }
+    takeSource = srcLogic;
     rebuildTakeNotes(); takeSaved = true;
+    quantize = which >= 3 ? 3 : 0;
+    quantBox.setSelectedId (quantize + 1, juce::dontSendNotification);
+    for (auto& hf : hist) hf.hit = -1;
+    if (which == 3) for (int i = 100; i < (int) hist.size(); i += 260) hist[(size_t) i].hit = (i / 260) % 3;
     tempoSlider.setValue (100.0, juce::dontSendNotification);
     flash (jp ("キー A マイナー・OCTAVE +1 にしました（歌った真ん中 F#1）"), 60.0);
     statusLabel.setText (flashMsg, juce::dontSendNotification);
     statusLabel.setColour (juce::Label::textColourId, orange);
-    engine.p.mode = which == 1 ? 1 : 0;
+    engine.p.mode = which == 1 ? 1 : which == 3 ? 2 : 0;
+    if (which == 3) { lastHitCls = 0; padFlash[0] = 0.8f; }
     if (which == 2) { mini = true; setSize (430, 176); }
     else { mini = false; setSize (860, 620); }
     refreshButtons();
+    if (which == 4) { openEditor(); resized(); }
 }

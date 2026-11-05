@@ -1,7 +1,8 @@
 #pragma once
 // 声 → MIDI の心臓部。JUCE に頼らない素の C++ なので、単体テストでもそのまま使える。
 //  - MELODY: 鼻歌の音の高さ（YIN 法）を測って、音階に合わせた MIDI ノートにする
-//  - DRUMS : 口ドラムの「鳴った瞬間」を見つけて、低い音・高い音の割合で KICK / SNARE / HAT に分ける
+//  - DRUMS : 口ドラムの「鳴った瞬間」を見つけて、6 つの帯域の割合で KICK / SNARE / HAT などに分ける
+//  - AUTO  : 両方を聞いて、鳴り始めの 80 ms で「鼻歌」か「口ドラム」かを音ごとに決める
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -115,7 +116,7 @@ inline int snapToScale (float m, int key, int scale)
 struct Params
 {
     std::atomic<bool>  enabled { true };
-    std::atomic<int>   mode { 0 };           // 0 = MELODY, 1 = DRUMS
+    std::atomic<int>   mode { 0 };           // 0 = MELODY, 1 = DRUMS, 2 = AUTO（音ごとに自動で切替）
     std::atomic<int>   key { 0 };            // 0 = C
     std::atomic<int>   scale { scMajor };
     std::atomic<int>   octave { 0 };         // -2..+2
@@ -125,6 +126,9 @@ struct Params
     std::atomic<bool>  dynamicVel { true };
     std::atomic<bool>  bend { false };       // 音程の細かいゆれをピッチベンドで送る（±2 半音）
     std::atomic<int>   channel { 1 };        // 1..16
+    std::atomic<int>   autoDrumChannel { 10 }; // AUTO のときのドラムの MIDI チャンネル
+    std::atomic<bool>  expression { false }; // 声のゆれ → CC1（モジュレーション）、声の大きさ → CC11（エクスプレッション）
+    std::atomic<bool>  breathGuard { true }; // 「ス」「シ」などの息の音では音を出さない
     std::atomic<float> drumSens { 9.0f };    // 何 dB 急に大きくなったら「叩いた」とみなすか（小さいほど敏感）
 
     // 口ドラム 6 音: KICK / SNARE / HAT / OPEN HAT / TOM / CLAP
@@ -163,7 +167,8 @@ struct Frame
 
 struct Hit { int cls; int velocity; };
 
-// 記録用の MIDI（t = 本当に鳴り始めたと思われるサンプル位置。kind 1 = 直前のノートの高さを d1 に直す）
+// 記録用の MIDI（t = 本当に鳴り始めたと思われるサンプル位置。
+//   kind 0 = メロディー、1 = 直前のノートの高さを d1 に直す、2 = ドラム）
 struct CapEvent { int64_t t; uint8_t st, d1, d2, kind; };
 
 //==============================================================================
@@ -208,7 +213,7 @@ public:
         levelCoef = std::exp (-1.0 / (fs * 0.010));
         fastAtt = std::exp (-1.0 / (fs * 0.0003)); fastRel = std::exp (-1.0 / (fs * 0.010));
         slowAtt = std::exp (-1.0 / (fs * 0.015));  slowRel = std::exp (-1.0 / (fs * 0.060));
-        ms2 = 0; fastEnv = slowEnv = 0; clock = 0; lastCapT = 0;
+        ms2 = hiMs2 = 0; fastEnv = slowEnv = 0; clock = 0; lastCapT = 0;
         resetMelody(); resetDrums();
     }
 
@@ -218,15 +223,21 @@ public:
 
         const bool on = p.enabled.load();
         const int mode = p.mode.load();
-        if (! on || mode != lastMode) { stopMelodyNote (out); lastMode = mode; }
+        if (! on || mode != lastMode) { stopMelodyNote (out); lastMode = mode; capPhase = 0; autoDeciding = autoBlock = false; autoHumStart = 0; }
         const int ch = std::clamp (p.channel.load(), 1, 16) - 1;
+        const int dch = mode == 2 ? std::clamp (p.autoDrumChannel.load(), 1, 16) - 1 : ch;
+        const bool drumsOn = on && (mode == 1 || mode == 2), melodyOn = on && (mode == 0 || mode == 2);
+        autoMode = mode == 2;
+        if (! drumsOn) { autoDeciding = false; autoBlock = false; }
 
         for (int i = 0; i < n; ++i, ++clock)
         {
             const float xh = hpIn.process (x[i]);
             ms2 = levelCoef * ms2 + (1 - levelCoef) * (double) xh * xh;
+            const float hb = hbF.process (xh);   // 3 kHz より上（息の音の見分けと、ドラムの高い所）
+            hiMs2 = levelCoef * hiMs2 + (1 - levelCoef) * (double) hb * hb;
 
-            if (on && mode == 1) drumSample (xh, out, ch);
+            if (drumsOn) drumSample (xh, hb, out, dch);
             tickDrumOffs (out);
 
             // 12 kHz 前後に間引いて音程を測る
@@ -239,7 +250,7 @@ public:
                 if (++hopCount >= hopD)
                 {
                     hopCount = 0;
-                    melodyFrame (on && mode == 0, out, ch);
+                    melodyFrame (melodyOn, out, ch);
                 }
             }
         }
@@ -262,13 +273,13 @@ public:
 
 private:
     int64_t clock = 0, lastCapT = 0;
-    void emit (MidiSink& out, uint8_t st, uint8_t d1, uint8_t d2, int64_t t)
+    void emit (MidiSink& out, uint8_t st, uint8_t d1, uint8_t d2, int64_t t, uint8_t kind = 0)
     {
         out.send (st, d1, d2);
         // 記録の時刻は前後しないように（言い直しと音の切り替えが重なったときなど）
         t = std::clamp (t, lastCapT, clock);
         lastCapT = t;
-        capture.push ({ t, st, d1, d2, 0 });
+        capture.push ({ t, st, d1, d2, kind });
     }
 
     double fs = 48000, fsd = 12000;
@@ -276,8 +287,20 @@ private:
     std::vector<float> ring, diff, cmnd;
     int ringPos = 0, hopCount = 0, decimCount = 0;
     Biquad hpIn, aa1, aa2;
-    double levelCoef = 0, ms2 = 0;
+    double levelCoef = 0, ms2 = 0, hiMs2 = 0;
     int lastMode = 0;
+
+    // ---------------- AUTO（鼻歌か口ドラムか） ----------------
+    static constexpr float breathLimitDb = -12.0f;
+    float lastHiRel = -60;
+    std::array<float, 64> autoPitches {};
+    int autoNP = 0;
+    int64_t autoOnset = 0, autoHumStart = 0;
+    bool autoMode = false;
+    bool autoDeciding = false;     // 鳴り始めて、まだ決めていない（この間はメロディーの音を始めない）
+    bool autoBlock = false;        // ドラムと決めた音が鳴りやむまで、メロディーにしない
+    int autoFrames = 0, autoVoiced = 0;
+    float autoPeakDb = -100, autoNowDb = -100, autoQuietMs = 0;
 
     // ---------------- MELODY ----------------
     int curNote = -1, curChan = 0, pendCand = -1;
@@ -297,6 +320,7 @@ private:
         curNote = -1; pendCand = -1; pendMs = 0; unvoicedMs = 1e6f; peakSinceStart = -100;
         runPeak = -100; dipped = false; bendSmooth = 0; lastBendSent = 8192; currentNote.store (-1);
         rawHist.fill (-1); filtHist.fill (-1); rawPos = filtPos = 0; phraseFirst = false; aboveGate = false;
+        autoDeciding = autoBlock = false; autoHumStart = 0; lastCC1 = lastCC11 = -1;
     }
 
     float levelDb() const { return 10.0f * (float) std::log10 (ms2 + 1e-12); }
@@ -396,13 +420,32 @@ private:
         }
 
         float aper = 1, raw = -1;
-        if (lv > gate)
+        // 息の音（ス・シ・フ）は 3 kHz より上の割合が大きい。声（鼻歌）はほとんど無い
+        const float hiRel = 10.0f * (float) std::log10 ((hiMs2 + 1e-12) / (ms2 + 1e-12));
+        lastHiRel = hiRel;
+        const bool breathy = p.breathGuard.load() && hiRel > breathLimitDb;
+        if (lv > gate && ! breathy)
         {
             const float f0 = yin (aper);
             // 鳴っている途中は少し甘く（子音や息で途切れにくく）
             const float thr = curNote >= 0 ? 0.35f : 0.22f;
             if (aper < thr && f0 > 65 && f0 < 1300)
                 raw = 69.0f + 12.0f * std::log2 (f0 / 440.0f);
+        }
+        if (autoMode)
+        {
+            if (autoDeciding)
+            {
+                ++autoFrames; autoNowDb = lv; autoPeakDb = std::max (autoPeakDb, lv);
+                if (raw > 0) { ++autoVoiced; if (autoNP < (int) autoPitches.size()) autoPitches[(size_t) autoNP++] = raw; }
+            }
+            if (autoBlock)
+            {
+                // ドラムと決めた音：鳴りやむ（声なしが 20 ms 続く）までメロディーにしない
+                autoQuietMs = raw > 0 ? 0.0f : autoQuietMs + dt;
+                if (autoQuietMs >= 20.0f) autoBlock = false;
+                raw = -1;
+            }
         }
         rawHist[(size_t) rawPos] = raw; rawPos = (rawPos + 1) % (int) rawHist.size();
         const float m = raw > 0 ? medianPitch() : -1.0f;
@@ -448,10 +491,12 @@ private:
         if (curNote < 0)
         {
             // 句の最初は速く鳴らす（違っていたら、あとで高さだけ直す）
-            if (pendCand >= 0 && pendMs >= std::min (glue, 8.0f))
+            if (pendCand >= 0 && pendMs >= std::min (glue, 8.0f) && ! (autoMode && autoDeciding))
             {
                 sendCenterBend (out, ch);
-                const int64_t t0 = std::max (gateCross - (int64_t) (fs * 0.003), clock - lag - (int64_t) (fs * 0.03));
+                int64_t t0 = std::max (gateCross - (int64_t) (fs * 0.003), clock - lag - (int64_t) (fs * 0.03));
+                if (autoHumStart > 0) { t0 = std::max (lastCapT, autoHumStart - (int64_t) (fs * 0.002)); autoHumStart = 0; }
+                if (p.expression.load()) startExpression (out, ch, peakSinceStart, t0);
                 noteOn (out, pendCand, velocityFor (peakSinceStart), ch, t0);
                 phraseFirst = true;
                 runPeak = lv; dipped = false; dipMin = lv;
@@ -515,8 +560,43 @@ private:
                 }
             }
         }
+        if (curNote >= 0 && m > 0 && p.expression.load()) expressionFrame (out, mm, lv, clock - lag);
         fr.note = curNote;
         frames.push (fr);
+    }
+
+    // ---- 声のゆれ → CC1、声の大きさ → CC11 ----
+    float exprSmooth = 0, pitchSlow = -1, vibVar = 0;
+    int lastCC1 = -1, lastCC11 = -1, exprTick = 0;
+    int exprValueFor (float db) const
+    {
+        const float t = std::clamp ((db - p.gateDb.load()) / 36.0f, 0.0f, 1.0f);
+        return (int) std::lround (16 + t * 111);
+    }
+    void startExpression (MidiSink& out, int ch, float db, int64_t t)
+    {
+        exprSmooth = (float) exprValueFor (db);
+        pitchSlow = -1; vibVar = 0;
+        lastCC11 = (int) std::lround (exprSmooth);
+        emit (out, (uint8_t) (0xB0 | ch), 11, (uint8_t) lastCC11, t);
+        if (lastCC1 != 0) { emit (out, (uint8_t) (0xB0 | ch), 1, 0, t); lastCC1 = 0; }
+    }
+    void expressionFrame (MidiSink& out, float mm, float lv, int64_t t)
+    {
+        const int ch = curChan;
+        exprSmooth += 0.15f * ((float) exprValueFor (lv) - exprSmooth);
+        // ビブラートの深さ：ゆっくりならした高さからのずれの大きさ（半音）
+        if (pitchSlow < 0) pitchSlow = mm;
+        pitchSlow += 0.03f * (mm - pitchSlow);        // 約 90 ms
+        const float d = mm - pitchSlow;
+        vibVar += 0.02f * (d * d - vibVar);            // 約 140 ms
+        const float depth = std::sqrt (std::max (0.0f, vibVar)) * 1.414f;
+        const int cc1 = (int) std::lround (127.0f * std::clamp ((depth - 0.06f) / 0.55f, 0.0f, 1.0f));
+        if (++exprTick < 4) return;                    // 約 11 ms ごと
+        exprTick = 0;
+        const int cc11 = (int) std::lround (exprSmooth);
+        if (std::abs (cc11 - lastCC11) >= 2) { emit (out, (uint8_t) (0xB0 | ch), 11, (uint8_t) cc11, t); lastCC11 = cc11; }
+        if (std::abs (cc1 - lastCC1) >= 3 || (cc1 == 0 && lastCC1 > 0)) { emit (out, (uint8_t) (0xB0 | ch), 1, (uint8_t) cc1, t); lastCC1 = cc1; }
     }
 
     // 音程を測る窓の真ん中まで ＋ ならし分の遅れ（サンプル）
@@ -535,7 +615,7 @@ private:
     std::array<Biquad, NF> bandA, bandB;          // 6 つの帯域（〜150 / 〜400 / 〜1.2k / 〜3k / 〜7k / 7k〜）
     std::array<double, NF> base {}, eBand {};     // 鳴る直前の残り / 鳴ってからの量
     double fastEnv = 0, slowEnv = 0, fastAtt = 0, fastRel = 0, slowAtt = 0, slowRel = 0;
-    int capPhase = 0;                             // 0 = 待ち、1 = 14 ms 測る、2 = ハイハットの残り方を 45 ms まで見る
+    int capPhase = 0;                             // 0 = 待ち、1 = 14 ms 測る、2 = ハイハットの残り方を 45 ms まで見る、3 = AUTO で鼻歌か決める
     int64_t capStart = 0; int capN = 0, capLen = 0, susLen = 0, refractory = 0;
     double eEarlyHi = 0, eLateHi = 0; float capPeak = 0;
     int pendingCls = -1;
@@ -568,16 +648,15 @@ private:
     {
         for (auto& d : drumOff)
             if (d.samplesLeft > 0 && --d.samplesLeft == 0)
-                emit (out, (uint8_t) (0x80 | d.ch), (uint8_t) d.note, 0, d.offAt);
+                emit (out, (uint8_t) (0x80 | d.ch), (uint8_t) d.note, 0, d.offAt, 2);
     }
 
-    void drumSample (float xh, MidiSink& out, int ch)
+    void drumSample (float xh, float hb, MidiSink& out, int ch)
     {
         const double a = std::abs (xh);
         fastEnv = a > fastEnv ? a + (fastEnv - a) * fastAtt : a + (fastEnv - a) * fastRel;
         slowEnv = a > slowEnv ? a + (slowEnv - a) * slowAtt : a + (slowEnv - a) * slowRel;
         // 高い所だけの包絡も見る（キックの余韻の上に乗った小さいハイハットも拾う）
-        const float hb = hbF.process (xh);
         const double ah = std::abs (hb);
         hFast = ah > hFast ? ah + (hFast - ah) * fastAtt : ah + (hFast - ah) * fastRel;
         hSlow = ah > hSlow ? ah + (hSlow - ah) * slowAtt : ah + (hSlow - ah) * slowRel;
@@ -604,6 +683,11 @@ private:
                 capLen = (int) (fs * 0.014); susLen = (int) (fs * 0.045);
                 eBand.fill (0); eEarlyHi = eLateHi = 0; capPeak = (float) a;
                 refractory = (int) (fs * 0.075);
+                if (autoMode)
+                {
+                    autoDeciding = true; autoFrames = autoVoiced = 0; autoOnset = clock;
+                    autoPeakDb = autoNowDb = levelDb(); autoNP = 0;
+                }
             }
             return;
         }
@@ -617,16 +701,49 @@ private:
             eEarlyHi += hiNow;
             if (capN >= capLen) firstLook (out, ch);
         }
-        else
+        else if (capPhase == 2)
         {
             if (capN >= (int) (fs * 0.030)) eLateHi += hiNow;
             if (capN >= susLen) secondLook (out, ch);
         }
+        else if (capN >= (int) (fs * autoWaitSec)) autoVerdict (out, ch);
+    }
+
+    static constexpr double autoWaitSec = 0.090;
+
+    // AUTO：低い音（キック・タムか、鼻歌か）を 90 ms 聞いて決める
+    //  鼻歌 = 声の高さがとれている（3 割弱以上）・高さがほぼ一定・音量が落ちていない（6 dB 以内）
+    //  （高さの幅は外れ値を除いた 2〜8 割の所で見る。歌い出しの一瞬のオクターブ飛びを無視するため。
+    //    キックは高さが 90 ms で 1 オクターブ以上すべり落ちる）
+    void autoVerdict (MidiSink& out, int ch)
+    {
+        capPhase = 0;
+        autoDeciding = false;
+        const float voicedFrac = autoFrames > 0 ? (float) autoVoiced / (float) autoFrames : 0.0f;
+        float range = 99.0f;
+        if (autoNP >= 3)
+        {
+            std::sort (autoPitches.begin(), autoPitches.begin() + autoNP);
+            range = autoPitches[(size_t) (autoNP * 4 / 5)] - autoPitches[(size_t) (autoNP / 5)];
+        }
+        const bool steady = range < 3.0f;
+        const bool sustained = autoNowDb > autoPeakDb - 6.0f;
+        lastAutoWasHum = voicedFrac >= 0.28f && steady && sustained;
+        lastAutoDbg = { voicedFrac, range, autoPeakDb - autoNowDb, pendingCls, pendingFeat[4], pendingFeat[5] };
+        ++autoStats[lastAutoWasHum ? 2 : 1];
+        if (lastAutoWasHum) { autoHumStart = autoOnset; return; }
+        autoBlock = true; autoQuietMs = 0;
+        fire (out, ch, pendingCls, 0.0f, false);
     }
 
 public:
     std::array<float, NF> lastFeatures {};
     float lastSustain = 0;
+    bool lastAutoWasHum = false;
+    int autoStats[4] {};   // テスト用：高い音ですぐドラム / 聞いてドラム / 聞いて鼻歌 / （予備）
+    struct AutoDbg { float voicedFrac, range, drop; int cls; float f4, f5; };
+    AutoDbg lastAutoDbg {};
+    float lastBreathRatioDb() const { return lastHiRel; }
 
     // 特徴がいちばん近い音（使える音だけ）。HAT と OPEN HAT は同じ組として返す（2）
     int nearestClass (const std::array<float, NF>& f) const
@@ -660,6 +777,16 @@ private:
 
         const int lc = learnClass.load();
         pendingCls = (lc >= 0 && lc < ND) ? lc : nearestClass (pendingFeat);
+        if (autoMode && lc < 0)
+        {
+            // とても高い音（7 kHz より上）が多い = ハイハットなど → すぐ鳴らす。
+            // それ以外（キック・スネア・タム、子音で始まる鼻歌）→ もう少し聞いて、声の高さが続くかで決める
+            const bool noisy = pendingFeat[5] > -0.7f;
+            if (! noisy) { capPhase = 3; return; }
+            lastAutoDbg = { -1, 0, 0, pendingCls, pendingFeat[4], pendingFeat[5] };
+            ++autoStats[0];
+            autoDeciding = false; autoBlock = true; autoQuietMs = 0;
+        }
         const bool hatFamily = pendingCls == 2 || pendingCls == 3;
         if (hatFamily && (openHatInUse() || lc == 2 || lc == 3))
         {
@@ -711,8 +838,8 @@ private:
         const int note = std::clamp (p.drumNote[cls].load(), 0, 127);
         auto& d = drumOff[(size_t) cls];
         const int64_t t0 = capStart - (int64_t) (fs * 0.002);
-        if (d.samplesLeft > 0) emit (out, (uint8_t) (0x80 | d.ch), (uint8_t) d.note, 0, t0);
-        emit (out, (uint8_t) (0x90 | ch), (uint8_t) note, (uint8_t) vel, t0);
+        if (d.samplesLeft > 0) emit (out, (uint8_t) (0x80 | d.ch), (uint8_t) d.note, 0, t0, 2);
+        emit (out, (uint8_t) (0x90 | ch), (uint8_t) note, (uint8_t) vel, t0, 2);
         const double len = cls == 3 ? 0.30 : 0.08;
         d = { note, ch, (int) (fs * len) - (int) (clock - capStart), t0 + (int64_t) (fs * len) };
         if (d.samplesLeft < 1) d.samplesLeft = 1;

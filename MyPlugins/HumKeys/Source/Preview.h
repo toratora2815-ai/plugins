@@ -8,11 +8,11 @@
 class Preview : private juce::AudioIODeviceCallback
 {
 public:
-    struct Note { double s, e; int n, vel; };
+    struct Note { double s, e; int n, vel; bool drum = false; };
 
     ~Preview() override { stop(); out.closeAudioDevice(); }
 
-    void play (std::vector<Note> notes, bool drums, juce::String id)
+    void play (std::vector<Note> notes, juce::String id)
     {
         stop();
         if (notes.empty()) return;
@@ -20,7 +20,6 @@ public:
         const double t0 = notes.front().s;
         for (auto& n : notes) { n.s -= t0; n.e -= t0; }
         seq = std::move (notes);
-        isDrums = drums;
         playingId = id;
         if (out.getCurrentAudioDevice() == nullptr)
             out.initialise (0, 2, nullptr, true);
@@ -44,7 +43,6 @@ public:
 private:
     juce::AudioDeviceManager out;
     std::vector<Note> seq;
-    bool isDrums = false;
     juce::String playingId;
     std::atomic<bool> playing { false };
     std::atomic<int64_t> pos { 0 };
@@ -52,7 +50,7 @@ private:
     double sr = 48000;
     std::minstd_rand rng { 1 };
 
-    struct Voice { int n; double vel; int64_t start, end; double ph = 0, ph2 = 0, lp = 0, hp = 0, hpPrev = 0; };
+    struct Voice { int n; double vel; int64_t start, end; bool drum; double ph = 0, ph2 = 0, lp = 0, hp = 0, hpPrev = 0; };
     std::vector<Voice> voices;
 
     double length() const { double l = 0; for (auto& n : seq) l = std::max (l, n.e); return l + 0.4; }
@@ -75,14 +73,14 @@ private:
             {
                 const auto& s = seq[next++];
                 if (voices.size() < 48)
-                    voices.push_back ({ s.n, s.vel / 127.0, p, (int64_t) (s.e * sr) });
+                    voices.push_back ({ s.n, s.vel / 127.0, p, (int64_t) (s.e * sr), s.drum });
             }
             double mix = 0;
-            for (auto& v : voices) mix += isDrums ? drum (v, p) : tone (v, p);
+            for (auto& v : voices) mix += v.drum ? drum (v, p) : tone (v, p);
             voices.erase (std::remove_if (voices.begin(), voices.end(), [&] (const Voice& v)
             {
                 const double age = (double) (p - v.start) / sr;
-                return isDrums ? age > 0.6 : p > v.end + (int64_t) (0.15 * sr);
+                return v.drum ? age > 0.6 : p > v.end + (int64_t) (0.15 * sr);
             }), voices.end());
             const float s = (float) std::tanh (mix * 0.6);
             for (int c = 0; c < numOut; ++c) if (outs[c] != nullptr) outs[c][i] = s;

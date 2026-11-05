@@ -3,9 +3,11 @@
 #include "VoiceEngine.h"
 #include "SyncClock.h"
 #include "Preview.h"
+#include "Metronome.h"
 
 class RemoteCommands;
 class HistoryPanel;
+class EditPanel;
 
 // マイクの音 → VoiceEngine → 仮想 MIDI「Hum Keys」 → Logic
 class MainComponent : public juce::Component,
@@ -38,6 +40,25 @@ public:
     static juce::File takeFolder();
     Preview preview;
     void closeHistory();
+
+    // ---- テイク（手直しの画面からも使う） ----
+    struct TNote { double s, e; int n, ch, vel; double bs, be; bool drum; };
+    // 書き出す形（拍。ファイルの頭 = 0、クオンタイズ済み）。src = takeNotes の番号
+    struct ENote { double bs, be; int n, ch, vel; bool drum; size_t src; double shift; };
+    // start = ファイルの頭が曲の何拍目か、t0 = 拍が分からないときの基準（秒）
+    std::vector<ENote> exportNotes (double* start = nullptr, double* t0 = nullptr) const;
+    double takeBpm() const;
+    double barQuarters() const;
+    std::vector<TNote> takeNotes;
+    void beginEdit();               // 手直しの前に呼ぶ（元に戻す用に覚える）
+    void editDone();                // 手直しのあとに呼ぶ（保存し直す）
+    bool undoEdit();
+    void revertEdits();
+    bool takeIsEdited() const { return takeLocked; }
+    void previewTake();
+    void closeEditor();
+    int drumNoteAt (int cls) const { return engine.p.drumNote[juce::jlimit (0, 5, cls)].load(); }
+    int drumClassOf (int note) const;
 
 private:
     // ---- 音 ----
@@ -81,7 +102,7 @@ private:
     void startAudio();
 
     // ---- 画面 ----
-    struct HistFrame { float pitch, level; int note; };
+    struct HistFrame { float pitch, level; int note; int hit = -1; };
     std::vector<HistFrame> hist;   // 輪（最新 5 秒）
     int histPos = 0;
     float viewCenter = 60, meterDb = -100, peakHoldDb = -100;
@@ -92,7 +113,7 @@ private:
     juce::Rectangle<int> displayArea, meterArea, rollArea, bigArea;
     std::array<juce::Rectangle<int>, 6> padAreas;
 
-    juce::TextButton onButton { "ON" }, melodyTab { "MELODY" }, drumsTab { "DRUMS" },
+    juce::TextButton onButton { "ON" }, melodyTab { "MELODY" }, drumsTab { "DRUMS" }, autoTab { "AUTO" },
                      audioButton, panicButton { "PANIC" }, miniButton { "MINI" }, pinButton { "PIN" },
                      autoGateButton, autoKeyButton { "AUTO" };
     juce::Label statusLabel;
@@ -100,7 +121,7 @@ private:
     // MELODY
     juce::ComboBox keyBox, scaleBox, octaveBox, chanBox;
     juce::Slider glueSlider, holdSlider;
-    juce::TextButton velButton, bendButton;
+    juce::TextButton velButton, bendButton, exprButton;
     // DRUMS
     juce::Slider sensSlider;
     std::array<juce::ComboBox, 6> drumNoteBox;
@@ -132,27 +153,45 @@ private:
     void setPinned (bool p);
 
     // ---- 録り逃し防止（テイク） ----
-    struct TNote { double s, e; int n, ch, vel; double bs, be; };
     std::vector<hum::CapEvent> take;
-    std::vector<double> takeBeats;   // 各イベントが曲の何拍目だったか（同期していなければ NaN）
-    std::vector<TNote> takeNotes;
-    bool takeSaved = false, takeDrums = false;
+    std::vector<double> takeBeats;   // 各イベントが曲の何拍目だったか（拍が分からなければ NaN）
+    enum { srcNone = 0, srcLogic = 1, srcClick = 2 };
+    int takeSource = srcNone;        // 拍をどこから取ったか（Logic の MIDI クロック / このアプリのクリック）
+    bool takeSaved = false, takeLocked = false;   // takeLocked = 手直し済み（もう録った音から作り直さない）
+    std::vector<std::vector<TNote>> undoStack;
     int64_t takeLastT = 0;
     double takeRate = 48000;
     juce::File takeFile;
     juce::Rectangle<int> takeArea, dragArea, playArea;
     bool dragStarted = false;
     juce::Slider tempoSlider;
-    juce::TextButton folderButton, newTakeButton, historyButton;
+    juce::TextButton folderButton, newTakeButton, historyButton, editButton;
     void pullCapture();
     void finishTake();
     void newTake();
     void rebuildTakeNotes();
-    bool takeSynced() const;
+    bool takeHasBeats() const;      // 拍が分かっている（Logic かクリック）
+    bool takeSynced() const;        // Logic の小節が分かっている
     int takeBar() const;            // 同期しているとき、テイクが始まる小節（1 から）
     juce::File writeTakeMidi (const juce::File& dest) const;
-    void previewTake();
     void startDragOut();
+    void resaveIfNeeded();
+
+    // ---- 拍子・クリック・カウントイン・クオンタイズ ----
+    Metronome metro;
+    juce::ComboBox sigBox, quantBox, strengthBox;
+    juce::TextButton clickButton { "CLICK" }, countButton;
+    bool clickOn = false;
+    int sigNum = 4, sigDen = 4;
+    int quantize = 0;               // 0 = OFF, 1 = 1/4, 2 = 1/8, 3 = 1/16, 4 = 1/8T, 5 = 1/16T
+    float quantStrength = 1.0f;
+    double quantUnit() const;
+    void setClick (bool on);
+    void countIn();
+    void applySignature();
+
+    std::unique_ptr<EditPanel> editor;
+    void openEditor();
 
     std::unique_ptr<HistoryPanel> history;
     void openHistory();

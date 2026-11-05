@@ -15,7 +15,7 @@ public:
         {
             const juce::File dir (args.fromFirstOccurrenceOf ("--snapshot", false, false).trim().unquoted());
             MainComponent c (false);
-            for (int m = 0; m < 3; ++m)
+            for (int m = 0; m < 5; ++m)
             {
                 c.showSnapshot (m);
                 juce::PNGImageFormat png;
