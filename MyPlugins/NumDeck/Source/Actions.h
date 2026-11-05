@@ -6,7 +6,7 @@
 namespace numdeck
 {
     enum class Icon { None, Play, Record, Rewind, Forward, ToStart, Cycle, Metronome, Undo, Redo, Split, Capture };
-    enum class Cat { Transport, Edit, Track, Window, File, RefMon, General, Browser, Custom, App, Link, Macro };
+    enum class Cat { Transport, Edit, Track, Window, File, RefMon, HumKeys, General, Browser, Custom, App, Link, Macro };
 
     struct ActionDef
     {
@@ -18,7 +18,7 @@ namespace numdeck
         bool repeat;        // 押しっぱなしで連打するか
         Icon icon;
         const char* glyph;  // アイコンがないときに大きく出す文字
-        const char* remote = nullptr; // Reference Monitor への命令（keyCode の代わり）
+        const char* remote = nullptr; // 自作アプリへの命令（keyCode の代わり）。"hk:" で始まるのは Hum Keys へ、ほかは Reference Monitor へ
     };
 
     // キーコード（US 配列の位置。日本語配列でも英字・記号の位置は同じ）
@@ -102,6 +102,22 @@ namespace numdeck
             { "rmOut",     "出力 A/B 切替",     Cat::RefMon, -1, 0, false, Icon::None, "OUT",  "out" },
             { "rmOutA",    "出力 A",            Cat::RefMon, -1, 0, false, Icon::None, "OUT A","outA" },
             { "rmOutB",    "出力 B",            Cat::RefMon, -1, 0, false, Icon::None, "OUT B","outB" },
+            // Hum Keys（鼻歌・口ドラム → MIDI の単体アプリ）への操作
+            { "hkToggle",  "ON / OFF",          Cat::HumKeys, -1, 0, false, Icon::None, "HUM",   "hk:toggle" },
+            { "hkMode",    "MELODY ⇔ DRUMS",    Cat::HumKeys, -1, 0, false, Icon::None, "M/D",   "hk:mode" },
+            { "hkMelody",  "MELODY（鼻歌）",     Cat::HumKeys, -1, 0, false, Icon::None, "MEL",   "hk:melody" },
+            { "hkDrums",   "DRUMS（口ドラム）",  Cat::HumKeys, -1, 0, false, Icon::None, "DRM",   "hk:drums" },
+            { "hkNew",     "テイクを区切る（NEW）", Cat::HumKeys, -1, 0, false, Icon::None, "NEW", "hk:new" },
+            { "hkPreview", "テイクを試し聴き",   Cat::HumKeys, -1, 0, false, Icon::Play, "",      "hk:preview" },
+            { "hkHistory", "テイクの履歴",       Cat::HumKeys, -1, 0, false, Icon::None, "HIST",  "hk:history" },
+            { "hkAutoKey", "キーとオクターブを自動で", Cat::HumKeys, -1, 0, false, Icon::None, "KEY", "hk:autoKey" },
+            { "hkAutoGate","GATE を自動で",      Cat::HumKeys, -1, 0, false, Icon::None, "GATE",  "hk:autoGate" },
+            { "hkOctUp",   "OCTAVE +1",         Cat::HumKeys, -1, 0, false, Icon::None, "OCT+",  "hk:octUp" },
+            { "hkOctDown", "OCTAVE -1",         Cat::HumKeys, -1, 0, false, Icon::None, "OCT-",  "hk:octDown" },
+            { "hkMini",    "MINI 表示",          Cat::HumKeys, -1, 0, false, Icon::None, "MINI",  "hk:mini" },
+            { "hkPin",     "いつも手前",         Cat::HumKeys, -1, 0, false, Icon::None, "PIN",   "hk:pin" },
+            { "hkPanic",   "PANIC（音を全部止める）", Cat::HumKeys, -1, 0, false, Icon::None, "STOP", "hk:panic" },
+            { "hkShow",    "画面を出す",         Cat::HumKeys, -1, 0, false, Icon::None, "SHOW",  "hk:show" },
             // どのアプリでも
             { "copy",      "コピー",            Cat::General, vk::C, kCmd,          false, Icon::None, "COPY" },
             { "paste",     "貼り付け",          Cat::General, vk::V, kCmd,          false, Icon::None, "PASTE" },
@@ -145,6 +161,7 @@ namespace numdeck
             case Cat::Window:    return jp ("ウィンドウ");
             case Cat::File:      return jp ("ファイル");
             case Cat::RefMon:    return jp ("Reference Monitor");
+            case Cat::HumKeys:   return jp ("Hum Keys");
             case Cat::General:   return jp ("どのアプリでも");
             case Cat::Browser:   return jp ("ブラウザ");
             case Cat::Custom:    return jp ("自分で決めたキー");
@@ -165,6 +182,7 @@ namespace numdeck
             case Cat::Window:    return juce::Colour (0xffb58cff);
             case Cat::File:      return juce::Colour (0xffffd34d);
             case Cat::RefMon:    return juce::Colour (0xffff7f5c);
+            case Cat::HumKeys:   return juce::Colour (0xff38e1ff);
             case Cat::General:   return juce::Colour (0xff4fd6c8);
             case Cat::Browser:   return juce::Colour (0xff6f9dff);
             case Cat::Custom:    return juce::Colour (0xffff6fae);

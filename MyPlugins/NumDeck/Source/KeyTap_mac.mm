@@ -195,7 +195,9 @@ namespace numdeck
     bool KeyTap::isRefMonitorFrontmost()
     {
         NSRunningApplication* app = [[NSWorkspace sharedWorkspace] frontmostApplication];
-        return app != nil && [app.bundleIdentifier isEqualToString: @"com.myplugins.referencemonitor"];
+        // Reference Monitor と Hum Keys（Logic と一緒に使う自作アプリ）が前にいる間も、Logic と同じに扱う
+        return app != nil && ([app.bundleIdentifier isEqualToString: @"com.myplugins.referencemonitor"]
+                              || [app.bundleIdentifier isEqualToString: @"com.myplugins.humkeys"]);
     }
 
     void KeyTap::sendRemote (const std::string& app, const std::string& command)

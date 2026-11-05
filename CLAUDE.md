@@ -126,6 +126,8 @@
   右がアプリの 2 画面は、先にそのアプリを前に出してそのデスクトップへ移り、左のページがそこに無ければそこに新しく開く（相手選びには今のデスクトップのウィンドウしか出ない）。
   使い回す左が単独の全画面なら先に解除。Chrome への AppleScript は with timeout of 3 seconds。動きの記録は ~/Library/Logs/Num Deck.log
   GitHub の Mac が借りられないときは、build/tools/venv の cmake + Ninja + build/_juce でこの Mac でビルドできる（本人が頼んだとき）
+  v1.20.0: 割り当ての分類に「Hum Keys」（Cat::HumKeys、remote が "hk:" で始まるものは sendRemote("humkeys", …)）。ページは足さず、本人が好きなキーに置く。
+  Hum Keys が前面のときも「Logic が前面のときだけ」の対象（isRefMonitorFrontmost が humkeys も見る）
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）
 
 - Hum Keys（HumKeys）… 鼻歌・口ドラムをその場で MIDI にする単体 Mac アプリ。仮想 MIDI「Hum Keys」（MidiOutput::createNewDevice）で Logic へ。
@@ -137,6 +139,14 @@
   句の最初は 8 ms で鳴らし、120 ms 以内に高さが変わったら鳴らし直し（記録では kind=1 で最初の音の高さを直す）。遅れ約 56→32 ms。
   TAKE（録り逃し防止）: Engine::capture に「本当に鳴り始めた時刻」付きで MIDI をため、4 秒黙ると ~/Music/Hum Keys に .mid 保存。
   画面下からドラッグで Logic へ（performExternalDragDropOfFiles）、TEMPO（settings "tempo"）で拍に合わせる、フォルダ / NEW
+  v1.2.0: 口ドラム 6 音（KICK/SNARE/HAT/OPEN HAT/TOM/CLAP、36/38/42/46/45/39）。特徴は 14 ms の 6 帯域の割合（log10）、最寄りの覚えた音。
+  OPEN HAT / TOM / CLAP は LEARN してから（Params::has）。OPEN HAT を覚えるとハイハット系は 45 ms まで見て高音の残り方（protoSus）で開閉を決める。
+  settings は dproto{c}_{k} / dsus{c} / dhas{c}（前の "proto" は使わない）。AUTO（KeyFinder.h、Krumhansl で KEY・メジャー/マイナー、OCTAVE は真ん中が 66 付近）、
+  AUTO GATE（2 秒の雑音の 9 割点 +10 dB）。Logic 同期: 仮想 MIDI 入力「Hum Keys」で MIDI クロック＋SPP を受ける（SyncClock.h）、
+  音のサンプル番号→時刻（mapHostMs/mapClock、入力遅れを引く）→拍。同期テイクは小節頭からの MIDI（ファイル名 " barN"）、Logic 停止で区切る。
+  試し聴き（Preview.h、別の AudioDeviceManager で標準出力、簡単なシンセ・GM ドラム）、履歴（HistoryPanel、▶・ドラッグ・ゴミ箱）、
+  MINI（M）/ PIN（P、MacSupport_mac.mm の setFloatOnTop＝Num Deck と同じ Accessory＋全 Space）。分散通知 "com.myplugins.humkeys.command" で
+  toggle/on/off/melody/drums/mode/new/preview/history/autoKey/autoGate/octUp/octDown/mini/pin/panic/show を受ける
 
 - Plugin Link（MyPlugins/Shared/PluginLink.h・PluginLinkJuce.h）… 自作プラグイン同士の連携。
   ~/Library/Application Support/MyPlugins/PluginLink-v1.bin を mmap した共有メモリの掲示板（64 席、atomic だけで読み書き、3 秒で不在、10 秒で席を回収）。
