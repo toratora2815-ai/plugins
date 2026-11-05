@@ -154,6 +154,14 @@
   今つながっているもの: Balance Scope → Velvet Tamer（FOCUS）、Fader Pilot → Horizon Spread（SPREAD を下げる）。
   新しくつなぐときは Kind と送る数値の番号（namespace bs / fp のように）を PluginLink.h に足す
 
+- Idea Catcher（IdeaCatcher）… 思いつきの鼻歌・口ドラムを録って、キーとテンポ入りの Logic プロジェクトにするメニューバー常駐アプリ（LSUIElement、Dock に出ない）。
+  録音キー（Carbon の RegisterEventHotKey、最初は ⌃⌥I、アクセシビリティ不要）で録音／停止、黙って 4 秒でも止まる。マイクは録るときだけ開く。
+  解析は IdeaAnalysis.h（JUCE なし）: Hum Keys の VoiceEngine.h / KeyFinder.h の写しを録音後にかける（1 回目で音程→キー、2 回目で音階に合わせる、ドラムは Hum Keys の設定 dproto/dhas/dsus を読む）、
+  鼻歌らしさ（音程のとれた割合）でメロディー／ドラム、テンポは出だしの自己相関。SMF（タイプ 1、テンポ・4/4・キー、Melody / Drums(ch10) トラック）を自前で書き、
+  NSWorkspace で Logic（com.apple.logic10）に開かせる＝新しいプロジェクトになる。保存は ~/Music/Idea Catcher/<日時>/（.mid・Voice.wav・info.json）。
+  分散通知 com.myplugins.ideacatcher.command（toggle / start / stop / show / open）。`--snapshot <フォルダ> [<wav>]` で画面を PNG に
+  （VoiceEngine.h は Hum Keys 1.2.0 の写し。Hum Keys のエンジンを直したら、ここにも写す）
+
 ## Claude からの提案（余った利用枠の活用）
 - Claude が自分で「次に作るもの・直すもの」を3つ提案し、本人が「GO」を出したら作る仕組み。指示書は `ideas/PROPOSAL_PROMPT.md`
 - 2つの入口:

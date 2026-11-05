@@ -182,3 +182,43 @@ do {
     }
     save(c, "HumKeys.png")
 }
+
+// ---------- Idea Catcher：ひらめきの電球の中に声の波、右上に録音の赤い点 ----------
+do {
+    let c = makeCtx()
+    background(c, top: 0x2a2416, bottom: 0x0c0b09)
+    let amber: UInt32 = 0xffc24b, red: UInt32 = 0xff4d5e
+    c.addPath(rr(body, 185)); c.clip()
+    radial(c, [col(amber, 0.35), col(amber, 0)], CGPoint(x: 512, y: 440), 430)
+
+    // 電球のガラス（円）と首
+    let bulb = CGRect(x: 302, y: 210, width: 420, height: 420)
+    c.saveGState(); c.setShadow(offset: .zero, blur: 60, color: col(amber, 0.9))
+    c.addEllipse(in: bulb); c.setFillColor(col(amber)); c.fillPath(); c.restoreGState()
+    c.saveGState(); c.addEllipse(in: bulb); c.clip()
+    grad(c, [col(0xffe39a), col(0xf5a623)], from: CGPoint(x: 512, y: 210), to: CGPoint(x: 512, y: 630))
+    c.restoreGState()
+    let neck = CGMutablePath()
+    neck.move(to: CGPoint(x: 400, y: 590)); neck.addLine(to: CGPoint(x: 624, y: 590))
+    neck.addLine(to: CGPoint(x: 600, y: 680)); neck.addLine(to: CGPoint(x: 424, y: 680)); neck.closeSubpath()
+    c.addPath(neck); c.setFillColor(col(0xf5a623)); c.fillPath()
+    // 口金
+    for i in 0..<3 {
+        let r = CGRect(x: 420, y: 696 + CGFloat(i) * 46, width: 184, height: 34)
+        c.addPath(rr(r, 17)); c.setFillColor(col(i == 2 ? 0x8a8478 : 0xcfc8b8)); c.fillPath()
+    }
+    // 中の声の波
+    c.setStrokeColor(col(0x2a1c05)); c.setLineWidth(20); c.setLineCap(.round); c.setLineJoin(.round)
+    var first = true
+    for xi in stride(from: 360, through: 664, by: 4) {
+        let x = CGFloat(xi), t = (x - 360) / 304
+        let yy = 430 + 95 * sin(t * .pi) * sin(t * 4.5 * .pi)
+        if first { c.move(to: CGPoint(x: x, y: yy)); first = false } else { c.addLine(to: CGPoint(x: x, y: yy)) }
+    }
+    c.strokePath()
+    // 録音の赤い点
+    c.saveGState(); c.setShadow(offset: .zero, blur: 36, color: col(red, 0.9))
+    c.addEllipse(in: CGRect(x: 700, y: 196, width: 130, height: 130)); c.setFillColor(col(red)); c.fillPath()
+    c.restoreGState()
+    save(c, "IdeaCatcher.png")
+}
