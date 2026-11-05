@@ -126,6 +126,8 @@
   右がアプリの 2 画面は、先にそのアプリを前に出してそのデスクトップへ移り、左のページがそこに無ければそこに新しく開く（相手選びには今のデスクトップのウィンドウしか出ない）。
   使い回す左が単独の全画面なら先に解除。Chrome への AppleScript は with timeout of 3 seconds。動きの記録は ~/Library/Logs/Num Deck.log
   GitHub の Mac が借りられないときは、build/tools/venv の cmake + Ninja + build/_juce でこの Mac でビルドできる（本人が頼んだとき）
+  v1.19.3: 2 画面の相手選びは、外れたら場所を変えて最大 5 回やり直す（何もない所で閉じた → 並べ直し、違う相手が入った → 2 つとも全画面を解いて並べ直し）。
+  開く場所付きのリンク（マクロの中も）も、そのページのタブがある Chrome のウィンドウを使い回す（Google の書類は /d/番号 で見分ける）
   v1.20.0: 割り当ての分類に「Hum Keys」（Cat::HumKeys、remote が "hk:" で始まるものは sendRemote("humkeys", …)）。ページは足さず、本人が好きなキーに置く。
   Hum Keys が前面のときも「Logic が前面のときだけ」の対象（isRefMonitorFrontmost が humkeys も見る）
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）

@@ -8,6 +8,8 @@
 #include <cmath>
 #include <map>
 #include <vector>
+#include <memory>
+#include <algorithm>
 
 namespace numdeck
 {
@@ -338,60 +340,157 @@ namespace numdeck
         }
 
         // 左右に並べた 2 つを、macOS の全画面の左右分割にする。
-        // 左のウィンドウを「画面左側」にすると、右に置く相手を選ぶ画面が出る。
-        // そこでは各ウィンドウが元の位置を縮めた所に並ぶので、右半分に置いた相手の所（右半分の真ん中）をクリックする
-        // 相手を選ぶ画面には、今の画面にあるほかのアプリのウィンドウも並ぶ。違うものを選ばないよう、
-        // 左右の 2 つのアプリ以外（Num Deck も）をいったん隠し、分割できたら元に戻す
-        void makeFullScreenSplit (pid_t leftPid, AXUIElementRef leftWin, pid_t rightPid, AXUIElementRef rightWin, CGRect area)
+        // 左のウィンドウを「画面左側」にすると、右に置く相手を選ぶ画面が出るので、そこで右のウィンドウをクリックする
+        bool inSplit (AXUIElementRef w);  // 下で定義
+
+        // 今のデスクトップで、win 以外に全画面の左右分割に入っているウィンドウ（呼んだ側で CFRelease）
+        AXUIElementRef copyOtherSplitWindow (AXUIElementRef win)
         {
-            NSMutableArray<NSRunningApplication*>* hidden = [NSMutableArray array];
             for (NSRunningApplication* a in [[NSWorkspace sharedWorkspace] runningApplications])
             {
-                if (a.activationPolicy != NSApplicationActivationPolicyRegular || a.hidden) continue;
-                if (a.processIdentifier == leftPid || a.processIdentifier == rightPid) continue;
-                if ([a hide]) [hidden addObject: a];
+                if (a.activationPolicy != NSApplicationActivationPolicyRegular) continue;
+                AXUIElementRef app = AXUIElementCreateApplication (a.processIdentifier);
+                CFTypeRef wins = nullptr;
+                AXUIElementCopyAttributeValue (app, kAXWindowsAttribute, &wins);
+                CFRelease (app);
+                if (wins == nullptr) continue;
+                AXUIElementRef found = nullptr;
+                for (id x in (__bridge NSArray*) wins)
+                {
+                    AXUIElementRef o = (__bridge AXUIElementRef) x;
+                    if (! CFEqual (o, win) && inSplit (o)) { found = (AXUIElementRef) CFRetain (o); break; }
+                }
+                CFRelease (wins);
+                if (found != nullptr) return found;
             }
-           #if ! __has_feature(objc_arc)
-            [hidden retain];
-           #endif
-            AXUIElementRef win = (AXUIElementRef) CFRetain (leftWin);
-            AXUIElementRef rwin = (AXUIElementRef) CFRetain (rightWin);
-            auto finish = ^(const char* message) {
-                if (message != nullptr) KeyTap::showHUD (message);
+            return nullptr;
+        }
+
+        // 2 画面にする作業 1 回分の材料
+        struct SplitJob
+        {
+            AXUIElementRef left = nullptr, right = nullptr;
+            pid_t leftPid = 0, rightPid = 0;
+            CGRect area {};
+            NSMutableArray<NSRunningApplication*>* hidden = nil;
+
+            ~SplitJob()
+            {
                 for (NSRunningApplication* a in hidden) [a unhide];
                #if ! __has_feature(objc_arc)
                 [hidden release];
                #endif
-                CFRelease (win);
-                CFRelease (rwin);
-            };
+                if (left != nullptr) CFRelease (left);
+                if (right != nullptr) CFRelease (right);
+            }
+        };
+
+        // 相手を選ぶ画面でクリックする場所（今のデスクトップの幅・高さに対する割合）。
+        // 右半分に置いた相手は、選ぶ画面でもふつう右半分の真ん中あたりに出るが、ほかのウィンドウがあると並びがずれるので、外れたら次の場所を試す
+        const CGPoint kPickSpots[] = { { 0.875, 0.5 }, { 0.80, 0.33 }, { 0.80, 0.67 }, { 0.94, 0.5 }, { 0.68, 0.5 } };
+        constexpr int kPickTries = 5;
+
+        void trySplit (std::shared_ptr<SplitJob> job, int attempt);
+
+        // 左右を並べ直してから、もう一度
+        void retrySplit (std::shared_ptr<SplitJob> job, int attempt)
+        {
+            const CGRect a = job->area;
+            const CGFloat half = std::floor (a.size.width / 2);
+            placeWindow (job->left, CGRectMake (a.origin.x, a.origin.y, half, a.size.height));
+            placeWindow (job->right, CGRectMake (a.origin.x + half, a.origin.y, a.size.width - half, a.size.height));
+            AXUIElementPerformAction (job->right, kAXRaiseAction);
+            later (400, ^{ trySplit (job, attempt); });
+        }
+
+        void trySplit (std::shared_ptr<SplitJob> job, int attempt)
+        {
+            if (attempt >= kPickTries)
+            {
+                KeyTap::showHUD ("右に置くウィンドウをクリックしてください");
+                wlog (@"split: gave up after %d tries", attempt);
+                return;
+            }
+            AXUIElementRef win = job->left;
+            const pid_t leftPid = job->leftPid;
 
             // 1. 左のウィンドウのアプリを前に出し、キーボードが左のウィンドウを向くまで待つ
             //    （向く前に「画面左側」を押すと、同じアプリの別のウィンドウ（研修の画面など）が分割されてしまう）
             bringAppForward (leftPid);
             focusWindow (win);
-            wlog (@"split: start left=%d right=%d hidden=%lu", leftPid, rightPid, (unsigned long) hidden.count);
             waitFor (^{ if (! isFocused (leftPid, win)) focusWindow (win); return isFocused (leftPid, win); }, 3000, ^(bool focused) {
-                wlog (@"split: left focused=%d", focused);
-                if (! focused) { finish ("うまく並べられませんでした（もう一度押してください）"); return; }
+                wlog (@"split[%d]: left focused=%d", attempt, focused);
+                if (! focused) { KeyTap::showHUD ("うまく並べられませんでした（もう一度押してください）"); return; }
                 // 2. 「ウィンドウ」→「フルスクリーンのタイル表示」→「画面左側」
                 const bool pressed = pressTileLeft (leftPid);
-                wlog (@"split: tile-left pressed=%d", pressed);
-                if (! pressed) { finish ("この画面では 2 分割にできませんでした"); return; }
-                // 3. 左が全画面に入る（＝右に置く相手を選ぶ画面が出た）のを待ってから、右半分の真ん中をクリック
+                wlog (@"split[%d]: tile-left pressed=%d", attempt, pressed);
+                if (! pressed) { KeyTap::showHUD ("この画面では 2 分割にできませんでした"); return; }
+                // 3. 左が全画面に入る（＝右に置く相手を選ぶ画面が出た）のを待って、相手をクリック
                 waitFor (^{ return isFullScreen (win); }, 4000, ^(bool entered) {
-                    wlog (@"split: left entered=%d", entered);
-                    if (! entered) { finish ("うまく並べられませんでした（もう一度押してください）"); return; }
-                    later (600, ^{
-                        clickAt (CGPointMake (area.origin.x + area.size.width * 0.875, area.origin.y + area.size.height * 0.5));
-                        // 4. 右に入ったか確かめる。入っていなければ、選ぶ画面で自分で選んでもらう
-                        waitFor (^{ return isFullScreen (rwin); }, 3000, ^(bool ok) {
-                            wlog (@"split: right entered=%d", ok);
-                            finish (ok ? nullptr : "右に置くウィンドウをクリックしてください");
+                    wlog (@"split[%d]: left entered=%d", attempt, entered);
+                    if (! entered) { KeyTap::showHUD ("うまく並べられませんでした（もう一度押してください）"); return; }
+                    later (700, ^{
+                        const CGRect a = job->area;
+                        const CGPoint spot = kPickSpots[attempt];
+                        clickAt (CGPointMake (a.origin.x + a.size.width * spot.x, a.origin.y + a.size.height * spot.y));
+                        // 4. どうなったか確かめる
+                        waitFor (^{ return isFullScreen (job->right); }, 2500, ^(bool ok) {
+                            wlog (@"split[%d]: right entered=%d", attempt, ok);
+                            if (ok) return;
+                            if (! isFullScreen (win))
+                            {
+                                // 何もない所をクリックして選ぶ画面が閉じた → 並べ直して次の場所で
+                                later (800, ^{ retrySplit (job, attempt + 1); });
+                                return;
+                            }
+                            AXUIElementRef other = copyOtherSplitWindow (win);
+                            if (other == nullptr)
+                            {
+                                // 選ぶ画面がまだ出ている → そのまま次の場所をクリック
+                                const CGPoint next = kPickSpots[std::min (attempt + 1, kPickTries - 1)];
+                                if (attempt + 1 >= kPickTries) { KeyTap::showHUD ("右に置くウィンドウをクリックしてください"); return; }
+                                clickAt (CGPointMake (a.origin.x + a.size.width * next.x, a.origin.y + a.size.height * next.y));
+                                waitFor (^{ return isFullScreen (job->right); }, 2500, ^(bool ok2) {
+                                    wlog (@"split[%d]: right entered (2nd click)=%d", attempt, ok2);
+                                    if (! ok2) KeyTap::showHUD ("右に置くウィンドウをクリックしてください");
+                                });
+                                return;
+                            }
+                            // 違うウィンドウが右に入った → 2 つとも全画面を解いてから、次の場所でやり直す
+                            wlog (@"split[%d]: wrong partner, undoing", attempt);
+                            AXUIElementRef o = other;
+                            setFullScreenSurely (o, false, 3, ^(bool) {
+                                CFRelease (o);
+                                setFullScreenSurely (win, false, 3, ^(bool) { later (700, ^{ retrySplit (job, attempt + 1); }); });
+                            });
                         });
                     });
                 });
             });
+        }
+
+        // 相手を選ぶ画面には、今のデスクトップにあるほかのアプリのウィンドウも並ぶ。違うものを選ばないよう、
+        // 左右の 2 つのアプリ以外（Num Deck も）をいったん隠し、終わったら元に戻す（job が消えるとき）
+        void makeFullScreenSplit (pid_t leftPid, AXUIElementRef leftWin, pid_t rightPid, AXUIElementRef rightWin, CGRect area)
+        {
+            auto job = std::make_shared<SplitJob>();
+            job->left = (AXUIElementRef) CFRetain (leftWin);
+            job->right = (AXUIElementRef) CFRetain (rightWin);
+            job->leftPid = leftPid;
+            job->rightPid = rightPid;
+            job->area = area;
+            job->hidden = [NSMutableArray array];
+           #if ! __has_feature(objc_arc)
+            [job->hidden retain];
+           #endif
+            for (NSRunningApplication* a in [[NSWorkspace sharedWorkspace] runningApplications])
+            {
+                if (a.activationPolicy != NSApplicationActivationPolicyRegular || a.hidden) continue;
+                if (a.processIdentifier == leftPid || a.processIdentifier == rightPid) continue;
+                if ([a hide]) [job->hidden addObject: a];
+            }
+            wlog (@"split: start left=%d right=%d hidden=%lu", leftPid, rightPid, (unsigned long) job->hidden.count);
+            trySplit (job, 0);
         }
 
         // Chrome を引数付きで開く（起動中なら、起動中の Chrome に渡される）
@@ -576,10 +675,22 @@ namespace numdeck
             return found;
         }
 
+        // 使い回すウィンドウを探すときの目印。ふつうはサイト（host）だけ
+        // （研修のようにログインで住所が変わるページでも見つかるように）。
+        // Google の書類（docs.google.com など）は同じサイトの別の書類が多いので、書類の番号（/d/番号）まで含める
         std::string hostOf (const std::string& url)
         {
             NSURL* u = [NSURL URLWithString: ns (url)];
-            return u != nil && u.host != nil ? std::string (u.host.UTF8String) : std::string();
+            if (u == nil || u.host == nil) return {};
+            NSString* host = u.host;
+            if ([host hasSuffix: @".google.com"])
+            {
+                NSArray<NSString*>* parts = u.path.pathComponents;
+                const NSUInteger d = [parts indexOfObject: @"d"];
+                if (d != NSNotFound && d + 1 < parts.count)
+                    return std::string ([[NSString stringWithFormat: @"/d/%@", parts[d + 1]] UTF8String]);  // タブの住所に含まれる形
+            }
+            return std::string (host.UTF8String);
         }
     }
 
@@ -693,7 +804,7 @@ namespace numdeck
         // このページのタブがある Chrome のウィンドウがあれば、それを使い回す（Num Deck を入れ直したあとでも見つかる）。
         // そのウィンドウがもう左右分割に入っていれば、その画面へ移るだけ。普通のウィンドウなら左に置いて分割し直す
         const bool foundTab = raiseChromeWindowWithHost (hostOf (url));
-        wlog (@"link split: %s found-tab=%d right=%s", url.c_str(), foundTab, split.c_str());
+        wlog (@"link split: %s found-tab=%d right=%s", hostOf (url).c_str(), foundTab, split.c_str());
         if (! foundTab) { if (rightSide == "chrome") openNew(); else appRight (nullptr); return; }
         waitFor (^{ NSRunningApplication* f = [[NSWorkspace sharedWorkspace] frontmostApplication];
                     return f != nil && [f.bundleIdentifier isEqualToString: chromeId]; }, 3000, ^(bool) {
@@ -787,15 +898,37 @@ namespace numdeck
             if (backWin != nullptr && ! axBool (backWin, CFSTR ("AXFullScreen"))) { CFRelease (backWin); backWin = nullptr; }
         }
 
-        AXUIElementRef before = copyFrontWindow (chromeId);
-        launchChrome (profileDir, @[ @"--new-window", ns (url) ]);
-        waitAndPlace (chromeId, before, r, 0, ^(AXUIElementRef placed) {
+        // 置いたあと: 前面に出し、前にいた全画面へ戻る
+        auto done = ^(AXUIElementRef placed) {
             if (placed != nullptr) AXUIElementPerformAction (placed, kAXRaiseAction);
             if (backWin == nullptr) return;
-            dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            later (400, ^{
                 bringAppForward (backPid);
                 focusWindow (backWin);
                 CFRelease (backWin);
+            });
+        };
+        auto openNew = ^{
+            AXUIElementRef before = copyFrontWindow (chromeId);
+            launchChrome (profileDir, @[ @"--new-window", ns (url) ]);
+            waitAndPlace (chromeId, before, r, 0, done);
+        };
+
+        // このページのタブがある Chrome のウィンドウがあれば、新しく開かずにそれを使い回して置き直す
+        // （研修のマクロなどを何度押してもウィンドウが増えないように）
+        const bool foundTab = raiseChromeWindowWithHost (hostOf (url));
+        wlog (@"placed link: %s found-tab=%d", hostOf (url).c_str(), foundTab);
+        if (! foundTab) { openNew(); return; }
+        waitFor (^{ NSRunningApplication* f = [[NSWorkspace sharedWorkspace] frontmostApplication];
+                    return f != nil && [f.bundleIdentifier isEqualToString: chromeId]; }, 3000, ^(bool) {
+            later (400, ^{
+                AXUIElementRef w = copyFocusedWindowOf (runningPid (chromeId));
+                if (w == nullptr) { openNew(); return; }
+                auto put = ^{ placeWindow (w, r); done (w); CFRelease (w); };
+                if (isFullScreen (w))
+                    setFullScreenSurely (w, false, 3, ^(bool) { later (500, put); });
+                else
+                    put();
             });
         });
     }
