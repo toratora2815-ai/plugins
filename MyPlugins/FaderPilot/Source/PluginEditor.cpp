@@ -50,16 +50,22 @@ FaderPilotEditor::FaderPilotEditor (FaderPilotProcessor& p)
     addAndMakeVisible (fader);
     faderAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (processor.apvts, "ride", fader);
 
+    linkBar.setSources (processor.link, { plink::kindBalanceScope });
     linkBar.status = [this] (bool& lit)
     {
         auto& lk = processor.link;
-        if (! lk.on()) return juce::String ("Plugin Link OFF  -  set the same LINK number on Horizon Spread to narrow its width while the vocal is pushed up");
+        if (! lk.on()) return juce::String ("Plugin Link OFF  -  same LINK as Horizon Spread (narrow width) / Balance Scope on the music bus (FOLLOW MUSIC)");
         const int n = lk.ep().countPeers();
         if (n == 0) return "LINK " + juce::String (lk.group()) + ": no other plugin on this LINK yet";
         lit = processor.engine.isVoiceActive();
         const float r = processor.engine.getGainDb();
-        return "Sending fader " + juce::String ((r > 0.05f ? "+" : "") + juce::String (r, 1)) + " dB"
-             + (lit ? "  (vocal active)" : "  (vocal quiet)") + "  to " + juce::String (n) + " linked plugin" + (n > 1 ? "s" : "");
+        juce::String t = "Sending fader " + juce::String ((r > 0.05f ? "+" : "") + juce::String (r, 1)) + " dB"
+                       + (lit ? " (vocal active)" : " (vocal quiet)");
+        plink::Peer bsPeer;
+        if (lk.ep().find (plink::kindBalanceScope, bsPeer))
+            t << "   |   music from " << plink::Link::describe (bsPeer) << ": " << juce::String (bsPeer.v[plink::bs::musicDb], 1) << " dB"
+              << (processor.engine.isMusicFromLink() ? " (used)" : (processor.apvts.getRawParameterValue ("follow")->load() > 0.5f ? " (sidechain wins)" : ""));
+        return t;
     };
     addAndMakeVisible (linkBar);
 
@@ -217,10 +223,12 @@ void FaderPilotEditor::paint (juce::Graphics& g)
 
         if (isFollow)
         {
-            const bool ok = processor.sidechainConnected() && musicDb > -60.0f;
+            const bool viaLink = processor.engine.isMusicFromLink();
+            const bool ok = (processor.sidechainConnected() || viaLink) && musicDb > -60.0f;
             g.setColour (ok ? mint : coral);
-            g.drawText (ok ? "MUSIC  " + juce::String (musicDb, 1) + " dB  ->  aim " + juce::String (musicDb + param ("offset"), 1) + " dB"
-                           : "MUSIC: no sidechain signal",
+            g.drawText (ok ? juce::String (viaLink ? "MUSIC (LINK)  " : "MUSIC  ") + juce::String (musicDb, 1) + " dB  ->  aim "
+                                 + juce::String (musicDb + param ("offset"), 1) + " dB"
+                           : "MUSIC: no sidechain / Balance Scope signal",
                         info, juce::Justification::centredRight);
         }
     }

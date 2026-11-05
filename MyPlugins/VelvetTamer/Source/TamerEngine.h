@@ -35,6 +35,8 @@ namespace vt
         float selectivity = 0.5f;    // 0..1  1 ほど目立つピークだけを狙う
         float attackMs = 5.0f, releaseMs = 80.0f;
         float lowHz = 300.0f, highHz = 16000.0f;
+        // 2 つ目の FOCUS（Plugin Link で Balance Scope が 2 か所目を送ってきたとき。amount2 = 0 で無し）
+        float lowHz2 = 0.0f, highHz2 = 0.0f, amount2 = 0.0f;
         float mix = 1.0f, outDb = 0.0f;
         bool delta = false;          // 削った音だけを聴く
         bool link = true;            // 左右で同じだけ下げる
@@ -150,6 +152,7 @@ namespace vt
             tmpB.assign ((size_t) bins, 0.0f);
             focus.assign ((size_t) bins, 0.0f);
             lastLow = lastHigh = -1.0f;
+            lastAmount2 = -1.0f;
             weightCurve.assign ((size_t) bins, 1.0f);
             for (auto& w : lastWeight) w = -99.0f;
 
@@ -243,18 +246,30 @@ namespace vt
     private:
         void updateFocus()
         {
-            if (settings.lowHz == lastLow && settings.highHz == lastHigh) return;
+            if (settings.lowHz == lastLow && settings.highHz == lastHigh && settings.lowHz2 == lastLow2
+                && settings.highHz2 == lastHigh2 && settings.amount2 == lastAmount2) return;
             lastLow = settings.lowHz;
             lastHigh = settings.highHz;
+            lastLow2 = settings.lowHz2;
+            lastHigh2 = settings.highHz2;
+            lastAmount2 = settings.amount2;
             const float lo = std::min (lastLow, lastHigh), hi = std::max (lastLow, lastHigh);
+            const float lo2 = std::max (1.0f, std::min (lastLow2, lastHigh2)), hi2 = std::max (lastLow2, lastHigh2);
+            const float amt2 = hi2 > lo2 ? std::clamp (lastAmount2, 0.0f, 1.0f) : 0.0f;
             // 帯域の外は半オクターブかけてなめらかに効かなくなる
+            auto shape = [] (float f, float l, float h)
+            {
+                float w = 1.0f;
+                if (f < l) w = 1.0f - std::min (1.0f, std::log2 (l / std::max (f, 1.0f)) * 2.0f);
+                else if (f > h) w = 1.0f - std::min (1.0f, std::log2 (f / h) * 2.0f);
+                return 0.5f - 0.5f * std::cos ((float) M_PI * w);
+            };
             for (int k = 0; k < bins; ++k)
             {
                 const float f = (float) (k * sr / n);
-                float w = 1.0f;
-                if (f < lo) w = 1.0f - std::min (1.0f, std::log2 (lo / std::max (f, 1.0f)) * 2.0f);
-                else if (f > hi) w = 1.0f - std::min (1.0f, std::log2 (f / hi) * 2.0f);
-                focus[(size_t) k] = 0.5f - 0.5f * std::cos ((float) M_PI * w);
+                float w = shape (f, lo, hi);
+                if (amt2 > 0.0f) w = std::max (w, amt2 * shape (f, lo2, hi2));
+                focus[(size_t) k] = w;
             }
         }
 
@@ -478,7 +493,7 @@ namespace vt
         bool externalNow = false;
         float olaScale = 0.25f, powerNorm = 1.0f;
         float mixCur = 1.0f, outCur = 1.0f, smoothCoef = 0.001f;
-        float lastLow = -1.0f, lastHigh = -1.0f;
+        float lastLow = -1.0f, lastHigh = -1.0f, lastLow2 = -1.0f, lastHigh2 = -1.0f, lastAmount2 = -1.0f;
 
         Fft fft;
         std::vector<float> win;

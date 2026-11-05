@@ -71,12 +71,27 @@ ITU-R BS.1770（EBU R128）の計算方法どおりに測ります（EBU の公�
 - 出すぎがなければ何も送らず、Velvet Tamer は自分の FOCUS つまみの値に戻ります
 - 曲を変えた・ミックスを大きく直したときは RESET を押すと、新しく測り直します
 
+### v1.3 で増えたこと
+- **上位 2 か所**を送ります。2 か所目は 1 か所目と重ならない所で、0.5 dB 以上超えているときだけ。Velvet Tamer はそこにも効かせます
+- **JUDGE BY**（帯の右端）… 出すぎを何で判定するか
+  - **WHOLE SONG**（最初）… RESET からの平均。どっしり、ほとんど動かない
+  - **LAST 10 s** … 直近 10 秒の平均。サビだけ耳に痛い、のような曲の場所ごとの変化を追います（動きは大きめ）
+- グラフに、送っている帯域が**ピンクの帯**（濃いほうが 1 か所目）で出ます
+- 同じ LINK の **Velvet Tamer** がいまどこをどれだけ削っているかが、グラフの上から下がる**青緑の棒**で出ます（12 dB で棒が一番長い）
+- 同じ LINK の **Gain Stage** の GAIN が帯の文に出ます（`Gain Stage +4.5 dB (learned)`）
+- **オケの音量**も送ります。オケのバスに挿した Balance Scope と、ボーカルの Fader Pilot を同じ LINK にすると、
+  Fader Pilot の FOLLOW MUSIC がサイドチェーンなしで使えます
+- **FROM**（LINK の右、v1.3〜）… 同じ LINK に同じ種類の相手が 2 つ以上いるとき、どの Velvet Tamer / Gain Stage を表示するか選べます。
+  **AUTO** は「いちばん新しく送ってきた相手」。選んだ相手はトラック名で覚えるので、プロジェクトを開き直しても同じ相手につながります
+  （その相手がいないときは `(not here)` と出て、AUTO と同じ動きになります）
+
 使い方の例（ボーカルの耳に痛い所を自動で狙う）:
 1. ボーカルのトラックに Velvet Tamer、その後ろに Balance Scope を挿す（マスターに Balance Scope でもよい）
 2. 両方の LINK を **1** にする
 3. 再生して 3 秒ほど待つ → Velvet Tamer のグラフの明るい範囲（FOCUS）が、出すぎの帯域へ動く
 
 ## 変更履歴
+- v1.3.0 … Plugin Link：出すぎを上位 2 か所、JUDGE BY（WHOLE SONG / LAST 10 s）、オケの音量を送る、Velvet Tamer の削り量と Gain Stage の GAIN を表示、FROM（相手選び）
 - v1.2.0 … Plugin Link（LINK 1〜4。出すぎの帯域を Velvet Tamer へ送る）
 - v1.1.0 … 参考曲のカーブを覚えて比べる（REF A / B / C、DIFF）、ラウドネスメーター（LUFS / PEAK / PLR）、Custom の目標カーブ
 - v1.0.0 … 最初の版

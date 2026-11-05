@@ -108,7 +108,18 @@ Default / Vocal Harshness / Sibilance / Distorted Guitar / Boxy Low-Mids / Mix B
 - つながっている間、グラフの明るい範囲は**実際に使っている FOCUS** を表示します（FOCUS のつまみ自体は動きません。オートメーションも書きません）
 - DEPTH・SHARPNESS などほかのつまみは今までどおり自分で決めます
 
+### v1.4 で増えたこと
+- Balance Scope が**2 か所目**も送ってきたら、2 つ目の FOCUS としてそこにも効かせます（グラフで 2 つ目の明るい範囲、青緑の線が端）。
+  2 か所目は 1 か所目より控えめ（超えた量の比で 50〜100 %）。出たり消えたりもなめらかです
+- **DEPTH FOLLOW**（帯の右端のボタン、最初は ON）… 出すぎの量に合わせて DEPTH を少し上下させます。
+  +1 dB でちょうど 1 倍、少ないと 0.85 倍まで弱く、多いと 1.3 倍まで強く。DEPTH のつまみ自体は動きません。帯の文に `DEPTH x1.15` のように出ます
+- いまどこをどれだけ削っているかを、同じ LINK の Balance Scope へ送ります（あちらのグラフに青緑の棒で出ます）
+- **FROM**（LINK の右、v1.3〜）… 同じ LINK に同じ種類の相手が 2 つ以上いるとき、どの Balance Scope に合わせるか選べます。
+  **AUTO** は「いちばん新しく送ってきた相手」。選んだ相手はトラック名で覚えるので、プロジェクトを開き直しても同じ相手につながります
+  （その相手がいないときは `(not here)` と出て、AUTO と同じ動きになります）
+
 ## 変更履歴
+- v1.4.0 … Plugin Link：2 つ目の FOCUS、DEPTH FOLLOW、削り量を Balance Scope へ送る、FROM（相手選び）
 - v1.3.0 … Plugin Link（LINK 1〜4。Balance Scope が見つけた出すぎの帯域へ FOCUS を自動で合わせる）
 - v1.2.0 … LOW LATENCY（遅れ 1/4）、SIDECHAIN（ほかのトラックの音で下げる帯域を決める）、画面に遅れの表示
 - v1.1.0 … グラフ上で FOCUS をドラッグ、WEIGHT、プリセット

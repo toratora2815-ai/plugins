@@ -32,6 +32,8 @@ private:
     juce::TextButton learnButton;
     Toggle polarity, mono, swap;
 
+    plink::LinkBar linkBar { processor.apvts, juce::Colour (0xffb8e86b), juce::Colour (0xff191e22), juce::Colour (0xffe9eef1) };
+
     juce::Rectangle<int> meterIn, meterOut, infoArea;
     float inRms = -200, inPeak = -200, outRms = -200, outPeak = -200;
     juce::String flashText;

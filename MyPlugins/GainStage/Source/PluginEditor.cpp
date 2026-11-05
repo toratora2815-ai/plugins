@@ -51,7 +51,20 @@ GainStageEditor::GainStageEditor (GainStageProcessor& p) : AudioProcessorEditor 
     setupToggle (mono, "mono", "MONO");
     setupToggle (swap, "swap", "SWAP L/R");
 
-    setSize (600, 400);
+    linkBar.status = [this] (bool& lit)
+    {
+        auto& lk = processor.link;
+        if (! lk.on()) return juce::String ("Plugin Link OFF  -  set the same LINK number on Balance Scope to show this GAIN there");
+        const int n = lk.ep().countPeers();
+        const float g = processor.apvts.getRawParameterValue ("gain")->load();
+        if (n == 0) return "LINK " + juce::String (lk.group()) + ": no other plugin on this LINK yet";
+        lit = true;
+        return "Sending GAIN " + juce::String (g > 0.05f ? "+" : "") + juce::String (g, 1) + " dB  to " + juce::String (n)
+             + " linked plugin" + (n > 1 ? "s" : "");
+    };
+    addAndMakeVisible (linkBar);
+
+    setSize (600, 444);
     startTimerHz (30);
 }
 
@@ -70,6 +83,8 @@ void GainStageEditor::setupToggle (Toggle& t, const char* id, const juce::String
 void GainStageEditor::resized()
 {
     auto b = getLocalBounds().reduced (16);
+    linkBar.setBounds (b.removeFromBottom (plink::LinkBar::height));
+    b.removeFromBottom (10);
     b.removeFromTop (40);   // タイトル
 
     auto bottom = b.removeFromBottom (36);

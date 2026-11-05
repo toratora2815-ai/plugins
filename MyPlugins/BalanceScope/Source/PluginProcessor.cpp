@@ -14,6 +14,7 @@ BalanceScopeProcessor::BalanceScopeProcessor()
     fftData.assign (fftSize * 2, 0.0f);
     sumPower.assign (numBins, 0.0);
     livePower.assign (numBins, 0.0);
+    recentPower.assign (numBins, 0.0);
     startTimerHz (2);
 }
 
@@ -36,6 +37,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout BalanceScopeProcessor::creat
                     juce::AudioParameterFloatAttributes().withStringFromValueFunction (db)));
     // v1.2 で追加（バージョン 3）
     v.push_back (plink::makeGroupParameter (3));
+    // v1.3 で追加（バージョン 4）：出すぎの帯域を、曲全体の平均で決めるか、直近 10 秒で決めるか
+    v.push_back (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "linkWindow", 4 }, "Link Window",
+                                                               juce::StringArray { "WHOLE", "LAST 10 s" }, 0));
     return { v.begin(), v.end() };
 }
 
@@ -52,6 +56,15 @@ void BalanceScopeProcessor::prepareToPlay (double sampleRate, int)
     juce::SpinLock::ScopedLockType sl (lock);
     sr = sampleRate;
     loudness.prepare (sampleRate);
+    {
+        const double w = 2.0 * juce::MathConstants<double>::pi * 60.0 / sampleRate, cs = std::cos (w), al = std::sin (w) / (2.0 * 0.7071);
+        const double a0 = 1.0 + al;
+        musicHp = {};
+        musicHp.b0 = (1.0 + cs) / 2.0 / a0; musicHp.b1 = -(1.0 + cs) / a0; musicHp.b2 = musicHp.b0;
+        musicHp.a1 = -2.0 * cs / a0; musicHp.a2 = (1.0 - al) / a0;
+        musicCoef = 1.0 - std::exp (-1.0 / (0.4 * sampleRate));
+        musicMs = 0.0;
+    }
     std::fill (ring.begin(), ring.end(), 0.0f);
     ringPos = samplesSinceFFT = 0;
 }
@@ -80,6 +93,8 @@ void BalanceScopeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         float mono = 0.0f;
         for (int ch = 0; ch < numCh; ++ch) mono += buffer.getReadPointer (ch)[i];
         ring[(size_t) ringPos] = mono * scale;
+        const float m = musicHp.run (mono * scale);
+        musicMs += ((double) m * m - musicMs) * musicCoef;
         ringPos = (ringPos + 1) & (fftSize - 1);
 
         if (++samplesSinceFFT >= hopSize)
@@ -87,6 +102,16 @@ void BalanceScopeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             samplesSinceFFT = 0;
             analyseFrame();
         }
+    }
+    if (! std::isfinite (musicMs)) { musicMs = 0.0; musicHp.z1 = musicHp.z2 = 0.0; }
+    musicLevel = (float) juce::jmax (-120.0, 10.0 * std::log10 (musicMs + 1.0e-12));
+
+    // Plugin Link へ：オケの音量（ブロックごと。Fader Pilot の FOLLOW MUSIC が使う）
+    if (link.on())
+    {
+        link.ep().publish (plink::bs::musicDb, musicLevel.load());
+        link.ep().stamp();
+        link.ep().heartbeat();
     }
     // 音はそのまま通す（解析専用）
 }
@@ -111,18 +136,28 @@ void BalanceScopeProcessor::analyseFrame()
     {
         std::fill (sumPower.begin(), sumPower.end(), 0.0);
         std::fill (livePower.begin(), livePower.end(), 0.0);
+        std::fill (recentPower.begin(), recentPower.end(), 0.0);
         frameCount = 0;
+        recentSecs = 0.0;
     }
 
     const bool silent = ms < 1.0e-7;   // 約 -70 dBFS 未満は無視
     if (silent) return;
 
     const double a = std::exp (-(double) hopSize / (sr * 1.5));   // 直近1.5秒くらいの表示用
+    // 直近 10 秒（時定数 10 秒の平均。たまり始めは今までの平均と同じになるよう重みを変える）
+    const double hopSecs = (double) hopSize / sr;
+    if (hostPlaying) recentSecs += hopSecs;
+    const double ar = std::max (std::exp (-hopSecs / 10.0), 1.0 - hopSecs / std::max (hopSecs, recentSecs));
     for (int b = 0; b < numBins; ++b)
     {
         const double p = (double) fftData[(size_t) b] * fftData[(size_t) b];
         livePower[(size_t) b] = livePower[(size_t) b] * a + p * (1.0 - a);
-        if (hostPlaying) sumPower[(size_t) b] += p;
+        if (hostPlaying)
+        {
+            sumPower[(size_t) b] += p;
+            recentPower[(size_t) b] = recentPower[(size_t) b] * ar + p * (1.0 - ar);
+        }
     }
     if (hostPlaying) ++frameCount;
 }
@@ -134,6 +169,8 @@ void BalanceScopeProcessor::getSnapshot (Snapshot& s)
     if (frameCount > 0)
         for (auto& v : s.avgPower) v /= frameCount;
     s.livePower = livePower;
+    s.recentPower = recentPower;
+    s.recentSecs = recentSecs;
     s.frames = frameCount;
     s.sampleRate = sr;
     s.playing = hostPlaying;
@@ -160,22 +197,26 @@ TargetCurve BalanceScopeProcessor::currentTarget() const
 }
 
 // ---- Plugin Link ----
-// 平均（RESET からの全体）がある程度たまったら、それで「出すぎの帯域」を探す。
+// 平均（RESET からの全体、または直近 10 秒）がある程度たまったら、それで「出すぎの帯域」を上位 2 か所探す。
 // 画面で参照曲（REF A〜C）と比べているときは、目標カーブの代わりに参照曲と比べる。
 void BalanceScopeProcessor::timerCallback()
 {
     LinkInfo info;
     info.on = link.on();
     if (! info.on) { linkInfo = info; return; }
-    info.peers = link.ep().countPeers();
+    auto& ep = link.ep();
+    info.peers = ep.countPeers();
+    info.musicDb = musicLevel.load();
+    ep.find (plink::kindVelvetTamer, info.tamer);
+    ep.find (plink::kindGainStage, info.gain);
 
     getSnapshot (linkSnap);
-    auto& ep = link.ep();
-    const double secs = linkSnap.frames * (double) hopSize / linkSnap.sampleRate;
+    info.recent = apvts.getRawParameterValue ("linkWindow")->load() > 0.5f;
+    const double secs = info.recent ? linkSnap.recentSecs : linkSnap.frames * (double) hopSize / linkSnap.sampleRate;
     if (secs >= 3.0)
     {
         const auto t = currentTarget();
-        auto db = bandmath::toBands (linkSnap.avgPower, linkSnap.sampleRate, fftSize, linkCenters);
+        auto db = bandmath::toBands (info.recent ? linkSnap.recentPower : linkSnap.avgPower, linkSnap.sampleRate, fftSize, linkCenters);
         bandmath::normalise (db, linkCenters, t);
 
         std::vector<float> ref;
@@ -191,18 +232,19 @@ void BalanceScopeProcessor::timerCallback()
                 bandmath::normalise (ref, linkCenters, t);
             }
         }
-        const auto e = bandmath::findExcess (db, linkCenters, t, ref);
+        bandmath::findExcess2 (db, linkCenters, t, ref, info.first, info.second);
         info.valid = true;
-        info.excessDb = e.excessDb;
-        info.lowHz = e.lowHz;
-        info.highHz = e.highHz;
-        info.peakHz = e.peakHz;
     }
     ep.publish (plink::bs::valid, info.valid ? 1.0f : 0.0f);
-    ep.publish (plink::bs::excessDb, info.excessDb);
-    ep.publish (plink::bs::lowHz, info.lowHz);
-    ep.publish (plink::bs::highHz, info.highHz);
-    ep.publish (plink::bs::peakHz, info.peakHz);
+    ep.publish (plink::bs::excessDb, info.first.excessDb);
+    ep.publish (plink::bs::lowHz, info.first.lowHz);
+    ep.publish (plink::bs::highHz, info.first.highHz);
+    ep.publish (plink::bs::peakHz, info.first.peakHz);
+    ep.publish (plink::bs::excess2Db, info.second.excessDb);
+    ep.publish (plink::bs::low2Hz, info.second.lowHz);
+    ep.publish (plink::bs::high2Hz, info.second.highHz);
+    ep.publish (plink::bs::peak2Hz, info.second.peakHz);
+    ep.publish (plink::bs::window, info.recent ? 1.0f : 0.0f);
     ep.stamp();
     linkInfo = info;
 }

@@ -3,9 +3,10 @@
 // Plugin Link … 自作プラグイン同士が裏で情報をやりとりする「掲示板」
 //
 // しくみ:
-//   ~/Library/Application Support/MyPlugins/PluginLink-v1.bin を共有メモリとして全員で開く
+//   ~/Library/Application Support/MyPlugins/PluginLink-v2.bin を共有メモリとして全員で開く
 //   （プラグインごとに別のバイナリなので、ふつうの static 変数は共有できないため）。
-//   ・各プラグインは「席（Slot）」を 1 つ取り、種類・グループ（LINK 1〜4）・数値 8 個を書く
+//   ・各プラグインは「席（Slot）」を 1 つ取り、種類・グループ（LINK 1〜4）・数値 24 個を書く
+//   （v2: 数値を 8 → 24 個に。並びが変わったのでファイル名も変えた。v1 の古いプラグインとはつながらない）
 //   ・同じグループの相手の席を読んで、その数値で自分の動きを変える
 //   ・生きている印（aliveMs）が 3 秒更新されない席は「いない」扱い。10 秒で空き席に戻る
 //   すべて lock-free の atomic で読み書きするので、音の処理のスレッドからも安全に読める。
@@ -15,6 +16,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 #include <cstdlib>
 #include <string>
 #include <random>
@@ -33,6 +35,8 @@ namespace plink
         kindFaderPilot = 2,     // 送る: フェーダーの位置
         kindVelvetTamer = 3,    // 受ける: FOCUS をそこへ
         kindHorizonSpread = 4,  // 受ける: 広がりを少し抑える
+        kindGainStage = 5,      // 送る: 入口で足した GAIN
+        numKinds = 6
     };
 
     inline const char* kindName (uint32_t k)
@@ -43,6 +47,7 @@ namespace plink
             case kindFaderPilot:    return "Fader Pilot";
             case kindVelvetTamer:   return "Velvet Tamer";
             case kindHorizonSpread: return "Horizon Spread";
+            case kindGainStage:     return "Gain Stage";
             default:                return "?";
         }
     }
@@ -53,7 +58,34 @@ namespace plink
     {
         enum { valid = 0,      // 1 = 判定できるだけ聴いた
                excessDb = 1,   // 許容幅を何 dB 超えているか（0 = 出すぎなし）
-               lowHz = 2, highHz = 3, peakHz = 4 };
+               lowHz = 2, highHz = 3, peakHz = 4,
+               // 2 番目に出すぎの帯域（1 番目と重ならない所。なければ excess2Db = 0）
+               excess2Db = 5, low2Hz = 6, high2Hz = 7, peak2Hz = 8,
+               // オケの音量（Fader Pilot の FOLLOW MUSIC 用。左右を足して 60 Hz 以下を切った RMS、0.4 秒でならす）
+               musicDb = 9,    // dBFS（無音は -120）
+               window = 10 };  // 0 = 全体の平均、1 = 直近 10 秒で判定
+    }
+    // Velvet Tamer（いまどこをどれだけ削っているか。Balance Scope のグラフに重ねる）
+    namespace vt
+    {
+        constexpr int numBands = 16;                         // 100 Hz〜16 kHz を対数で 16 等分
+        constexpr float bandLowHz = 100.0f, bandHighHz = 16000.0f;
+        enum { maxReductionDb = 0,   // いちばん削っている量（dB、0 以下）
+               band0 = 1 };          // band0 + i = 帯域 i の削り量（dB、0 以下。約 0.5 秒の山の平均）
+        inline float bandEdgeHz (int i)   // i = 0..numBands
+        {
+            return bandLowHz * std::pow (bandHighHz / bandLowHz, (float) i / (float) numBands);
+        }
+    }
+    // Gain Stage
+    namespace gs
+    {
+        enum { gainDb = 0,     // いまの GAIN
+               targetDb = 1,   // TARGET
+               peakMode = 2,   // 0 = RMS、1 = PEAK
+               learned = 3,    // 1 = LEARN したことがある
+               inDb = 4,       // 入口の音量（RMS、dB）
+               outDb = 5 };    // 出口の音量（RMS、dB）
     }
     // Fader Pilot
     namespace fp
@@ -64,11 +96,11 @@ namespace plink
 
     constexpr int numGroups = 4;   // LINK 1〜4（0 = OFF）
     constexpr int numSlots = 64;
-    constexpr int numValues = 8;
+    constexpr int numValues = 24;
     constexpr int nameLen = 48;
     constexpr int64_t aliveTimeoutMs = 3000;
     constexpr int64_t reclaimMs = 10000;
-    constexpr uint32_t magicValue = 0x4C4E4B31;   // "LNK1"
+    constexpr uint32_t magicValue = 0x4C4E4B32;   // "LNK2"
 
     struct Slot
     {
@@ -108,7 +140,7 @@ namespace plink
         const char* home = std::getenv ("HOME");
         std::string dir = std::string (home != nullptr ? home : "/tmp") + "/Library/Application Support/MyPlugins";
         ::mkdir (dir.c_str(), 0755);
-        return dir + "/PluginLink-v1.bin";
+        return dir + "/PluginLink-v2.bin";
     }
 
     // このバイナリの中で 1 回だけ開く（開けなかったら nullptr ＝ リンクなしで動く）
@@ -143,6 +175,8 @@ namespace plink
         uint32_t kind = kindNone;
         float v[numValues] {};
         int64_t valuesAgeMs = 0;     // 数値が何 ms 前のものか
+        uint64_t owner = 0;          // 席の持ち主の番号（相手選びに使う）
+        int slotIndex = -1;
         char name[nameLen] {};
     };
 
@@ -218,7 +252,8 @@ namespace plink
             s->nameSeq.fetch_add (1);
         }
 
-        // 同じグループにいる、その種類の相手のうち一番新しく数値を書いたもの（自分は除く）
+        // 同じグループにいる、その種類の相手（自分は除く）。
+        // 相手を選んである（prefer）ならその相手、いなければ一番新しく数値を書いたもの
         bool find (Kind wanted, Peer& out) const
         {
             out = {};
@@ -226,25 +261,58 @@ namespace plink
             const int g = group.load (std::memory_order_relaxed);
             const Slot* self = slot.load (std::memory_order_relaxed);
             if (bd == nullptr || g == 0) return false;
+            const uint64_t want = (uint32_t) wanted < (uint32_t) numKinds ? prefer[wanted].load (std::memory_order_relaxed) : 0;
             const int64_t now = nowMs();
             const Slot* best = nullptr;
             int64_t bestMs = 0;
+            bool bestPreferred = false;
             for (auto& s : bd->slots)
             {
-                if (&s == self || s.owner.load (std::memory_order_relaxed) == 0) continue;
+                if (&s == self) continue;
+                const uint64_t own = s.owner.load (std::memory_order_relaxed);
+                if (own == 0) continue;
                 if (s.kind.load (std::memory_order_relaxed) != (uint32_t) wanted) continue;
                 if (s.group.load (std::memory_order_relaxed) != (uint32_t) g) continue;
                 if (now - s.aliveMs.load (std::memory_order_relaxed) > aliveTimeoutMs) continue;
                 const int64_t vm = s.valuesMs.load (std::memory_order_acquire);
-                if (best == nullptr || vm > bestMs) { best = &s; bestMs = vm; }
+                const bool preferred = want != 0 && own == want;
+                if (best == nullptr || (preferred && ! bestPreferred) || (preferred == bestPreferred && vm > bestMs))
+                { best = &s; bestMs = vm; bestPreferred = preferred; }
             }
             if (best == nullptr) return false;
-            out.found = true;
-            out.kind = (uint32_t) wanted;
-            for (int i = 0; i < numValues; ++i) out.v[i] = best->v[i].load (std::memory_order_relaxed);
-            out.valuesAgeMs = bestMs > 0 ? now - bestMs : 1 << 30;
-            readName (*best, out.name);
+            fill (*bd, *best, bestMs, now, out);
             return true;
+        }
+
+        // 同じグループにいる相手の一覧（kinds のどれか。画面の相手選び用）。見つけた数を返す
+        int list (const Kind* kinds, int numKindsWanted, Peer* out, int maxOut) const
+        {
+            auto* bd = board();
+            const int g = group.load();
+            const Slot* self = slot.load();
+            if (bd == nullptr || g == 0) return 0;
+            const int64_t now = nowMs();
+            int n = 0;
+            for (auto& s : bd->slots)
+            {
+                if (n >= maxOut) break;
+                if (&s == self || s.owner.load() == 0 || s.group.load() != (uint32_t) g) continue;
+                if (now - s.aliveMs.load() > aliveTimeoutMs) continue;
+                const uint32_t k = s.kind.load();
+                bool ok = false;
+                for (int i = 0; i < numKindsWanted; ++i) ok = ok || k == (uint32_t) kinds[i];
+                if (! ok) continue;
+                out[n] = {};
+                fill (*bd, s, s.valuesMs.load(), now, out[n]);
+                ++n;
+            }
+            return n;
+        }
+
+        // 相手を選ぶ（0 = おまかせ）。メッセージスレッドから
+        void setPreferred (Kind k, uint64_t owner)
+        {
+            if ((uint32_t) k < (uint32_t) numKinds) prefer[k].store (owner, std::memory_order_relaxed);
         }
 
         // 同じグループに何人いるか（自分を除く。画面の表示用）
@@ -264,6 +332,17 @@ namespace plink
         }
 
     private:
+        static void fill (const Board& bd, const Slot& s, int64_t vm, int64_t now, Peer& out)
+        {
+            out.found = true;
+            out.kind = s.kind.load (std::memory_order_relaxed);
+            for (int i = 0; i < numValues; ++i) out.v[i] = s.v[i].load (std::memory_order_relaxed);
+            out.valuesAgeMs = vm > 0 ? now - vm : 1 << 30;
+            out.owner = s.owner.load (std::memory_order_relaxed);
+            out.slotIndex = (int) (&s - bd.slots);
+            readName (s, out.name);
+        }
+
         static void readName (const Slot& s, char* dst)
         {
             for (int tries = 0; tries < 4; ++tries)
@@ -306,6 +385,7 @@ namespace plink
         uint64_t id = 1;
         std::atomic<Slot*> slot { nullptr };
         std::atomic<int> group { 0 };
+        std::atomic<uint64_t> prefer[numKinds] {};
         std::string myName;
     };
 }

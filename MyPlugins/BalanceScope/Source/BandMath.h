@@ -66,11 +66,9 @@ namespace bandmath
         float lowHz = 0.0f, highHz = 0.0f, peakHz = 0.0f;
     };
 
-    // 150 Hz〜12 kHz で、許容幅（参照曲と比べるときは refTol）をいちばん大きく超えている山を探す。
-    // db は normalise 済み。refDb が空なら目標カーブと比べる。
-    // 山のすそ（超えている量が山の 1/3 より大きい所）を範囲にする。幅は最低 2/3 オクターブ、最大 2 オクターブ。
-    inline Excess findExcess (const std::vector<float>& db, const std::vector<float>& centers, const TargetCurve& t,
-                              const std::vector<float>& refDb = {}, float refTol = 2.0f)
+    // 「許容幅を何 dB 超えているか」を帯域ごとに（となり合う 3 帯域＝半オクターブでならす。測れない所は -100）
+    inline std::vector<float> overAmounts (const std::vector<float>& db, const std::vector<float>& centers, const TargetCurve& t,
+                                           const std::vector<float>& refDb, float refTol)
     {
         const size_t n = std::min (db.size(), centers.size());
         std::vector<float> over (n, -100.0f);
@@ -84,16 +82,23 @@ namespace bandmath
             }
             else over[k] = db[k] - targetDb (t, centers[k]) - targetTol (t, centers[k]);
         }
-        // となり合う 3 帯域（半オクターブ）でならす：細いギザギザに反応しないように
+        // 細いギザギザに反応しないように
         std::vector<float> sm (n, -100.0f);
         for (size_t k = 1; k + 1 < n; ++k)
             if (over[k - 1] > -99.0f && over[k] > -99.0f && over[k + 1] > -99.0f)
                 sm[k] = (over[k - 1] + over[k] + over[k + 1]) / 3.0f;
+        return sm;
+    }
 
+    // sm（overAmounts の結果）の 150 Hz〜12 kHz で、いちばん大きい山を探す。
+    // 山のすそ（超えている量が山の 1/3 より大きい所）を範囲にする。幅は最低 2/3 オクターブ、最大 2 オクターブ。
+    inline Excess peakOf (const std::vector<float>& sm, const std::vector<float>& centers, float minPeak = 0.0f)
+    {
+        const size_t n = std::min (sm.size(), centers.size());
         Excess e;
         int best = -1;
         for (size_t k = 0; k < n; ++k)
-            if (centers[k] >= 150.0f && centers[k] <= 12000.0f && sm[k] > 0.0f && (best < 0 || sm[k] > sm[(size_t) best]))
+            if (centers[k] >= 150.0f && centers[k] <= 12000.0f && sm[k] > minPeak && (best < 0 || sm[k] > sm[(size_t) best]))
                 best = (int) k;
         if (best < 0) return e;
 
@@ -115,5 +120,33 @@ namespace bandmath
         e.highHz = hi;
         e.peakHz = pk;
         return e;
+    }
+
+    // いちばん出すぎの帯域。db は normalise 済み。refDb が空なら目標カーブと比べる。
+    inline Excess findExcess (const std::vector<float>& db, const std::vector<float>& centers, const TargetCurve& t,
+                              const std::vector<float>& refDb = {}, float refTol = 2.0f)
+    {
+        return peakOf (overAmounts (db, centers, t, refDb, refTol), centers);
+    }
+
+    // 上位 2 か所。2 番目は 1 番目の範囲（とその外 1/3 オクターブ）に重ならない所で、0.5 dB 以上超えているもの
+    inline void findExcess2 (const std::vector<float>& db, const std::vector<float>& centers, const TargetCurve& t,
+                             const std::vector<float>& refDb, Excess& first, Excess& second, float refTol = 2.0f)
+    {
+        auto sm = overAmounts (db, centers, t, refDb, refTol);
+        first = peakOf (sm, centers);
+        second = {};
+        if (first.excessDb <= 0.0f) return;
+        const float guard = std::pow (2.0f, 1.0f / 3.0f);
+        for (size_t k = 0; k < sm.size() && k < centers.size(); ++k)
+            if (centers[k] >= first.lowHz / guard && centers[k] <= first.highHz * guard) sm[k] = -100.0f;
+        second = peakOf (sm, centers, 0.5f);
+        // 2 番目の範囲が 1 番目に食い込まないように切る
+        if (second.excessDb > 0.0f)
+        {
+            if (second.peakHz < first.peakHz) second.highHz = std::min (second.highHz, first.lowHz);
+            else                              second.lowHz = std::max (second.lowHz, first.highHz);
+            if (second.highHz <= second.lowHz * 1.05f) second = {};
+        }
     }
 }

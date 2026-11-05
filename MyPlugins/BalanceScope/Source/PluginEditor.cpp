@@ -64,16 +64,41 @@ BalanceScopeEditor::BalanceScopeEditor (BalanceScopeProcessor& p) : AudioProcess
     updateRefControls();
 
     // Plugin Link の帯（いちばん下）
+    windowBox.addItemList ({ "WHOLE SONG", "LAST 10 s" }, 1);
+    windowBox.setColour (juce::ComboBox::backgroundColourId, panel.brighter (0.15f));
+    windowBox.setColour (juce::ComboBox::textColourId, curve);
+    windowBox.setTooltip ("Find the harsh band from the whole average, or from the last 10 seconds only");
+    windowAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (processor.apvts, "linkWindow", windowBox);
+    linkBar.addAndMakeVisible (windowBox);
+    linkBar.extra = &windowBox;
+    linkBar.extraWidth = 118;
+    linkBar.extraLabel = "JUDGE BY";
+    linkBar.setSources (processor.link, { plink::kindVelvetTamer, plink::kindGainStage });
     linkBar.status = [this] (bool& lit)
     {
         const auto li = processor.getLinkInfo();
-        if (! li.on) return juce::String ("Plugin Link OFF  -  set the same LINK number on Velvet Tamer to send the harsh band to its FOCUS");
-        juce::String who = li.peers > 0 ? juce::String (li.peers) + " linked plugin" + (li.peers > 1 ? "s" : "") : juce::String ("no other plugin on this LINK yet");
-        if (! li.valid) return "Listening...  (" + who + ")";
-        if (li.excessDb <= 0.0f) return "Balanced - nothing to send  (" + who + ")";
+        if (! li.on) return juce::String ("Plugin Link OFF  -  same LINK number as Velvet Tamer / Fader Pilot / Gain Stage to connect");
+        juce::StringArray parts;
+        if (! li.valid) parts.add (li.recent ? "Listening (needs 3 s of the last 10 s)..." : "Listening...");
+        else if (li.first.excessDb <= 0.0f) parts.add ("Balanced - nothing too loud");
+        else
+        {
+            juce::String a = "Too loud: " + plink::hzText (li.first.peakHz) + " +" + juce::String (li.first.excessDb, 1) + " dB";
+            if (li.second.excessDb > 0.0f)
+                a << ",  " << plink::hzText (li.second.peakHz) << " +" << juce::String (li.second.excessDb, 1) << " dB";
+            parts.add (a);
+        }
+        if (li.tamer.found)
+            parts.add ("Velvet Tamer cutting " + juce::String (li.tamer.v[plink::vt::maxReductionDb], 1) + " dB");
+        if (li.gain.found)
+        {
+            const float gdb = li.gain.v[plink::gs::gainDb];
+            parts.add ("Gain Stage " + juce::String (gdb > 0.05f ? "+" : "") + juce::String (gdb, 1) + " dB"
+                       + (li.gain.v[plink::gs::learned] > 0.5f ? " (learned)" : ""));
+        }
+        if (li.peers == 0) parts.add ("no other plugin on this LINK yet");
         lit = li.peers > 0;
-        return "Sending: too much around " + plink::hzText (li.peakHz) + " (+" + juce::String (li.excessDb, 1) + " dB)  ->  "
-             + plink::hzText (li.lowHz) + " - " + plink::hzText (li.highHz) + "   (" + who + ")";
+        return parts.joinIntoString ("   |   ");
     };
     addAndMakeVisible (linkBar);
 
@@ -333,6 +358,7 @@ void BalanceScopeEditor::drawGraph (juce::Graphics& g, juce::Rectangle<float> r)
     if (! liveDb.empty()) drawCurve (liveDb, live.withAlpha (0.55f), 1.2f);
     if (comparing)        drawCurve (refDb, refCol, 2.0f);
     if (hasData)          drawCurve (avgDb, curve, 2.5f);
+    drawLinkOverlay (g, r, xOf);
     g.restoreState();
 
     // 凡例
@@ -342,6 +368,44 @@ void BalanceScopeEditor::drawGraph (juce::Graphics& g, juce::Rectangle<float> r)
     g.setColour (live);            g.drawText ("LIVE",   legend.removeFromRight (36), juce::Justification::centredRight);
     g.setColour (curve);           g.drawText ("AVERAGE", legend.removeFromRight (64), juce::Justification::centredRight);
     if (comparing) { g.setColour (refCol); g.drawText ("REF " + juce::String (slotNames[compareSlot()]), legend.removeFromRight (52), juce::Justification::centredRight); }
+}
+
+// Plugin Link：送っている「出すぎの帯域」（ピンクの帯）と、Velvet Tamer がいま削っている量（上から下がる青緑の棒）
+void BalanceScopeEditor::drawLinkOverlay (juce::Graphics& g, juce::Rectangle<float> r, const std::function<float (float)>& xOf)
+{
+    const auto li = processor.getLinkInfo();
+    if (! li.on) return;
+    const auto pink = juce::Colour (0xffff8fb0), teal = juce::Colour (0xff6fd6c9);
+    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+    auto band = [&] (const bandmath::Excess& e, float alpha, const juce::String& tag)
+    {
+        if (e.excessDb <= 0.0f || e.highHz <= e.lowHz) return;
+        const float x0 = xOf (e.lowHz), x1 = xOf (e.highHz);
+        g.setColour (pink.withAlpha (alpha));
+        g.fillRect (juce::Rectangle<float> (x0, r.getY(), x1 - x0, r.getHeight()));
+        g.setColour (pink.withAlpha (0.85f));
+        g.drawText (tag + " +" + juce::String (e.excessDb, 1), juce::Rectangle<float> (x0, r.getBottom() - 16, juce::jmax (60.0f, x1 - x0), 14),
+                    juce::Justification::centredLeft);
+    };
+    if (li.valid)
+    {
+        band (li.first, 0.13f, "1");
+        band (li.second, 0.07f, "2");
+    }
+    if (li.tamer.found)
+    {
+        const float full = r.getHeight() * 0.22f;   // 12 dB 削ると帯の 22 % まで下がる
+        g.setColour (teal.withAlpha (0.55f));
+        for (int i = 0; i < plink::vt::numBands; ++i)
+        {
+            const float red = juce::jlimit (0.0f, 12.0f, -li.tamer.v[plink::vt::band0 + i]);
+            if (red < 0.05f) continue;
+            const float x0 = xOf (plink::vt::bandEdgeHz (i)), x1 = xOf (plink::vt::bandEdgeHz (i + 1));
+            g.fillRect (juce::Rectangle<float> (x0 + 1.0f, r.getY(), x1 - x0 - 2.0f, full * red / 12.0f));
+        }
+        g.setColour (teal.withAlpha (0.9f));
+        g.drawText ("VELVET TAMER CUT", juce::Rectangle<float> (r.getX() + 4, r.getY() + 2, 140, 14), juce::Justification::centredLeft);
+    }
 }
 
 // 参照との差だけを表示（上 = 自分のミックスのほうが多い）

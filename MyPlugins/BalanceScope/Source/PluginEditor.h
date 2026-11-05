@@ -20,6 +20,7 @@ private:
     void drawDiff (juce::Graphics&, juce::Rectangle<float>);
     void drawBroad (juce::Graphics&, juce::Rectangle<float>);
     void drawLoudness (juce::Graphics&, juce::Rectangle<float>);
+    void drawLinkOverlay (juce::Graphics&, juce::Rectangle<float>, const std::function<float (float)>& xOf);
 
     // 参照カーブ（プロジェクトに保存される。apvts.state の子 "REFS" に入れる）
     juce::ValueTree refsTree();
@@ -49,6 +50,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> targetAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> tiltAttachment, lowAttachment;
     juce::Rectangle<int> graphArea, broadArea, loudArea, refInfoArea;
+    juce::ComboBox windowBox;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> windowAttachment;
     plink::LinkBar linkBar { processor.apvts, juce::Colour (0xffff8fb0), juce::Colour (0xff1a1f26), juce::Colour (0xfff2f2f2) };
     juce::String flashText;
     int flashTicks = 0;

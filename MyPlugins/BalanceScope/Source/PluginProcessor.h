@@ -42,8 +42,9 @@ public:
     // UI側から呼ぶ
     struct Snapshot
     {
-        std::vector<double> avgPower, livePower;
+        std::vector<double> avgPower, livePower, recentPower;   // recent = 直近 10 秒くらい（Plugin Link の LAST 10 s 用）
         int frames = 0;
+        double recentSecs = 0.0;
         double sampleRate = 48000.0;
         bool playing = false;
     };
@@ -58,10 +59,19 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
-    // Plugin Link（同じ LINK 番号の Velvet Tamer へ「出すぎの帯域」を送る）
+    // Plugin Link（同じ LINK 番号の Velvet Tamer へ「出すぎの帯域」、Fader Pilot へオケの音量を送る。
+    // Velvet Tamer の削り量と Gain Stage の GAIN を受け取って表示する）
     void updateTrackProperties (const TrackProperties& p) override { if (p.name.has_value()) link.setTrackName (*p.name); }
-    struct LinkInfo { bool on = false, valid = false; float excessDb = 0, lowHz = 0, highHz = 0, peakHz = 0; int peers = 0; };
+    struct LinkInfo
+    {
+        bool on = false, valid = false, recent = false;
+        bandmath::Excess first, second;
+        float musicDb = -120.0f;
+        int peers = 0;
+        plink::Peer tamer, gain;   // found = 見つかった
+    };
     LinkInfo getLinkInfo() const;
+    plink::Link link { plink::kindBalanceScope, apvts };
 
 private:
     void timerCallback() override;   // 2 回/秒：出すぎの帯域を計算して掲示板へ
@@ -84,7 +94,16 @@ private:
     std::vector<float> linkCenters = bandmath::makeCenters();
     Snapshot linkSnap;
     LinkInfo linkInfo;               // メッセージスレッドだけで読み書き
-    plink::Link link { plink::kindBalanceScope, apvts };
+
+    // オケの音量（Fader Pilot と同じ測り方：左右を足して 60 Hz 以下を切り、0.4 秒でならした RMS）
+    struct Hp { double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+                float run (float x) { const double y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; return (float) y; } };
+    Hp musicHp;
+    double musicMs = 0.0, musicCoef = 0.0;
+    std::atomic<float> musicLevel { -120.0f };
+
+    std::vector<double> recentPower;
+    double recentSecs = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BalanceScopeProcessor)
 };

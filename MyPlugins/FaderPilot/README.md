@@ -101,6 +101,19 @@
 2. 両方の LINK を **1** にする
 3. 再生すると、Horizon Spread の帯に `SPREAD -12 %` のように今の抑え具合が出る
 
+### FOLLOW MUSIC をサイドチェーンなしで（v1.2）
+オケのバス（ボーカル以外をまとめたバス）に **Balance Scope** を挿して、Fader Pilot と同じ LINK 番号にすると、
+Balance Scope が測ったオケの音量で FOLLOW MUSIC が動きます。Logic のサイドチェーンの設定はいりません。
+1. ボーカル以外のトラックを 1 つのバス（Aux）にまとめ、そこに Balance Scope を挿す
+2. ボーカルの Fader Pilot と Balance Scope の LINK を同じ番号にする
+3. Fader Pilot の FOLLOW MUSIC を ON → グラフの右上に `MUSIC (LINK) -14.0 dB -> aim -12.0 dB` と出れば OK
+- サイドチェーンにも音が来ているときは、サイドチェーンのほうを使います
+- Balance Scope はボーカルが入っていないバスに挿してください（マスターだとボーカル自身の音も混ざります）
+- **FROM**（LINK の右、v1.3〜）… 同じ LINK に同じ種類の相手が 2 つ以上いるとき、どの Balance Scope のオケの音量を使うか選べます。
+  **AUTO** は「いちばん新しく送ってきた相手」。選んだ相手はトラック名で覚えるので、プロジェクトを開き直しても同じ相手につながります
+  （その相手がいないときは `(not here)` と出て、AUTO と同じ動きになります）
+
 ## 変更履歴
+- v1.2.0 … Plugin Link：FOLLOW MUSIC で Balance Scope が送るオケの音量を使える（サイドチェーン不要）、FROM（相手選び）
 - v1.1.0 … Plugin Link（LINK 1〜4。フェーダーの位置を Horizon Spread へ送る）
 - v1.0.0 … 最初の版

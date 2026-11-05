@@ -73,6 +73,7 @@ namespace fp
             voiceCoef = coefFor (0.040);
             musicCoef = coefFor (0.400);
             paramCoef = coefFor (0.020);
+            linkCoef = coefFor (0.050);   // Balance Scope 側で 0.4 秒ならしてあるので、ここはブロックの段差を消すだけ
             pointEvery = std::max (1, (int) std::lround (sr * 0.010));
             reset();
         }
@@ -80,7 +81,7 @@ namespace fp
         void reset()
         {
             voiceHp.reset(); voiceLp.reset(); musicHp.reset();
-            voiceMs = 0.0; musicMs = 0.0;
+            voiceMs = 0.0; musicMs = 0.0; linkMs = 0.0;
             gainDb = settings.autoRide ? 0.0f : settings.manualDb;
             manualCur = settings.manualDb;
             outCur = std::pow (10.0f, settings.outDb / 20.0f);
@@ -88,6 +89,11 @@ namespace fp
         }
 
         void setSettings (const Settings& s) { settings = s; }
+
+        // Plugin Link で受け取ったオケの音量（Balance Scope から。ok = 新しい値が来ている）。
+        // サイドチェーンに音が来ていないときだけ、こちらを FOLLOW MUSIC に使う
+        void setLinkMusic (bool ok, float db) { linkOk = ok; linkTargetMs = ok ? std::pow (10.0, db / 10.0) : 0.0; }
+        bool isMusicFromLink() const { return currentFromLink.load (std::memory_order_relaxed); }
 
         // ch はその場で書き換える。sc はサイドチェーン（なければ nullptr / 0）。読むだけ
         void process (float* const* ch, int numCh, int numSamples, const float* const* sc = nullptr, int numSc = 0)
@@ -117,9 +123,12 @@ namespace fp
                     musicMs += ((double) m * m - musicMs) * musicCoef;
                 }
                 else musicMs += (0.0 - musicMs) * musicCoef;
+                linkMs += (linkTargetMs - linkMs) * linkCoef;
 
                 const float voiceDb = toDb (voiceMs);
-                const float musicDb = toDb (musicMs);
+                const bool scHas = numSc > 0 && toDb (musicMs) > -60.0f;
+                fromLink = ! scHas && linkOk;
+                const float musicDb = toDb (fromLink ? linkMs : musicMs);
                 const bool musicOk = musicDb > -60.0f;
                 const float target = settings.follow ? (musicOk ? musicDb + settings.offsetDb : lastTarget)
                                                      : settings.targetDb;
@@ -156,7 +165,8 @@ namespace fp
             }
             currentGain.store (gainDb, std::memory_order_relaxed);
             currentActive.store (lastActive, std::memory_order_relaxed);
-            currentMusic.store (numSc > 0 ? musicDb() : -120.0f, std::memory_order_relaxed);
+            currentMusic.store (fromLink ? toDb (linkMs) : (numSc > 0 ? musicDb() : -120.0f), std::memory_order_relaxed);
+            currentFromLink.store (fromLink, std::memory_order_relaxed);
         }
 
         // 今のフェーダー位置（dB）。オートメーションへの書き込みと画面で使う
@@ -201,7 +211,9 @@ namespace fp
         Point history[historySize] {};
         std::atomic<int> writePos { 0 };
         std::atomic<float> currentGain { 0.0f }, currentMusic { -120.0f };
-        std::atomic<bool> currentActive { false };
+        std::atomic<bool> currentActive { false }, currentFromLink { false };
+        bool linkOk = false, fromLink = false;
+        double linkMs = 0.0, linkTargetMs = 0.0, linkCoef = 0.0;
         bool lastActive = false;
     };
 }

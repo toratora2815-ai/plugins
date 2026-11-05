@@ -115,6 +115,7 @@ HorizonSpreadEditor::HorizonSpreadEditor (HorizonSpreadProcessor& p)
     linkBar.extra = &duckSlider;
     linkBar.extraWidth = 200;
     linkBar.extraLabel = "VOCAL DUCK";
+    linkBar.setSources (processor.link, { plink::kindFaderPilot });
     linkBar.status = [this] (bool& lit)
     {
         auto& lk = processor.link;

@@ -86,6 +86,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout VelvetTamerProcessor::create
     v.push_back (std::make_unique<B> (juce::ParameterID { "sidechain", 3 }, "External Sidechain", false));
     // v1.3 で追加（バージョン 4）
     v.push_back (plink::makeGroupParameter (4));
+    // v1.4 で追加（バージョン 5）：Balance Scope の「出すぎの量」に合わせて DEPTH を少し上下させる
+    v.push_back (std::make_unique<B> (juce::ParameterID { "linkDepth", 5 }, "Link Depth Follow", true));
 
     return { v.begin(), v.end() };
 }
@@ -116,6 +118,19 @@ void VelvetTamerProcessor::prepareToPlay (double sampleRate, int)
         engines[i].prepare (sampleRate, numCh, i == 1);
     }
     currentRate = sampleRate;
+    // 削り量を送る 16 帯域が、画面用の点（20 Hz〜20 kHz を対数で 256 点）のどこからどこか
+    for (int i = 0; i < plink::vt::numBands; ++i)
+    {
+        auto idx = [] (float f)
+        {
+            const float lo = vt::TamerEngine::displayLowHz, hi = vt::TamerEngine::displayHighHz;
+            return juce::jlimit (0, vt::TamerEngine::displayPoints - 1,
+                                 (int) std::floor (std::log (f / lo) / std::log (hi / lo) * vt::TamerEngine::displayPoints));
+        };
+        bandFrom[i] = idx (plink::vt::bandEdgeHz (i));
+        bandTo[i] = juce::jmax (bandFrom[i], idx (plink::vt::bandEdgeHz (i + 1)) - 1);
+        bandRed[i] = 0.0f;
+    }
     activeLowLatency = apvts.getRawParameterValue ("lowlatency")->load() > 0.5f;
     setLatencySamples (engines[activeLowLatency ? 1 : 0].getLatency());
 }
@@ -177,13 +192,36 @@ void VelvetTamerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     applyLinkFocus (settings, main.getNumSamples());
     engine.setSettings (settings);
     engine.process (main.getArrayOfWritePointers(), main.getNumChannels(), main.getNumSamples(), sc, numSc);
+    publishReduction (engine, main.getNumSamples());
+}
+
+// 帯域ごとに「いちばん削っている所」を約 0.5 秒でならして掲示板へ
+void VelvetTamerProcessor::publishReduction (const vt::TamerEngine& engine, int numSamples)
+{
+    if (! link.on()) return;
+    engine.copyDisplay (dispSpecTmp, dispGrTmp);
+    const float a = 1.0f - std::exp (-(float) numSamples / (float) (0.5 * currentRate.load()));
+    auto& ep = link.ep();
+    for (int i = 0; i < plink::vt::numBands; ++i)
+    {
+        float m = 0.0f;
+        for (int p = bandFrom[i]; p <= bandTo[i]; ++p) m = juce::jmin (m, dispGrTmp[p]);
+        bandRed[i] += (m - bandRed[i]) * a;
+        ep.publish (plink::vt::band0 + i, bandRed[i]);
+    }
+    ep.publish (plink::vt::maxReductionDb, engine.getMaxReductionDb());
+    ep.stamp();
+    ep.heartbeat();
 }
 
 // Balance Scope が「出すぎ」（許容幅を 0.5 dB 以上超えた所）を送ってきている間は、FOCUS をその帯域へ。
-// 来なくなったら自分のつまみの値へ戻る。どちらも約 0.8 秒（時定数）でなめらかに動く（周波数の対数で）。
+// 2 か所目も送ってきていれば、2 つ目の FOCUS としてそこにも効かせる（フェードで出入り）。
+// LINK DEPTH が ON なら、出すぎの量に合わせて DEPTH を 0.85〜1.3 倍に（+1 dB でちょうど 1 倍）。
+// 来なくなったら自分のつまみの値へ戻る。どれも約 0.8 秒（時定数）でなめらかに動く（周波数は対数で）。
 void VelvetTamerProcessor::applyLinkFocus (vt::Settings& s, int numSamples)
 {
     float wantLo = std::log2 (juce::jmax (20.0f, s.lowHz)), wantHi = std::log2 (juce::jmax (20.0f, s.highHz));
+    float wantLo2 = curLo2, wantHi2 = curHi2, wantAmt2 = 0.0f, wantDepth = 1.0f;
     bool following = false;
     if (link.on())
     {
@@ -195,21 +233,50 @@ void VelvetTamerProcessor::applyLinkFocus (vt::Settings& s, int numSamples)
             wantLo = std::log2 (p.v[plink::bs::lowHz]);
             wantHi = std::log2 (juce::jmin (20000.0f, p.v[plink::bs::highHz]));
             following = true;
+            if (apvts.getRawParameterValue ("linkDepth")->load() > 0.5f)
+                wantDepth = juce::jlimit (0.85f, 1.3f, 0.85f + 0.15f * p.v[plink::bs::excessDb]);
+            if (p.v[plink::bs::excess2Db] >= 0.5f && p.v[plink::bs::low2Hz] >= 20.0f
+                && p.v[plink::bs::high2Hz] > p.v[plink::bs::low2Hz])
+            {
+                wantLo2 = std::log2 (p.v[plink::bs::low2Hz]);
+                wantHi2 = std::log2 (juce::jmin (20000.0f, p.v[plink::bs::high2Hz]));
+                // 2 か所目は 1 か所目より控えめ（超えた量の比で 0.5〜1）
+                wantAmt2 = juce::jlimit (0.5f, 1.0f, p.v[plink::bs::excess2Db] / juce::jmax (0.5f, p.v[plink::bs::excessDb]));
+            }
         }
     }
     if (curLo < 0.0f) { curLo = wantLo; curHi = wantHi; }
+    if (curLo2 < 0.0f || curAmt2 <= 0.001f) { curLo2 = wantLo2; curHi2 = wantHi2; }   // 消えている間は場所だけ先に合わせる
     const float a = 1.0f - std::exp (-(float) numSamples / (float) (0.8 * currentRate.load()));
-    curLo += (wantLo - curLo) * a;
-    curHi += (wantHi - curHi) * a;
-    if (std::abs (curLo - wantLo) < 1.0e-3f) curLo = wantLo;
-    if (std::abs (curHi - wantHi) < 1.0e-3f) curHi = wantHi;
+    auto glide = [a] (float& cur, float want, float snap)
+    {
+        cur += (want - cur) * a;
+        if (std::abs (cur - want) < snap) cur = want;
+    };
+    glide (curLo, wantLo, 1.0e-3f);
+    glide (curHi, wantHi, 1.0e-3f);
+    if (curLo2 >= 0.0f) { glide (curLo2, wantLo2, 1.0e-3f); glide (curHi2, wantHi2, 1.0e-3f); }
+    glide (curAmt2, wantAmt2, 1.0e-3f);
+    glide (curDepth, wantDepth, 1.0e-3f);
 
-    // エンジンは値が変わるたびに FOCUS の形を作り直すので、1/48 オクターブ刻みにする
+    // エンジンは値が変わるたびに FOCUS の形を作り直すので、1/48 オクターブ・1/32 刻みにする
     auto q = [] (float l2) { return std::exp2 (std::round (l2 * 48.0f) / 48.0f); };
     const bool moved = following || curLo != wantLo || curHi != wantHi;
     if (moved) { s.lowHz = q (curLo); s.highHz = q (curHi); }
+    const float amt2 = std::round (curAmt2 * 32.0f) / 32.0f;
+    if (amt2 > 0.0f && curLo2 >= 0.0f)
+    {
+        s.lowHz2 = q (curLo2);
+        s.highHz2 = q (curHi2);
+        s.amount2 = amt2;
+    }
+    s.depth = juce::jlimit (0.0f, 1.0f, s.depth * curDepth);
     shownLow = s.lowHz;
     shownHigh = s.highHz;
+    shownLow2 = s.lowHz2;
+    shownHigh2 = s.highHz2;
+    shownAmount2 = s.amount2;
+    shownDepthScale = curDepth;
     linkFollowing = following;
 }
 

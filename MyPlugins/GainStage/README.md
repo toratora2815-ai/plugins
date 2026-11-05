@@ -44,10 +44,18 @@
 
 両方使うときは「Gain Stage → （EQ・コンプなど）→ Fader Pilot」の順がおすすめです。
 
+## Plugin Link：Balance Scope に GAIN を知らせる（v1.1）
+自作プラグイン同士が裏で情報をやりとりします。画面のいちばん下の帯の **LINK** を、つなげたいプラグイン同士で**同じ番号（1〜4）**にするだけです。最初は OFF。
+- Gain Stage は、今の GAIN・TARGET・RMS/PEAK・LEARN したか・入口と出口の音量を送ります
+- 同じ LINK の **Balance Scope** の帯に `Gain Stage +4.5 dB (learned)` のように出ます。
+  「このトラックは入口でどれだけ持ち上げてあるか」を、Balance Scope を見ながら確かめられます
+- 音は何も変わりません（知らせるだけ）
+
 ## メモ
 - メーターの RMS は、0 dB のサイン波で -3 dB になる測り方です
 - モノラル・ステレオどちらのトラックにも挿せます
 - PLUGIN_CODE: Gnst
 
 ## 変更履歴
+- v1.1.0 … Plugin Link（LINK 1〜4。GAIN を Balance Scope へ知らせる）
 - v1.0.0 … 最初の版

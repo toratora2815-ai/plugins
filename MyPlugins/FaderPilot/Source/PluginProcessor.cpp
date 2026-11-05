@@ -132,6 +132,12 @@ void FaderPilotProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     scConnected = numSc > 0;
 
     engine.setSettings (readSettings());
+    {
+        // Plugin Link：同じ LINK の Balance Scope（オケのバスに挿したもの）が送るオケの音量
+        plink::Peer p;
+        const bool ok = link.on() && link.ep().find (plink::kindBalanceScope, p) && p.valuesAgeMs < 500;
+        engine.setLinkMusic (ok, ok ? p.v[plink::bs::musicDb] : -120.0f);
+    }
     engine.process (main.getArrayOfWritePointers(), main.getNumChannels(), main.getNumSamples(), sc, numSc);
 
     // Plugin Link へ：今のフェーダー位置と、声が鳴っているか（ブロックごと）

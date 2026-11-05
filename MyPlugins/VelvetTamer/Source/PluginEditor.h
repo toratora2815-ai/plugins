@@ -60,7 +60,7 @@ private:
     VelvetTamerProcessor& processor;
 
     Knob depth, sharpness, selectivity, attack, release, low, high, mix, output;
-    Toggle delta, link, lowLatency, sidechain;
+    Toggle delta, link, lowLatency, sidechain, depthFollow;
     juce::ComboBox presetBox;
     plink::LinkBar linkBar { processor.apvts, juce::Colour (0xff6fd6c9), juce::Colour (0xff1b1621), juce::Colour (0xffefe9f3) };
 

@@ -58,6 +58,8 @@
 - Balance Scope（BalanceScope）… 帯域バランス解析。ジャンル別目標カーブ、4帯域メーター、RESET
   v1.1.0: 参考曲のカーブを CAPTURE して比べる（REF A/B/C、apvts.state の子 "REFS" に保存、DIFF 表示）、ラウドネス（INTEGRATED/SHORT-TERM/MOMENTARY/PEAK/PLR、LoudnessMeter.h）、Custom の目標カーブ（ID customTilt / customLow）
   v1.2.0: Plugin Link で「出すぎの帯域」を送る（BandMath.h の findExcess。平均 3 秒以上、150 Hz〜12 kHz、REF と比べているときは REF 基準）
+  v1.3.0: Link で上位 2 か所（findExcess2）、JUDGE BY（ID linkWindow、WHOLE / LAST 10 s＝時定数 10 秒の recentPower）、オケの音量 musicDb をブロックごとに送る、
+  Velvet Tamer の削り量（グラフに青緑の棒）と Gain Stage の GAIN を受けて表示
 - Reference（Reference）… 自分の曲と参照曲の聴き比べプラグイン（ファイル／ライブ入力、音量自動合わせ）
 - Horizon Spread（HorizonSpread）… ステレオ感を出す手法の全部入り。Mid は触らず Side だけ加工（モノラル互換）。
   第1段階 SHAPE ページ: WIDTH 3帯域＋AUTO / AIR / SIDE DRIVE / TRANSIENT、SAFETY: BASS MONO / GUARD、MONO CHECK、ベクトルスコープ。
@@ -66,17 +68,21 @@
   v1.2.0: AUTO GAIN（標準 ON）、SIDE SOLO、内蔵プリセット11個、帯域ごとの広さメーター、MOTION のテンポ同期、
   SHIFT CLASSIC の L/R 選択、DYNAMIC（DYNAMICS タイル）。量のつまみはどのタイルでも右側に置く
   v1.3.0: Plugin Link で Fader Pilot がボーカルを上げている間 SPREAD を下げる（ID linkDuck、+6 dB・100% で半分。プリセットで変わらない）
+  v1.3.1: FROM（相手選び）、Plugin Link v2
 - Velvet Tamer（VelvetTamer）… レゾナンス抑制（耳に痛い響きを鳴った瞬間だけ自動で下げる）。STFT で「まわりより飛び出た所」を検出。
   DEPTH / SHARPNESS / SELECTIVITY / ATTACK / RELEASE / FOCUS LOW・HIGH / MIX / OUTPUT / DELTA / LINK。遅延 2048 サンプル（48k）。
   v1.1.0: グラフ上で FOCUS をドラッグ、WEIGHT（7 点固定周波数の効きの強弱カーブ、ID weight0〜6）、プリセットメニュー
   v1.2.0: LOW LATENCY（ID lowlatency、遅延 512 サンプル。エンジンを 2 つ用意して切り替え）、SIDECHAIN（ID sidechain、外部サイドチェーンの音で下げる帯域を決める）
   v1.3.0: Plugin Link で Balance Scope の出すぎ帯域へ FOCUS を自動で（applyLinkFocus、約 0.8 秒で追う。つまみは動かさない）
+  v1.4.0: 2 つ目の FOCUS（Settings の lowHz2/highHz2/amount2）、DEPTH FOLLOW（ID linkDepth、出すぎ量で DEPTH ×0.85〜1.3）、帯域ごとの削り量を送る（16 帯域）
 - Fader Pilot（FaderPilot）… ボーカルの音量を自動でフェーダーを上げ下げして揃える（遅延ゼロ）。TARGET / FLOOR / RANGE / SPEED / OUTPUT、
   AUTO RIDE（OFF で Ride パラメーター＝オートメーションをそのまま使う）、WRITE（再生中に Ride へ書き込み、Logic の Latch/Touch で記録）、
   FOLLOW MUSIC（サイドチェーンのオケの音量＋OFFSET を目標に）、プリセット8個
   v1.1.0: Plugin Link でフェーダー位置（rideDb）と声が鳴っているか（active）を送る
+  v1.2.0: FOLLOW MUSIC で、サイドチェーンに音がなければ同じ LINK の Balance Scope の musicDb を使う（RiderEngine::setLinkMusic）
 - Gain Stage（GainStage）… トラックの入口の音量をワンクリックでそろえる（遅延ゼロ）。LEARN（鳴っている所だけ 5 秒測り、TARGET になる GAIN を 1 回だけ入れる。
   -60 dB より小さい 100 ms は数えない）、TARGET / RMS・PEAK / Ø POLARITY / MONO / SWAP L/R、IN/OUT メーター。結果は apvts.state の "learnInfo"
+  v1.1.0: Plugin Link で GAIN / TARGET / LEARN 済みかなどを送る（Balance Scope が表示）
 - Reference Monitor（ReferenceMonitor）… 聴き比べ用の単体 Mac アプリ（macOS 14.2 以降、プロセスタップで Logic とミュージックの音を受け取る）。
   v1.1.0: LISTEN AS（PHONE / LAPTOP / EARBUDS / BT SPEAKER / CAR / CLUB の聞こえ方、ピンクノイズで音量を自動補正）、
   LEVEL に SPOTIFY / APPLE / YOUTUBE の音量正規化、メーターに各サービスで何 dB 上げ下げされるか
@@ -151,10 +157,13 @@
   toggle/on/off/melody/drums/mode/new/preview/history/autoKey/autoGate/octUp/octDown/mini/pin/panic/show を受ける
 
 - Plugin Link（MyPlugins/Shared/PluginLink.h・PluginLinkJuce.h）… 自作プラグイン同士の連携。
-  ~/Library/Application Support/MyPlugins/PluginLink-v1.bin を mmap した共有メモリの掲示板（64 席、atomic だけで読み書き、3 秒で不在、10 秒で席を回収）。
+  ~/Library/Application Support/MyPlugins/PluginLink-v2.bin を mmap した共有メモリの掲示板（64 席・数値 24 個、atomic だけで読み書き、3 秒で不在、10 秒で席を回収）。
+  v2 で並びを変えたので v1（PluginLink-v1.bin）の古い版とはつながらない。席の並びを変えるときはファイル名と magic も変える。
   各プラグインに ID `linkGroup`（OFF/1〜4）と、画面いちばん下の LinkBar（LINK の選択＋今の様子）。トラック名は updateTrackProperties で伝える。
-  今つながっているもの: Balance Scope → Velvet Tamer（FOCUS）、Fader Pilot → Horizon Spread（SPREAD を下げる）。
-  新しくつなぐときは Kind と送る数値の番号（namespace bs / fp のように）を PluginLink.h に足す
+  FROM（相手選び、LinkBar::setSources）… apvts.state の "linkFrom" に「種類番号|トラック名」で保存、Endpoint::setPreferred で find がその相手を優先。
+  今つながっているもの: Balance Scope → Velvet Tamer（FOCUS 2 か所・DEPTH）、Balance Scope → Fader Pilot（オケの音量）、
+  Fader Pilot → Horizon Spread（SPREAD を下げる）、Velvet Tamer → Balance Scope（削り量の表示）、Gain Stage → Balance Scope（GAIN の表示）。
+  新しくつなぐときは Kind と送る数値の番号（namespace bs / fp / vt / gs のように）を PluginLink.h に足す
 
 - Idea Catcher（IdeaCatcher）… 思いつきの鼻歌・口ドラムを録って、キーとテンポ入りの Logic プロジェクトにするメニューバー常駐アプリ（LSUIElement、Dock に出ない）。
   録音キー（Carbon の RegisterEventHotKey、最初は ⌃⌥I、アクセシビリティ不要）で録音／停止、黙って 4 秒でも止まる。マイクは録るときだけ開く。

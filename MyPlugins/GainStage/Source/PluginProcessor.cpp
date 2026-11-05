@@ -32,6 +32,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout GainStageProcessor::createLa
     v.push_back (std::make_unique<B> (juce::ParameterID { "polarity", 1 }, "Polarity Invert", false));
     v.push_back (std::make_unique<B> (juce::ParameterID { "mono", 1 }, "Mono", false));
     v.push_back (std::make_unique<B> (juce::ParameterID { "swap", 1 }, "Swap L/R", false));
+    // v1.1 で追加（バージョン 2）
+    v.push_back (plink::makeGroupParameter (2));
     return { v.begin(), v.end() };
 }
 
@@ -59,6 +61,20 @@ void GainStageProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     s.swap = f ("swap") > 0.5f;
     engine.setSettings (s);
     engine.process (buffer.getArrayOfWritePointers(), getMainBusNumInputChannels(), buffer.getNumSamples());
+
+    // Plugin Link へ（ブロックごと）
+    if (link.on())
+    {
+        auto& ep = link.ep();
+        ep.publish (plink::gs::gainDb, s.gainDb);
+        ep.publish (plink::gs::targetDb, f ("target"));
+        ep.publish (plink::gs::peakMode, f ("measure") > 0.5f ? 1.0f : 0.0f);
+        ep.publish (plink::gs::learned, hasLearned.load() ? 1.0f : 0.0f);
+        ep.publish (plink::gs::inDb, engine.getInRms());
+        ep.publish (plink::gs::outDb, engine.getOutRms());
+        ep.stamp();
+        ep.heartbeat();
+    }
 }
 
 void GainStageProcessor::toggleLearn()
@@ -93,6 +109,7 @@ void GainStageProcessor::timerCallback()
     else if (wasLearning && ! engine.isLearning())
         flash = "No signal while learning - play the track and press LEARN again";   // 無音だけで終わった
     wasLearning = engine.isLearning();
+    hasLearned = learnInfo().isNotEmpty();
 }
 
 void GainStageProcessor::getStateInformation (juce::MemoryBlock& destData)

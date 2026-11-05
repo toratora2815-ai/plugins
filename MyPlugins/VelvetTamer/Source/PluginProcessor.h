@@ -52,6 +52,11 @@ public:
     // 画面用：いま実際に使っている FOCUS と、つながって動かされているか
     float focusLowNow() const { return shownLow.load(); }
     float focusHighNow() const { return shownHigh.load(); }
+    // 2 つ目の FOCUS（amount = 0 なら無し）
+    float focusLow2Now() const { return shownLow2.load(); }
+    float focusHigh2Now() const { return shownHigh2.load(); }
+    float focusAmount2Now() const { return shownAmount2.load(); }
+    float depthScaleNow() const { return shownDepthScale.load(); }
     bool focusLinked() const { return linkFollowing.load(); }
     plink::Peer linkPeer() const { plink::Peer p; link.ep().find (plink::kindBalanceScope, p); return p; }
 
@@ -68,8 +73,15 @@ private:
 
     // FOCUS の追いかけ（log2 Hz、音の処理のスレッドだけ）
     void applyLinkFocus (vt::Settings& s, int numSamples);
-    float curLo = -1.0f, curHi = -1.0f;
+    float curLo = -1.0f, curHi = -1.0f, curLo2 = -1.0f, curHi2 = -1.0f, curAmt2 = 0.0f, curDepth = 1.0f;
     std::atomic<float> shownLow { 300.0f }, shownHigh { 16000.0f };
+    std::atomic<float> shownLow2 { 0.0f }, shownHigh2 { 0.0f }, shownAmount2 { 0.0f }, shownDepthScale { 1.0f };
+
+    // Plugin Link へ：帯域ごとの削り量（Balance Scope のグラフ用）
+    void publishReduction (const vt::TamerEngine& engine, int numSamples);
+    float dispSpecTmp[vt::TamerEngine::displayPoints] {}, dispGrTmp[vt::TamerEngine::displayPoints] {};
+    float bandRed[plink::vt::numBands] {};
+    int bandFrom[plink::vt::numBands] {}, bandTo[plink::vt::numBands] {};
     std::atomic<bool> linkFollowing { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VelvetTamerProcessor)

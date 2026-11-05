@@ -48,17 +48,29 @@ VelvetTamerEditor::VelvetTamerEditor (VelvetTamerProcessor& p)
 
     for (int i = 0; i < points; ++i) { shownSpec[i] = specBottom; shownGr[i] = 0.0f; shownSc[i] = specBottom; }
 
+    setupToggle (depthFollow, "linkDepth", "DEPTH FOLLOW");
+    depthFollow.button.setTooltip ("Plugin Link: push DEPTH a little harder when Balance Scope says the band is much too loud (0.85x - 1.3x)");
+    linkBar.addAndMakeVisible (depthFollow.button);
+    linkBar.extra = &depthFollow.button;
+    linkBar.extraWidth = 120;
+    linkBar.setSources (processor.link, { plink::kindBalanceScope });
     linkBar.status = [this] (bool& lit)
     {
         auto& lk = processor.link;
         if (! lk.on()) return juce::String ("Plugin Link OFF  -  set the same LINK number on Balance Scope to aim FOCUS at the band it finds too loud");
         const auto peer = processor.linkPeer();
-        if (! peer.found) return "LINK " + juce::String (lk.group()) + ": waiting for Balance Scope on this LINK  (using your FOCUS knobs)";
+        if (! peer.found)
+            return "LINK " + juce::String (lk.group()) + (lk.chosenPresent() ? ": waiting for Balance Scope" : ": the chosen Balance Scope is not here")
+                 + "  (using your FOCUS knobs)";
         if (processor.focusLinked())
         {
             lit = true;
-            return "FOCUS follows " + plink::Link::describe (peer) + ":  " + plink::hzText (processor.focusLowNow()) + " - "
-                 + plink::hzText (processor.focusHighNow()) + "  (+" + juce::String (peer.v[plink::bs::excessDb], 1) + " dB too loud)";
+            juce::String t = "FOCUS: " + plink::hzText (processor.focusLowNow()) + " - " + plink::hzText (processor.focusHighNow());
+            if (processor.focusAmount2Now() > 0.0f)
+                t << "  +  " << plink::hzText (processor.focusLow2Now()) << " - " << plink::hzText (processor.focusHigh2Now());
+            const float ds = processor.depthScaleNow();
+            if (std::abs (ds - 1.0f) > 0.02f) t << "   DEPTH x" << juce::String (ds, 2);
+            return t;
         }
         return plink::Link::describe (peer) + " finds nothing too loud  -  using your FOCUS knobs";
     };
@@ -390,9 +402,28 @@ void VelvetTamerEditor::drawDisplay (juce::Graphics& g, juce::Rectangle<float> r
         const float lo = processor.focusLowNow(), hi = processor.focusHighNow();
         const float x0 = juce::jlimit (plot.getX(), plot.getRight(), freqToX (juce::jmin (lo, hi), plot));
         const float x1 = juce::jlimit (plot.getX(), plot.getRight(), freqToX (juce::jmax (lo, hi), plot));
+        // 2 つ目の FOCUS（Plugin Link）があれば、そこも明るいまま（効きの強さに合わせて少し暗く）
+        const float amt2 = processor.focusAmount2Now();
+        float y0 = 0.0f, y1 = 0.0f;
+        if (amt2 > 0.0f)
+        {
+            y0 = juce::jlimit (plot.getX(), plot.getRight(), freqToX (processor.focusLow2Now(), plot));
+            y1 = juce::jlimit (plot.getX(), plot.getRight(), freqToX (processor.focusHigh2Now(), plot));
+        }
         g.setColour (juce::Colours::black.withAlpha (0.35f));
-        g.fillRect (plot.withRight (x0));
-        g.fillRect (plot.withLeft (x1));
+        juce::RectangleList<float> dark (plot);
+        dark.subtract (plot.withLeft (x0).withRight (x1));
+        if (amt2 > 0.0f && y1 > y0)
+        {
+            dark.subtract (plot.withLeft (y0).withRight (y1));
+            g.fillRectList (dark);
+            g.setColour (juce::Colours::black.withAlpha (0.35f * (1.0f - amt2)));
+            g.fillRect (plot.withLeft (y0).withRight (y1));
+            g.setColour (teal.withAlpha (0.6f));
+            g.drawVerticalLine ((int) y0, plot.getY(), plot.getBottom());
+            g.drawVerticalLine ((int) y1, plot.getY(), plot.getBottom());
+        }
+        else g.fillRectList (dark);
         const bool loFirst = lo <= hi;
         auto edgeLine = [&] (float x, int which)
         {
