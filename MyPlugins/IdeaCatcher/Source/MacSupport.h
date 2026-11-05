@@ -19,6 +19,9 @@ namespace mac
     struct HotKeyChoice { const char* label; int keyCode; int mods; };
     const std::vector<HotKeyChoice>& hotKeyChoices();
     bool registerHotKey (int choice, std::function<void()> onPress);
+    // 録音中だけのキー（slot 1 = テンポをたたく）。keyCode < 0 で外す
+    bool registerExtraHotKey (int slot, int keyCode, int mods, std::function<void()> onPress);
+    constexpr int kSpaceKey = 49;
 
     // ほかのアプリから: 分散通知 com.myplugins.ideacatcher.command、object = "toggle" / "show" / "open"
     void listenCommands (std::function<void (const std::string&)> onCommand);
@@ -33,4 +36,23 @@ namespace mac
 
     // ウィンドウを、全画面のアプリの上にも出せるようにして前へ（focus = キーボードもこちらへ）
     void showWindow (void* nsView, bool floating, bool focus);
+
+    // HUD 用: マウスを通す・どのデスクトップでも・全画面の上にも出る小さな窓にする
+    void makeOverlay (void* nsView);
+    // メニューバーの下の真ん中（x, y はスクリーン座標・左上原点）
+    void hudPosition (int width, int& x, int& y);
+
+    // Mac の通知。クリックされたら onClick(id)
+    void notify (const std::string& title, const std::string& body, const std::string& id);
+    void setNotificationHandler (std::function<void (const std::string&)> onClick);
+
+    // アクセシビリティの許可（prompt = 許可の画面を出す）
+    bool accessibilityTrusted (bool prompt);
+
+    // Logic で新しく開いたプロジェクト（windowsBefore にない窓）に、音声ファイルを 1 小節目から読み込む。
+    // 「ファイル → 読み込む → オーディオファイル」を押して、場所を入力する。終わったら（メインスレッドで）done(ok, 理由)
+    std::vector<std::string> logicWindowTitles();
+    // projectName: 開いた MIDI のファイル名（拡張子なし）。窓の名前にこれか「名称未設定 / Untitled」が入っているものだけを相手にする
+    void importAudioIntoLogic (const std::string& audioPath, const std::string& projectName, const std::vector<std::string>& windowsBefore,
+                               std::function<void (bool, const std::string&)> done);
 }

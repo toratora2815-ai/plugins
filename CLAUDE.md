@@ -136,6 +136,7 @@
   開く場所付きのリンク（マクロの中も）も、そのページのタブがある Chrome のウィンドウを使い回す（Google の書類は /d/番号 で見分ける）
   v1.20.0: 割り当ての分類に「Hum Keys」（Cat::HumKeys、remote が "hk:" で始まるものは sendRemote("humkeys", …)）。ページは足さず、本人が好きなキーに置く。
   Hum Keys が前面のときも「Logic が前面のときだけ」の対象（isRefMonitorFrontmost が humkeys も見る）
+  v1.21.0: 分類「Idea Catcher」（Cat::IdeaCatcher、remote "ic:" → sendRemote("ideacatcher", …)。toggle / overdub / catch / tap / open / show）。Idea Catcher が前面のときも「Logic が前面のときだけ」の対象
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）
 
 - Hum Keys（HumKeys）… 鼻歌・口ドラムをその場で MIDI にする単体 Mac アプリ。仮想 MIDI「Hum Keys」（MidiOutput::createNewDevice）で Logic へ。
@@ -172,6 +173,12 @@
   NSWorkspace で Logic（com.apple.logic10）に開かせる＝新しいプロジェクトになる。保存は ~/Music/Idea Catcher/<日時>/（.mid・Voice.wav・info.json）。
   分散通知 com.myplugins.ideacatcher.command（toggle / start / stop / show / open）。`--snapshot <フォルダ> [<wav>]` で画面を PNG に
   （VoiceEngine.h は Hum Keys 1.2.0 の写し。Hum Keys のエンジンを直したら、ここにも写す）
+  v1.1.0: さかのぼり録音（設定 preroll、マイクを開いたまま ring に約 32 秒。押した所から前の声のかたまり＝2 秒黙った所まで、直前 5 秒に声がなければなし。"catch" で直前だけ）、
+  タップ（録音中だけ Space を registerExtraHotKey(1,…)、idea::tapGrid）、カウントイン（countIn / countBpm / clickDuring、クリックは出力へ。gridT0 = カウント後の 1 拍目＋入出力の遅れ、gridStep 4）、
+  重ね録り（Layer = Result＋kind、Voice 2.wav…、info.json の "layers"。前のレイヤーを effectiveGrid で固定して、1 小節目から小節ループで流しながら録る。テンポ・キー固定）、
+  HUD（Hud、mac::makeOverlay、このアプリが前面でないときだけ）、通知（UNUserNotificationCenter、autoOpen OFF のとき。クリックで Logic）、
+  声を Logic へ（Voice for Logic.wav を作り、mac::importAudioIntoLogic が AX で ⇧⌘I のメニュー項目を押して ⇧⌘G でパス入力。窓は MIDI のファイル名か 名称未設定 で見分ける。アクセシビリティ許可が要る、設定 voiceToLogic）、
+  MIDI に "Key Am" のマーカー。Num Deck 1.21.0 に Cat::IdeaCatcher（remote "ic:…" → sendRemote("ideacatcher", …)）
 
 ## Claude からの提案（余った利用枠の活用）
 - Claude が自分で「次に作るもの・直すもの」を3つ提案し、本人が「GO」を出したら作る仕組み。指示書は `ideas/PROPOSAL_PROMPT.md`

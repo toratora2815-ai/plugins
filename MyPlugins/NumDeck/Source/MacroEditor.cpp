@@ -275,8 +275,8 @@ void MacroEditor::showAddActionMenu()
     std::map<int, juce::String> ids;
     int id = 1;
     const std::vector<Cat> order = host.mode == Deck::ModeLogic
-        ? std::vector<Cat> { Cat::Transport, Cat::Edit, Cat::Track, Cat::Window, Cat::File, Cat::RefMon, Cat::HumKeys, Cat::General, Cat::Browser }
-        : std::vector<Cat> { Cat::General, Cat::Browser, Cat::Edit, Cat::File, Cat::RefMon, Cat::HumKeys };
+        ? std::vector<Cat> { Cat::Transport, Cat::Edit, Cat::Track, Cat::Window, Cat::File, Cat::RefMon, Cat::HumKeys, Cat::IdeaCatcher, Cat::General, Cat::Browser }
+        : std::vector<Cat> { Cat::General, Cat::Browser, Cat::Edit, Cat::File, Cat::RefMon, Cat::HumKeys, Cat::IdeaCatcher };
     for (auto cat : order)
     {
         juce::PopupMenu sub;

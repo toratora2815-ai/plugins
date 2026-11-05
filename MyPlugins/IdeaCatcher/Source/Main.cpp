@@ -38,6 +38,7 @@ public:
 
         mainWindow = std::make_unique<MainWindow> (getApplicationName());
         auto* comp = mainWindow->content;
+        comp->isWindowVisible = [this] { return mainWindow != nullptr && mainWindow->isVisible() && ! mainWindow->isMinimised(); };
         comp->onShowRequest = [this] (bool floating, bool focus)
         {
             if (mainWindow == nullptr) return;

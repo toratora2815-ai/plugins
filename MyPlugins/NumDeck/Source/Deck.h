@@ -377,6 +377,7 @@ namespace numdeck
             }
             else if (remote == "!fullHalf") KeyTap::toggleFullScreenOrSplit();
             else if (remote.startsWith ("hk:")) KeyTap::sendRemote ("humkeys", remote.substring (3).toStdString());
+            else if (remote.startsWith ("ic:")) KeyTap::sendRemote ("ideacatcher", remote.substring (3).toStdString());
             else KeyTap::sendRemote ("referencemonitor", remote.toStdString());
         }
 

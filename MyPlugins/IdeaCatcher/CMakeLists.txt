@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
-project(IdeaCatcher VERSION 1.0.0 LANGUAGES C CXX OBJCXX)
+project(IdeaCatcher VERSION 1.1.0 LANGUAGES C CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -39,7 +39,7 @@ target_sources(IdeaCatcher PRIVATE
     Source/MainComponent.cpp
     Source/MacSupport_mac.mm)
 target_link_libraries(IdeaCatcher PRIVATE
-    "-framework AVFoundation" "-framework Carbon" "-framework ServiceManagement")
+    "-framework AVFoundation" "-framework Carbon" "-framework ServiceManagement" "-framework UserNotifications" "-framework ApplicationServices")
 
 target_compile_definitions(IdeaCatcher PRIVATE
     DONT_SET_USING_JUCE_NAMESPACE=1
