@@ -117,6 +117,10 @@
   v1.18.1: 「.」（全画面 ⇔ 半画面）は、全画面のとき全画面を解除するだけ（2 画面には戻さない。相手の記憶と前のアプリの記録は削除）
   v1.18.2: 全画面の上に出すには、「いつも手前」のあいだ NSApp を Accessory（補助アプリ）にする必要があった（Regular のままだと CanJoinAllSpaces+FullScreenAuxiliary でも出ない）
   v1.19.0: ウィンドウを動かす部分を Windows_mac.mm に分けた（入口は Windows.h の numdeck::win）。メニューバーのアイコン（KeyTap::setStatusMenu: 画面を出す / テンキー ON / いつも手前 / 終了）
+  v1.19.1〜1.19.2: 全画面の出し入れは setFullScreenSurely（切り替わったか確かめて頼み直す。アニメーション中だと無視されるため）。
+  右がアプリの 2 画面は、先にそのアプリを前に出してそのデスクトップへ移り、左のページがそこに無ければそこに新しく開く（相手選びには今のデスクトップのウィンドウしか出ない）。
+  使い回す左が単独の全画面なら先に解除。Chrome への AppleScript は with timeout of 3 seconds。動きの記録は ~/Library/Logs/Num Deck.log
+  GitHub の Mac が借りられないときは、build/tools/venv の cmake + Ninja + build/_juce でこの Mac でビルドできる（本人が頼んだとき）
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）
 
 - Hum Keys（HumKeys）… 鼻歌・口ドラムをその場で MIDI にする単体 Mac アプリ。仮想 MIDI「Hum Keys」（MidiOutput::createNewDevice）で Logic へ。

@@ -652,6 +652,7 @@ namespace numdeck
             NSString* bid = [NSBundle bundleWithPath: path].bundleIdentifier;
             if (bid == nil) { openNew(); return; }
             AXUIElementRef cand = reuseLeft != nullptr ? (AXUIElementRef) CFRetain (reuseLeft) : nullptr;
+            auto openRight = ^{
             [[NSWorkspace sharedWorkspace] openApplicationAtURL: [NSURL fileURLWithPath: path]
                                                   configuration: [NSWorkspaceOpenConfiguration configuration]
                                               completionHandler: nil];
@@ -681,6 +682,12 @@ namespace numdeck
                     CFRelease (rw);
                 });
             });
+            };
+            // 使い回す左のウィンドウが単独の全画面なら、先に解除して元のデスクトップに戻してから
+            if (cand != nullptr && isFullScreen (cand))
+                setFullScreenSurely (cand, false, 3, ^(bool) { later (600, openRight); });
+            else
+                openRight();
         };
 
         // このページのタブがある Chrome のウィンドウがあれば、それを使い回す（Num Deck を入れ直したあとでも見つかる）。
