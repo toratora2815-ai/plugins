@@ -125,6 +125,7 @@ namespace fp
                                                      : settings.targetDb;
                 lastTarget = target;
                 const bool active = voiceDb > settings.floorDb && (! settings.follow || musicOk);
+                lastActive = active;
 
                 manualCur += (settings.manualDb - manualCur) * (float) paramCoef;
                 if (settings.autoRide)
@@ -154,12 +155,14 @@ namespace fp
                 }
             }
             currentGain.store (gainDb, std::memory_order_relaxed);
+            currentActive.store (lastActive, std::memory_order_relaxed);
             currentMusic.store (numSc > 0 ? musicDb() : -120.0f, std::memory_order_relaxed);
         }
 
         // 今のフェーダー位置（dB）。オートメーションへの書き込みと画面で使う
         float getGainDb() const { return currentGain.load (std::memory_order_relaxed); }
         float getMusicDb() const { return currentMusic.load (std::memory_order_relaxed); }
+        bool isVoiceActive() const { return currentActive.load (std::memory_order_relaxed); }   // 声が FLOOR より大きいか
 
         // 画面用：新しい点を古い順に dst へ。読んだ数を返す（readPos は呼ぶ側が持つ）
         int readHistory (Point* dst, int maxPoints, int& readPos) const
@@ -198,5 +201,7 @@ namespace fp
         Point history[historySize] {};
         std::atomic<int> writePos { 0 };
         std::atomic<float> currentGain { 0.0f }, currentMusic { -120.0f };
+        std::atomic<bool> currentActive { false };
+        bool lastActive = false;
     };
 }

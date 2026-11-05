@@ -64,6 +64,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout FaderPilotProcessor::createL
     addB ("write", "Write Ride", false);
     addF ("ride",  "Ride", { -15.0f, 15.0f, 0.01f }, 0.0f, db);
     addF ("output", "Output", { -12.0f, 12.0f, 0.1f }, 0.0f, db);
+    // v1.1 で追加（バージョン 2）
+    v.push_back (plink::makeGroupParameter (2));
 
     return { v.begin(), v.end() };
 }
@@ -131,6 +133,16 @@ void FaderPilotProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
     engine.setSettings (readSettings());
     engine.process (main.getArrayOfWritePointers(), main.getNumChannels(), main.getNumSamples(), sc, numSc);
+
+    // Plugin Link へ：今のフェーダー位置と、声が鳴っているか（ブロックごと）
+    if (link.on())
+    {
+        auto& ep = link.ep();
+        ep.publish (plink::fp::rideDb, engine.getGainDb());
+        ep.publish (plink::fp::active, engine.isVoiceActive() ? 1.0f : 0.0f);
+        ep.stamp();
+        ep.heartbeat();
+    }
 }
 
 // WRITE ON（かつ AUTO ON）で再生している間、今のフェーダー位置を「Ride」パラメーターに送り続ける。

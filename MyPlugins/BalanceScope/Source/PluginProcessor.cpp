@@ -14,6 +14,7 @@ BalanceScopeProcessor::BalanceScopeProcessor()
     fftData.assign (fftSize * 2, 0.0f);
     sumPower.assign (numBins, 0.0);
     livePower.assign (numBins, 0.0);
+    startTimerHz (2);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout BalanceScopeProcessor::createLayout()
@@ -33,6 +34,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout BalanceScopeProcessor::creat
     v.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "customLow", 2 }, "Custom Low (below 120 Hz)",
                     juce::NormalisableRange<float> (-4.0f, 6.0f, 0.1f), 0.0f,
                     juce::AudioParameterFloatAttributes().withStringFromValueFunction (db)));
+    // v1.2 で追加（バージョン 3）
+    v.push_back (plink::makeGroupParameter (3));
     return { v.begin(), v.end() };
 }
 
@@ -155,6 +158,56 @@ TargetCurve BalanceScopeProcessor::currentTarget() const
                        apvts.getRawParameterValue ("customTilt")->load(),
                        apvts.getRawParameterValue ("customLow")->load());
 }
+
+// ---- Plugin Link ----
+// 平均（RESET からの全体）がある程度たまったら、それで「出すぎの帯域」を探す。
+// 画面で参照曲（REF A〜C）と比べているときは、目標カーブの代わりに参照曲と比べる。
+void BalanceScopeProcessor::timerCallback()
+{
+    LinkInfo info;
+    info.on = link.on();
+    if (! info.on) { linkInfo = info; return; }
+    info.peers = link.ep().countPeers();
+
+    getSnapshot (linkSnap);
+    auto& ep = link.ep();
+    const double secs = linkSnap.frames * (double) hopSize / linkSnap.sampleRate;
+    if (secs >= 3.0)
+    {
+        const auto t = currentTarget();
+        auto db = bandmath::toBands (linkSnap.avgPower, linkSnap.sampleRate, fftSize, linkCenters);
+        bandmath::normalise (db, linkCenters, t);
+
+        std::vector<float> ref;
+        const int slot = (int) apvts.state.getProperty ("compare", -1);
+        if (slot >= 0 && slot < 3)
+        {
+            const char* names[] = { "A", "B", "C" };
+            juce::StringArray parts;
+            parts.addTokens (apvts.state.getChildWithName ("REFS").getProperty (juce::String ("data") + names[slot]).toString(), ",", {});
+            if (parts.size() == (int) linkCenters.size())
+            {
+                for (auto& x : parts) ref.push_back (x.getFloatValue());
+                bandmath::normalise (ref, linkCenters, t);
+            }
+        }
+        const auto e = bandmath::findExcess (db, linkCenters, t, ref);
+        info.valid = true;
+        info.excessDb = e.excessDb;
+        info.lowHz = e.lowHz;
+        info.highHz = e.highHz;
+        info.peakHz = e.peakHz;
+    }
+    ep.publish (plink::bs::valid, info.valid ? 1.0f : 0.0f);
+    ep.publish (plink::bs::excessDb, info.excessDb);
+    ep.publish (plink::bs::lowHz, info.lowHz);
+    ep.publish (plink::bs::highHz, info.highHz);
+    ep.publish (plink::bs::peakHz, info.peakHz);
+    ep.stamp();
+    linkInfo = info;
+}
+
+BalanceScopeProcessor::LinkInfo BalanceScopeProcessor::getLinkInfo() const { return linkInfo; }
 
 juce::AudioProcessorEditor* BalanceScopeProcessor::createEditor() { return new BalanceScopeEditor (*this); }
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new BalanceScopeProcessor(); }

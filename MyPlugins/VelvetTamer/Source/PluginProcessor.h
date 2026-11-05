@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "TamerEngine.h"
+#include "PluginLinkJuce.h"
 
 class VelvetTamerProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
 {
@@ -45,6 +46,15 @@ public:
     bool isLowLatency() const { return activeLowLatency.load(); }
     double getSampleRateForDisplay() const { return currentRate.load(); }
 
+    // Plugin Link（同じ LINK 番号の Balance Scope が見つけた「出すぎの帯域」に FOCUS を合わせる）
+    plink::Link link { plink::kindVelvetTamer, apvts };
+    void updateTrackProperties (const TrackProperties& p) override { if (p.name.has_value()) link.setTrackName (*p.name); }
+    // 画面用：いま実際に使っている FOCUS と、つながって動かされているか
+    float focusLowNow() const { return shownLow.load(); }
+    float focusHighNow() const { return shownHigh.load(); }
+    bool focusLinked() const { return linkFollowing.load(); }
+    plink::Peer linkPeer() const { plink::Peer p; link.ep().find (plink::kindBalanceScope, p); return p; }
+
 private:
     vt::Settings readSettings() const;
     void handleAsyncUpdate() override;
@@ -55,6 +65,12 @@ private:
     std::atomic<double> currentRate { 48000.0 };
 
     std::atomic<float>* weightParams[vt::numWeights] {};
+
+    // FOCUS の追いかけ（log2 Hz、音の処理のスレッドだけ）
+    void applyLinkFocus (vt::Settings& s, int numSamples);
+    float curLo = -1.0f, curHi = -1.0f;
+    std::atomic<float> shownLow { 300.0f }, shownHigh { 16000.0f };
+    std::atomic<bool> linkFollowing { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VelvetTamerProcessor)
 };

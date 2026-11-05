@@ -23,6 +23,7 @@
     - ビルド結果は Artifacts と、Releases の `latest` に置かれる
   - `MyPlugins/<名前>/` … 各プラグイン（CMakeLists.txt, Source/, README.md）
 - 新しいプラグインを足しても build.yml を書き換える必要はない（自動で見つかる）
+- `MyPlugins/Shared/` … プラグイン共通の部品（今は Plugin Link）。CMakeLists に `../Shared` を足したものは、Shared を変えると一緒にビルドされる
 - 既存プラグインを変えていないときは再ビルド不要（無駄なビルドは走らせない／走ったら止めてよい）
 - Claude 側のブラウザは GitHub にログインしていない。ログインが必要な作業は、本人のいつもの Safari / Chrome で開くよう案内する
 
@@ -56,6 +57,7 @@
 - Porch Drive（PorchDrive）… BD-2系ブルースドライブ。LEVEL / TONE / GAIN
 - Balance Scope（BalanceScope）… 帯域バランス解析。ジャンル別目標カーブ、4帯域メーター、RESET
   v1.1.0: 参考曲のカーブを CAPTURE して比べる（REF A/B/C、apvts.state の子 "REFS" に保存、DIFF 表示）、ラウドネス（INTEGRATED/SHORT-TERM/MOMENTARY/PEAK/PLR、LoudnessMeter.h）、Custom の目標カーブ（ID customTilt / customLow）
+  v1.2.0: Plugin Link で「出すぎの帯域」を送る（BandMath.h の findExcess。平均 3 秒以上、150 Hz〜12 kHz、REF と比べているときは REF 基準）
 - Reference（Reference）… 自分の曲と参照曲の聴き比べプラグイン（ファイル／ライブ入力、音量自動合わせ）
 - Horizon Spread（HorizonSpread）… ステレオ感を出す手法の全部入り。Mid は触らず Side だけ加工（モノラル互換）。
   第1段階 SHAPE ページ: WIDTH 3帯域＋AUTO / AIR / SIDE DRIVE / TRANSIENT、SAFETY: BASS MONO / GUARD、MONO CHECK、ベクトルスコープ。
@@ -63,13 +65,16 @@
   順番は「生み出す → 整える」で固定。MIX と GUARD の基準は CREATE 前の入力
   v1.2.0: AUTO GAIN（標準 ON）、SIDE SOLO、内蔵プリセット11個、帯域ごとの広さメーター、MOTION のテンポ同期、
   SHIFT CLASSIC の L/R 選択、DYNAMIC（DYNAMICS タイル）。量のつまみはどのタイルでも右側に置く
+  v1.3.0: Plugin Link で Fader Pilot がボーカルを上げている間 SPREAD を下げる（ID linkDuck、+6 dB・100% で半分。プリセットで変わらない）
 - Velvet Tamer（VelvetTamer）… レゾナンス抑制（耳に痛い響きを鳴った瞬間だけ自動で下げる）。STFT で「まわりより飛び出た所」を検出。
   DEPTH / SHARPNESS / SELECTIVITY / ATTACK / RELEASE / FOCUS LOW・HIGH / MIX / OUTPUT / DELTA / LINK。遅延 2048 サンプル（48k）。
   v1.1.0: グラフ上で FOCUS をドラッグ、WEIGHT（7 点固定周波数の効きの強弱カーブ、ID weight0〜6）、プリセットメニュー
   v1.2.0: LOW LATENCY（ID lowlatency、遅延 512 サンプル。エンジンを 2 つ用意して切り替え）、SIDECHAIN（ID sidechain、外部サイドチェーンの音で下げる帯域を決める）
+  v1.3.0: Plugin Link で Balance Scope の出すぎ帯域へ FOCUS を自動で（applyLinkFocus、約 0.8 秒で追う。つまみは動かさない）
 - Fader Pilot（FaderPilot）… ボーカルの音量を自動でフェーダーを上げ下げして揃える（遅延ゼロ）。TARGET / FLOOR / RANGE / SPEED / OUTPUT、
   AUTO RIDE（OFF で Ride パラメーター＝オートメーションをそのまま使う）、WRITE（再生中に Ride へ書き込み、Logic の Latch/Touch で記録）、
   FOLLOW MUSIC（サイドチェーンのオケの音量＋OFFSET を目標に）、プリセット8個
+  v1.1.0: Plugin Link でフェーダー位置（rideDb）と声が鳴っているか（active）を送る
 - Gain Stage（GainStage）… トラックの入口の音量をワンクリックでそろえる（遅延ゼロ）。LEARN（鳴っている所だけ 5 秒測り、TARGET になる GAIN を 1 回だけ入れる。
   -60 dB より小さい 100 ms は数えない）、TARGET / RMS・PEAK / Ø POLARITY / MONO / SWAP L/R、IN/OUT メーター。結果は apvts.state の "learnInfo"
 - Reference Monitor（ReferenceMonitor）… 聴き比べ用の単体 Mac アプリ（macOS 14.2 以降、プロセスタップで Logic とミュージックの音を受け取る）。
@@ -132,6 +137,12 @@
   句の最初は 8 ms で鳴らし、120 ms 以内に高さが変わったら鳴らし直し（記録では kind=1 で最初の音の高さを直す）。遅れ約 56→32 ms。
   TAKE（録り逃し防止）: Engine::capture に「本当に鳴り始めた時刻」付きで MIDI をため、4 秒黙ると ~/Music/Hum Keys に .mid 保存。
   画面下からドラッグで Logic へ（performExternalDragDropOfFiles）、TEMPO（settings "tempo"）で拍に合わせる、フォルダ / NEW
+
+- Plugin Link（MyPlugins/Shared/PluginLink.h・PluginLinkJuce.h）… 自作プラグイン同士の連携。
+  ~/Library/Application Support/MyPlugins/PluginLink-v1.bin を mmap した共有メモリの掲示板（64 席、atomic だけで読み書き、3 秒で不在、10 秒で席を回収）。
+  各プラグインに ID `linkGroup`（OFF/1〜4）と、画面いちばん下の LinkBar（LINK の選択＋今の様子）。トラック名は updateTrackProperties で伝える。
+  今つながっているもの: Balance Scope → Velvet Tamer（FOCUS）、Fader Pilot → Horizon Spread（SPREAD を下げる）。
+  新しくつなぐときは Kind と送る数値の番号（namespace bs / fp のように）を PluginLink.h に足す
 
 ## Claude からの提案（余った利用枠の活用）
 - Claude が自分で「次に作るもの・直すもの」を3つ提案し、本人が「GO」を出したら作る仕組み。指示書は `ideas/PROPOSAL_PROMPT.md`

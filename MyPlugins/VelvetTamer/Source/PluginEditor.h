@@ -62,6 +62,7 @@ private:
     Knob depth, sharpness, selectivity, attack, release, low, high, mix, output;
     Toggle delta, link, lowLatency, sidechain;
     juce::ComboBox presetBox;
+    plink::LinkBar linkBar { processor.apvts, juce::Colour (0xff6fd6c9), juce::Colour (0xff1b1621), juce::Colour (0xffefe9f3) };
 
     int hover = grabNone, grab = grabNone;
     float grabLowHz = 0.0f, grabHighHz = 0.0f, grabFreq = 0.0f;

@@ -63,9 +63,23 @@ BalanceScopeEditor::BalanceScopeEditor (BalanceScopeProcessor& p) : AudioProcess
 
     updateRefControls();
 
+    // Plugin Link の帯（いちばん下）
+    linkBar.status = [this] (bool& lit)
+    {
+        const auto li = processor.getLinkInfo();
+        if (! li.on) return juce::String ("Plugin Link OFF  -  set the same LINK number on Velvet Tamer to send the harsh band to its FOCUS");
+        juce::String who = li.peers > 0 ? juce::String (li.peers) + " linked plugin" + (li.peers > 1 ? "s" : "") : juce::String ("no other plugin on this LINK yet");
+        if (! li.valid) return "Listening...  (" + who + ")";
+        if (li.excessDb <= 0.0f) return "Balanced - nothing to send  (" + who + ")";
+        lit = li.peers > 0;
+        return "Sending: too much around " + plink::hzText (li.peakHz) + " (+" + juce::String (li.excessDb, 1) + " dB)  ->  "
+             + plink::hzText (li.lowHz) + " - " + plink::hzText (li.highHz) + "   (" + who + ")";
+    };
+    addAndMakeVisible (linkBar);
+
     setResizable (true, true);
-    setResizeLimits (760, 480, 1800, 1100);
-    setSize (940, 600);
+    setResizeLimits (760, 510, 1800, 1130);
+    setSize (940, 632);
     startTimerHz (15);
 }
 
@@ -159,45 +173,12 @@ void BalanceScopeEditor::updateRefControls()
 //==============================================================================
 std::vector<float> BalanceScopeEditor::toBands (const std::vector<double>& power, double sampleRate) const
 {
-    const double bw = sampleRate / BalanceScopeProcessor::fftSize;
-    const int maxBin = (int) power.size() - 1;
-    std::vector<float> out (centers.size(), -300.0f);
-
-    for (size_t k = 0; k < centers.size(); ++k)
-    {
-        const double fc = centers[k];
-        if (fc > sampleRate * 0.45) break;
-        const double lo = fc * std::pow (2.0, -1.0 / 12.0), hi = fc * std::pow (2.0, 1.0 / 12.0);
-        const int b0 = (int) std::ceil (lo / bw), b1 = std::min (maxBin, (int) std::floor (hi / bw));
-
-        double density = 0.0;
-        if (b1 >= b0 && b0 >= 1)
-        {
-            for (int b = b0; b <= b1; ++b) density += power[(size_t) b];
-            density /= (b1 - b0 + 1);
-        }
-        else
-        {
-            // 低域でビンが帯域に入らないときは近くのビンを補間
-            const double pos = fc / bw;
-            const int i0 = juce::jlimit (1, maxBin - 1, (int) pos);
-            const double fr = juce::jlimit (0.0, 1.0, pos - i0);
-            density = power[(size_t) i0] * (1.0 - fr) + power[(size_t) i0 + 1] * fr;
-        }
-        out[k] = (float) (10.0 * std::log10 (density * (hi - lo) / bw + 1.0e-30));
-    }
-    return out;
+    return bandmath::toBands (power, sampleRate, BalanceScopeProcessor::fftSize, centers);
 }
 
-// 目標カーブに合わせて全体の音量差を取り除く（100Hz〜8kHzの平均で揃える）
 static void normalise (std::vector<float>& db, const std::vector<float>& centers, const TargetCurve& t)
 {
-    double sum = 0.0; int n = 0;
-    for (size_t k = 0; k < db.size(); ++k)
-        if (centers[k] >= 100.0f && centers[k] <= 8000.0f && db[k] > -250.0f)
-        { sum += db[k] - targetDb (t, centers[k]); ++n; }
-    const float off = n > 0 ? (float) (sum / n) : 0.0f;
-    for (auto& v : db) if (v > -250.0f) v -= off;
+    bandmath::normalise (db, centers, t);
 }
 
 void BalanceScopeEditor::timerCallback()
@@ -514,6 +495,8 @@ void BalanceScopeEditor::drawLoudness (juce::Graphics& g, juce::Rectangle<float>
 void BalanceScopeEditor::resized()
 {
     auto area = getLocalBounds().reduced (12);
+    linkBar.setBounds (area.removeFromBottom (plink::LinkBar::height));
+    area.removeFromBottom (8);
     auto header = area.removeFromTop (36);
     resetButton.setBounds (header.removeFromRight (80).reduced (2, 4));
     header.removeFromRight (8);

@@ -102,7 +102,32 @@ HorizonSpreadEditor::HorizonSpreadEditor (HorizonSpreadProcessor& p)
     scopeL.resize (1024);
     scopeR.resize (1024);
 
-    setSize (1180, 600);
+    // Plugin Link の帯（いちばん下）。右端に VOCAL DUCK の量
+    duckSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    duckSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 18);
+    duckSlider.setColour (juce::Slider::trackColourId, dusk.withAlpha (0.7f));
+    duckSlider.setColour (juce::Slider::backgroundColourId, edge);
+    duckSlider.setColour (juce::Slider::thumbColourId, text);
+    duckSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    duckSlider.setTooltip ("VOCAL DUCK: how much SPREAD narrows while Fader Pilot pushes the vocal up");
+    duckAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (processor.apvts, "linkDuck", duckSlider);
+    linkBar.addAndMakeVisible (duckSlider);
+    linkBar.extra = &duckSlider;
+    linkBar.extraWidth = 200;
+    linkBar.extraLabel = "VOCAL DUCK";
+    linkBar.status = [this] (bool& lit)
+    {
+        auto& lk = processor.link;
+        if (! lk.on()) return juce::String ("Plugin Link OFF  -  set the same LINK number on Fader Pilot to narrow the width while the vocal is pushed up");
+        if (! processor.linkHasPilot()) return "LINK " + juce::String (lk.group()) + ": waiting for Fader Pilot on this LINK";
+        const float d = processor.linkDuckNow();
+        lit = d > 0.005f;
+        return lit ? "Vocal pushed up by Fader Pilot  ->  SPREAD -" + juce::String (juce::roundToInt (d * 100.0f)) + " %"
+                   : juce::String ("Following Fader Pilot  (no narrowing right now)");
+    };
+    addAndMakeVisible (linkBar);
+
+    setSize (1180, 638);
     showPage (true);
     startTimerHz (30);
 }
@@ -228,6 +253,8 @@ void HorizonSpreadEditor::placeKnob (Knob& k, juce::Rectangle<int> r)
 void HorizonSpreadEditor::resized()
 {
     auto area = getLocalBounds().reduced (14);
+    linkBar.setBounds (area.removeFromBottom (plink::LinkBar::height));
+    area.removeFromBottom (8);
     auto header = area.removeFromTop (44);
     monoCheck.button.setBounds (header.removeFromRight (110).reduced (2, 8));
     sideSolo.button.setBounds (header.removeFromRight (100).reduced (2, 8));

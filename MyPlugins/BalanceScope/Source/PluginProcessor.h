@@ -2,8 +2,10 @@
 #include <JuceHeader.h>
 #include "LoudnessMeter.h"
 #include "Targets.h"
+#include "BandMath.h"
+#include "PluginLinkJuce.h"
 
-class BalanceScopeProcessor : public juce::AudioProcessor
+class BalanceScopeProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
     static constexpr int fftOrder = 13;
@@ -12,7 +14,7 @@ public:
     static constexpr int numBins  = fftSize / 2 + 1;
 
     BalanceScopeProcessor();
-    ~BalanceScopeProcessor() override = default;
+    ~BalanceScopeProcessor() override { stopTimer(); }
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -56,7 +58,13 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
+    // Plugin Link（同じ LINK 番号の Velvet Tamer へ「出すぎの帯域」を送る）
+    void updateTrackProperties (const TrackProperties& p) override { if (p.name.has_value()) link.setTrackName (*p.name); }
+    struct LinkInfo { bool on = false, valid = false; float excessDb = 0, lowHz = 0, highHz = 0, peakHz = 0; int peers = 0; };
+    LinkInfo getLinkInfo() const;
+
 private:
+    void timerCallback() override;   // 2 回/秒：出すぎの帯域を計算して掲示板へ
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     void analyseFrame();
 
@@ -72,6 +80,11 @@ private:
     juce::SpinLock lock;
     std::atomic<bool> resetRequested { false }, loudResetRequested { false };
     LoudnessMeter loudness;
+
+    std::vector<float> linkCenters = bandmath::makeCenters();
+    Snapshot linkSnap;
+    LinkInfo linkInfo;               // メッセージスレッドだけで読み書き
+    plink::Link link { plink::kindBalanceScope, apvts };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BalanceScopeProcessor)
 };

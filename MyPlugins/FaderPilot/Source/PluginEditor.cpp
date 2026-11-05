@@ -50,8 +50,21 @@ FaderPilotEditor::FaderPilotEditor (FaderPilotProcessor& p)
     addAndMakeVisible (fader);
     faderAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (processor.apvts, "ride", fader);
 
+    linkBar.status = [this] (bool& lit)
+    {
+        auto& lk = processor.link;
+        if (! lk.on()) return juce::String ("Plugin Link OFF  -  set the same LINK number on Horizon Spread to narrow its width while the vocal is pushed up");
+        const int n = lk.ep().countPeers();
+        if (n == 0) return "LINK " + juce::String (lk.group()) + ": no other plugin on this LINK yet";
+        lit = processor.engine.isVoiceActive();
+        const float r = processor.engine.getGainDb();
+        return "Sending fader " + juce::String ((r > 0.05f ? "+" : "") + juce::String (r, 1)) + " dB"
+             + (lit ? "  (vocal active)" : "  (vocal quiet)") + "  to " + juce::String (n) + " linked plugin" + (n > 1 ? "s" : "");
+    };
+    addAndMakeVisible (linkBar);
+
     points.reserve (shownPoints);
-    setSize (940, 580);
+    setSize (940, 618);
     startTimerHz (30);
 }
 
@@ -101,6 +114,8 @@ void FaderPilotEditor::placeKnob (Knob& k, juce::Rectangle<int> r)
 void FaderPilotEditor::resized()
 {
     auto area = getLocalBounds().reduced (14);
+    linkBar.setBounds (area.removeFromBottom (plink::LinkBar::height));
+    area.removeFromBottom (8);
     auto header = area.removeFromTop (44);
     autoRide.button.setBounds (header.removeFromRight (110).reduced (2, 8));
     header.removeFromRight (6);

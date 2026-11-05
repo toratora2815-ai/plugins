@@ -48,7 +48,23 @@ VelvetTamerEditor::VelvetTamerEditor (VelvetTamerProcessor& p)
 
     for (int i = 0; i < points; ++i) { shownSpec[i] = specBottom; shownGr[i] = 0.0f; shownSc[i] = specBottom; }
 
-    setSize (980, 600);
+    linkBar.status = [this] (bool& lit)
+    {
+        auto& lk = processor.link;
+        if (! lk.on()) return juce::String ("Plugin Link OFF  -  set the same LINK number on Balance Scope to aim FOCUS at the band it finds too loud");
+        const auto peer = processor.linkPeer();
+        if (! peer.found) return "LINK " + juce::String (lk.group()) + ": waiting for Balance Scope on this LINK  (using your FOCUS knobs)";
+        if (processor.focusLinked())
+        {
+            lit = true;
+            return "FOCUS follows " + plink::Link::describe (peer) + ":  " + plink::hzText (processor.focusLowNow()) + " - "
+                 + plink::hzText (processor.focusHighNow()) + "  (+" + juce::String (peer.v[plink::bs::excessDb], 1) + " dB too loud)";
+        }
+        return plink::Link::describe (peer) + " finds nothing too loud  -  using your FOCUS knobs";
+    };
+    addAndMakeVisible (linkBar);
+
+    setSize (980, 638);
     startTimerHz (30);
 }
 
@@ -98,6 +114,8 @@ void VelvetTamerEditor::placeKnob (Knob& k, juce::Rectangle<int> r)
 void VelvetTamerEditor::resized()
 {
     auto area = getLocalBounds().reduced (14);
+    linkBar.setBounds (area.removeFromBottom (plink::LinkBar::height));
+    area.removeFromBottom (8);
     auto header = area.removeFromTop (44);
     link.button.setBounds (header.removeFromRight (90).reduced (2, 8));
     header.removeFromRight (6);
@@ -367,9 +385,9 @@ void VelvetTamerEditor::drawDisplay (juce::Graphics& g, juce::Rectangle<float> r
                     juce::Justification::centredRight);
     }
 
-    // FOCUS の外を暗くする
+    // FOCUS の外を暗くする（Plugin Link で動かされているときは、実際に使っている値）
     {
-        const float lo = param ("low"), hi = param ("high");
+        const float lo = processor.focusLowNow(), hi = processor.focusHighNow();
         const float x0 = juce::jlimit (plot.getX(), plot.getRight(), freqToX (juce::jmin (lo, hi), plot));
         const float x1 = juce::jlimit (plot.getX(), plot.getRight(), freqToX (juce::jmax (lo, hi), plot));
         g.setColour (juce::Colours::black.withAlpha (0.35f));

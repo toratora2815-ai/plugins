@@ -49,6 +49,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> targetAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> tiltAttachment, lowAttachment;
     juce::Rectangle<int> graphArea, broadArea, loudArea, refInfoArea;
+    plink::LinkBar linkBar { processor.apvts, juce::Colour (0xffff8fb0), juce::Colour (0xff1a1f26), juce::Colour (0xfff2f2f2) };
     juce::String flashText;
     int flashTicks = 0;
 

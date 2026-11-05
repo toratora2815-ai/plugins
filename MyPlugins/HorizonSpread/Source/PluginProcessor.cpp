@@ -136,6 +136,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout HorizonSpreadProcessor::crea
     addB2 ("sideSolo", "Side Solo", false);
     addF2 ("dynamic", "Dynamic Width", { 0.0f, 100.0f, 0.1f }, 0.0f, pct);
 
+    // Plugin Link（v1.3 で追加。バージョン 3）
+    v.push_back (plink::makeGroupParameter (3));
+    v.push_back (std::make_unique<F> (juce::ParameterID { "linkDuck", 3 }, "Link Vocal Duck",
+                                      juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f), 50.0f,
+                                      A().withStringFromValueFunction (pct)));
+
     return { v.begin(), v.end() };
 }
 
@@ -240,6 +246,31 @@ void HorizonSpreadProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
             settings.create.motionPhase = std::fmod (*ppq / beats, 1.0);
     }
 
+    // Plugin Link：Fader Pilot がボーカルを上げている（+）間、SPREAD を少し下げる。
+    // +6 dB 上げているとき、DUCK 100 % で SPREAD が半分。動きは 50 ms で下がり 400 ms で戻る
+    {
+        float want = 0.0f;
+        bool seen = false;
+        if (link.on())
+        {
+            plink::Peer p;
+            if (link.ep().find (plink::kindFaderPilot, p) && p.valuesAgeMs < 500)
+            {
+                seen = true;
+                if (p.v[plink::fp::active] > 0.5f)
+                    want = juce::jlimit (0.0f, 1.0f, p.v[plink::fp::rideDb] / 6.0f)
+                         * apvts.getRawParameterValue ("linkDuck")->load() * 0.01f;
+            }
+        }
+        const double secs = want > duckEnv ? 0.05 : 0.4;
+        const float a = 1.0f - (float) std::exp (-buffer.getNumSamples() / (secs * getSampleRate()));
+        duckEnv += (want - duckEnv) * a;
+        if (duckEnv < 1.0e-4f) duckEnv = 0.0f;
+        settings.spread *= 1.0f - 0.5f * duckEnv;
+        duckShown = 0.5f * duckEnv;
+        pilotSeen = seen;
+    }
+
     engine.setSettings (settings);
     engine.process (buffer.getWritePointer (0), buffer.getWritePointer (1), buffer.getNumSamples());
 }
@@ -297,8 +328,8 @@ void HorizonSpreadProcessor::setCurrentProgram (int index)
     currentProgram = index;
     const auto& preset = presets()[(size_t) index];
 
-    // 確認用ボタンはプリセットで変えない
-    const juce::StringArray keep { "monoCheck", "sideSolo", "autoGain" };
+    // 確認用ボタンと Plugin Link はプリセットで変えない
+    const juce::StringArray keep { "monoCheck", "sideSolo", "autoGain", plink::groupParamId, "linkDuck" };
     for (auto* p : getParameters())
     {
         auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p);

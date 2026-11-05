@@ -84,6 +84,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout VelvetTamerProcessor::create
     // v1.2 で追加（バージョン 3）
     v.push_back (std::make_unique<B> (juce::ParameterID { "lowlatency", 3 }, "Low Latency", false));
     v.push_back (std::make_unique<B> (juce::ParameterID { "sidechain", 3 }, "External Sidechain", false));
+    // v1.3 で追加（バージョン 4）
+    v.push_back (plink::makeGroupParameter (4));
 
     return { v.begin(), v.end() };
 }
@@ -171,8 +173,44 @@ void VelvetTamerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             numSc = scBuf.getNumChannels();
         }
 
-    engine.setSettings (readSettings());
+    auto settings = readSettings();
+    applyLinkFocus (settings, main.getNumSamples());
+    engine.setSettings (settings);
     engine.process (main.getArrayOfWritePointers(), main.getNumChannels(), main.getNumSamples(), sc, numSc);
+}
+
+// Balance Scope が「出すぎ」（許容幅を 0.5 dB 以上超えた所）を送ってきている間は、FOCUS をその帯域へ。
+// 来なくなったら自分のつまみの値へ戻る。どちらも約 0.8 秒（時定数）でなめらかに動く（周波数の対数で）。
+void VelvetTamerProcessor::applyLinkFocus (vt::Settings& s, int numSamples)
+{
+    float wantLo = std::log2 (juce::jmax (20.0f, s.lowHz)), wantHi = std::log2 (juce::jmax (20.0f, s.highHz));
+    bool following = false;
+    if (link.on())
+    {
+        plink::Peer p;
+        if (link.ep().find (plink::kindBalanceScope, p) && p.v[plink::bs::valid] > 0.5f
+            && p.v[plink::bs::excessDb] >= 0.5f && p.valuesAgeMs < 5000
+            && p.v[plink::bs::lowHz] >= 20.0f && p.v[plink::bs::highHz] > p.v[plink::bs::lowHz])
+        {
+            wantLo = std::log2 (p.v[plink::bs::lowHz]);
+            wantHi = std::log2 (juce::jmin (20000.0f, p.v[plink::bs::highHz]));
+            following = true;
+        }
+    }
+    if (curLo < 0.0f) { curLo = wantLo; curHi = wantHi; }
+    const float a = 1.0f - std::exp (-(float) numSamples / (float) (0.8 * currentRate.load()));
+    curLo += (wantLo - curLo) * a;
+    curHi += (wantHi - curHi) * a;
+    if (std::abs (curLo - wantLo) < 1.0e-3f) curLo = wantLo;
+    if (std::abs (curHi - wantHi) < 1.0e-3f) curHi = wantHi;
+
+    // エンジンは値が変わるたびに FOCUS の形を作り直すので、1/48 オクターブ刻みにする
+    auto q = [] (float l2) { return std::exp2 (std::round (l2 * 48.0f) / 48.0f); };
+    const bool moved = following || curLo != wantLo || curHi != wantHi;
+    if (moved) { s.lowHz = q (curLo); s.highHz = q (curHi); }
+    shownLow = s.lowHz;
+    shownHigh = s.highHz;
+    linkFollowing = following;
 }
 
 namespace

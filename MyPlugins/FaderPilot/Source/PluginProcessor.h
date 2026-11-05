@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "RiderEngine.h"
+#include "PluginLinkJuce.h"
 
 class FaderPilotProcessor : public juce::AudioProcessor, private juce::Timer
 {
@@ -44,6 +45,10 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
     fp::RiderEngine engine;
+
+    // Plugin Link（同じ LINK 番号の Horizon Spread へフェーダーの位置を送る）
+    plink::Link link { plink::kindFaderPilot, apvts };
+    void updateTrackProperties (const TrackProperties& p) override { if (p.name.has_value()) link.setTrackName (*p.name); }
 
 private:
     fp::Settings readSettings() const;
