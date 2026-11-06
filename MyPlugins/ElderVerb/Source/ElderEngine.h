@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
+#include "VintageFilter.h"
 
 namespace elder
 {
@@ -53,7 +54,8 @@ struct Maps
         return t[i] + (t[i + 1] - t[i]) * f;
     }
     static float lowCutHz (float v)   { return 1343.0f * std::pow (std::max (v, 0.0f), 0.93f); }   // 0 で切らない
-    static float modRateHz (float v)  { return 0.05f + 4.95f * v; }
+    static float modRateHz (float v)  { return 5.0f * (0.044f + 0.956f * v); }               // 0.22 〜 5 Hz
+    static float modDepthAmt (float v){ const float e = std::max (0.0f, v - 0.75f); return v + 4.5f * e * e; }   // 最後の 1/4 で急に深く
     static float sizeFactor (float v, float minF) { return minF + (1.0f - minF) * v; }
 };
 
@@ -84,6 +86,7 @@ struct Profile
     float dampHz = 0.0f;        // ループの中の高音の自然な減り（0 = なし）
     float gateMs = 950.0f;      // ゲートの長さ（kind 1）
 };
+#include "Profiles.h"   // 測って合わせた値（applyFittedProfiles）
 
 // ---------------------------------------------------------------- 部品
 struct OnePole   // 双一次変換の 1 次ローパス（ハイパスは x - LP）
@@ -125,6 +128,13 @@ struct Biquad
         const float A = std::pow (10.0f, db / 40), w = 2 * kPi * hz / fs, al = std::sin (w) / (2 * q), c = std::cos (w);
         const float A0 = 1 + al / A; b0 = (1 + al * A) / A0; b1 = -2 * c / A0; b2 = (1 - al * A) / A0; a1 = b1; a2 = (1 - al / A) / A0;
     }
+};
+
+struct SosD   // 急なフィルター用（double で計算）
+{
+    double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+    float process (float xf) { const double x = xf, y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; return (float) y; }
+    void reset() { z1 = z2 = 0; }
 };
 
 struct Delay
@@ -177,7 +187,7 @@ class Engine
 public:
     Profile profiles[kNumModes];
 
-    Engine() { for (auto& q : profiles) q = Profile(); profiles[14].kind = 1; }
+    Engine() { for (auto& q : profiles) q = Profile(); profiles[14].kind = 1; applyFittedProfiles (profiles); }
 
     void prepare (double sampleRate)
     {
@@ -214,9 +224,9 @@ public:
         {
             pre[c].clear(); for (auto& a : inAp[c]) a.d.clear(); spread[c].clear();
             clusterOut[c].clear(); crossOut[c].clear(); tankOut[c].clear();
-            hc[c].reset(); lc[c].reset(); for (auto& q : tone[c]) q.reset(); for (auto& q : vint[c]) q.reset(); for (auto& q : vintO[c]) q.reset();
+            hc[c].reset(); lc[c].reset(); for (auto& q : tone[c]) q.reset(); for (auto& q : vint[c]) q.reset();
         }
-        for (auto& b : br) { b.ap1.d.clear(); b.ap2.d.clear(); b.d1.clear(); b.d2.clear(); b.xo.reset(); b.hs.reset(); b.damp.reset(); }
+        for (auto& b : br) { b.ap1.d.clear(); b.ap2.d.clear(); b.d1.clear(); b.d2.clear(); b.xo.reset(); b.hs.reset(); b.damp.reset(); b.vdamp.reset(); }
         for (int i = 0; i < kBranches; ++i)
         {
             fb[i] = 0;
@@ -240,7 +250,6 @@ public:
             for (int c = 0; c < 2; ++c)
             {
                 float v = x[c];
-                if (vintage) for (auto& q : vint[c]) v = q.process (v);
                 pre[c].push (v);
                 v = preSamp < 1.0f ? v : pre[c].frac (preSamp);
                 for (int k = 0; k < 4; ++k) v = inAp[c][k].process (v, (k & 1) ? -inG : inG);
@@ -256,7 +265,7 @@ public:
                 for (auto& q : tone[c]) v = q.process (v);
                 if (useHc) v = hc[c].lp (v);
                 if (useLc) v = v - lc[c].lp (v);
-                if (vintage) for (auto& q : vintO[c]) v = q.process (v);
+                if (vintage) for (int k = 0; k < vintN; ++k) v = vint[c][k].process (v);
                 w[c] = v;
             }
             outL[i] = dryG * x[0] + wetG * w[0];
@@ -283,8 +292,8 @@ private:
     struct Branch
     {
         Allpass ap1, ap2; Delay d1, d2;
-        OnePole xo, hs, damp;
-        int l1 = 1, l2 = 1; float gMid = 0.5f, gLow = 0.5f, hsGain = 1; bool useDamp = false;
+        OnePole xo, hs, damp, vdamp;
+        int l1 = 1, l2 = 1; float gMid = 0.5f, gLow = 0.5f, hsGain = 1; bool useDamp = false, useVDamp = false;
     };
     // 1 周の中の長さの比（ms、合計 340）
     static constexpr float kAp1[kBranches] = { 8.9f, 7.6f, 10.1f, 6.8f };
@@ -298,7 +307,7 @@ private:
     Delay pre[2], spread[2], clusterOut[2], crossOut[2], tankOut[2];
     Allpass inAp[2][4];
     Branch br[kBranches]; Lfo lfo[kBranches]; float fb[kBranches] {};
-    OnePole hc[2], lc[2]; bool useHc = true, useLc = false; Biquad tone[2][3], vint[2][4], vintO[2][4]; bool vintage = false;
+    OnePole hc[2], lc[2]; bool useHc = true, useLc = false; Biquad tone[2][3]; SosD vint[2][6]; int vintN = 0; bool vintage = false;
     float preSamp = 0, inG = 0.7f, lateG = 0.55f, dryG = 0, wetG = 1, modAmp = 0;
     float clusterG = 1, crossG = 0.7f, tankG = 1, wetGain = 1;
     int earlyS = 0, crossS = 0, tankS = 0;
@@ -339,6 +348,9 @@ private:
             b.hs.set (Maps::highFreqHz (p.highFreq), fs);
             b.useDamp = pr.dampHz > 1.0f;
             if (b.useDamp) b.damp.set (pr.dampHz, fs);
+            // 70s: 本物はループの中でも高音が 1 周ごとに減る（5〜12 kHz）。1 枝ごとに 12.7 kHz の 1 次ローパスで同じ量
+            b.useVDamp = p.color == 0;
+            b.vdamp.set (12700.0f, fs);
         }
         const float rate = Maps::modRateHz (p.modRate);
         const int style = pr.modStyle > 0.5f ? (int) (pr.modStyle + 0.5f) : (p.color == 2 ? 2 : 1);
@@ -347,7 +359,9 @@ private:
             lfo[i].type = style == 1 ? 0 : 1;
             lfo[i].setRate (rate * (style == 3 ? 1.0f : 1.0f + 0.137f * (float) i), fs);
         }
-        modAmp = p.modDepth * pr.modMs * ms * (style == 3 ? 3.0f : 1.0f);
+        // ランダムの揺れはサインより音程の動きが小さいので、80s（COLOR で決まるランダム）は本物に合わせて 3.5 倍
+        const float styleGain = style == 3 ? 3.0f : (pr.modStyle < 0.5f && style == 1 ? 3.5f : 1.0f);
+        modAmp = Maps::modDepthAmt (p.modDepth) * pr.modMs * ms * styleGain;
 
         // ---- 粒のかたまりと ATTACK
         const float a = p.attack;
@@ -377,7 +391,10 @@ private:
         for (auto& w : injW) w /= std::sqrt (sumInj);
 
         const float esf = Maps::sizeFactor (p.size, std::max (0.35f, pr.sizeMin));
-        earlyS = std::max (0, (int) (pr.earlyMs * esf * ms));
+        // 最初の粒はかたまりの頭から少し後ろにあるので、その分を引いて「最初の音 = earlyMs」にする
+        int firstTap = tapT[0][0];
+        for (int k = 0; k < kTaps; ++k) if (tapW[0][k] != 0.0f) firstTap = std::min (firstTap, tapT[0][k]);
+        earlyS = std::max (0, (int) (pr.earlyMs * esf * ms) - firstTap + (int) (start * ms));
         crossS = std::max (0, (int) (pr.crossMs * sf * ms));
         tankS = std::max (0, (int) (pr.tankMs * sf * ms));
         clusterG = std::pow (10.0f, pr.clusterDb / 20.0f);
@@ -394,13 +411,27 @@ private:
             useLc = p.lowCut > 0.002f;
             hc[c].set (Maps::highCutHz (p.highCut), fs);
             lc[c].set (Maps::lowCutHz (p.lowCut), fs);
-            const float q4[4] = { 0.5098f, 0.6013f, 0.9000f, 2.5629f };   // 8 次バターワース
-            for (int k = 0; k < 4; ++k) { vint[c][k].lowpass (10800, q4[k], fs); vintO[c][k].lowpass (10800, q4[k], fs); }
+            setupVintage (vint[c]);
         }
-        vintage = p.color == 0;
+        vintage = p.color == 0 && vintN > 0;
         const float m = std::clamp (p.mix, 0.0f, 1.0f);
         dryG = std::cos (m * kPi / 2); wetG = std::sin (m * kPi / 2);
         if (pr.kind == 1) updateGate (pr, sf);
+    }
+
+    void setupVintage (SosD* f)
+    {
+        vintN = 0;
+        for (auto& t : kVintageSos)
+            if (std::abs ((float) t.rate - fs) < 1.0f)
+            {
+                for (int k = 0; k < 6; ++k)
+                { f[k].b0 = t.s[k][0]; f[k].b1 = t.s[k][1]; f[k].b2 = t.s[k][2]; f[k].a1 = t.s[k][4]; f[k].a2 = t.s[k][5]; }
+                vintN = 6; return;
+            }
+        // 表にないサンプルレート: 2 次のローパス 6 段で近いものを
+        for (int k = 0; k < 6; ++k) { Biquad b; b.lowpass (12000, 0.54f + 0.35f * (float) k, fs); f[k].b0 = b.b0; f[k].b1 = b.b1; f[k].b2 = b.b2; f[k].a1 = b.a1; f[k].a2 = b.a2; }
+        vintN = 6;
     }
 
     float clusterSum (int c, int set) const
@@ -430,6 +461,7 @@ private:
             const float hlo = b.hs.lp (y);
             y = hlo + b.hsGain * (y - hlo);
             if (b.useDamp) y = b.damp.lp (y);
+            if (b.useVDamp) y = b.vdamp.lp (y);
             y = b.ap2.process (y, lateG * 0.85f);
             b.d2.push (y);
             outv[i] = b.d2.at (b.l2 - 1);
