@@ -139,6 +139,7 @@
   v1.21.0: 分類「Idea Catcher」（Cat::IdeaCatcher、remote "ic:" → sendRemote("ideacatcher", …)。toggle / overdub / catch / tap / open / show）。Idea Catcher が前面のときも「Logic が前面のときだけ」の対象
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）
 
+  v1.22.0: タイルの種類に「Aside（ひとりごと秘書）」（"as:memo" / "as:undo" / "as:show" → 分散通知 com.myplugins.aside.command）
 - Hum Keys（HumKeys）… 鼻歌・口ドラムをその場で MIDI にする単体 Mac アプリ。仮想 MIDI「Hum Keys」（MidiOutput::createNewDevice）で Logic へ。
   MELODY: 12 kHz に間引いて YIN で約 2.7 ms ごとに音程 → KEY / SCALE に合わせる（今の音を少しひいき）、GLUE / HOLD / OCTAVE / VELOCITY / BEND（±2 半音）/ MIDI CH、
   音量のくぼみ→戻りで同じ音を打ち直す。DRUMS: 全体と 3 kHz 以上の包絡の立ち上がりで検出、14 ms の 150 Hz 以下・7 kHz 以上の割合（直前の残りを引く）で
@@ -198,7 +199,9 @@
   全部開き直す（もう開いているタブへは移るだけ）。パスワード管理アプリは取らない
 - Aside（Aside）… ひとりごと秘書。SFSpeechRecognizer（ja-JP、requiresOnDeviceRecognition。できない Mac では聞かない）で約 0.9 秒の無音ごとに確定、
   TaskParser.h（JUCE なし）がきっかけの言葉（あとで・〜しなきゃ・忘れないように・メモして等）のある文だけ「やること」と日時に。EventKit でリマインダーのリスト「ひとりごと」へ、
-  打ち合わせ等で時刻があればカレンダー。右上の HUD で取り消し。⌃⌥M = 次の一言をメモ。Logic が前のときは聞かない（標準 ON）。tools/test_parser.cpp（17 例）
+  打ち合わせ等で時刻があればカレンダー。右上の HUD で取り消し。tools/test_parser.cpp（17 例）
+  v1.1.0: 標準は「押したときだけ聞く」（設定 always=false）。Num Deck の「一言メモ」か ⌃⌥M でマイクを開き、一言確定（またはしゃべらず 12 秒）で閉じる。
+  分散通知 com.myplugins.aside.command（"memo" / "undo" / "show"）。「いつも聞く」ON のときだけ常に聞く（Logic が前なら休む）
 - Third Time（ThirdTime）… 「3回目」検出係。CGEventTap（聞くだけ）でアプリ切り替え・⌘/⌃ ショートカット・特別なキー・クリックした所の AX 名を記録（打った文字の中身は記録しない）。
   PatternFinder.h（JUCE なし）が新しい操作で終わる 3〜10 個の並びの 3 回目を探す（前の回の次がどれも同じなら続きを待つ、手が 5 秒止まったら確定、知らせた並びは skipKey＝2 回つなげて回しも除外）。
   「自動にする」で ⌃⌥1〜9、くり返しは AX で同じ名前を押す（なければ窓の中の同じ位置）、文字の入力は止まって待ち ⌃⌥T で続ける。入力監視とアクセシビリティの許可が要る。tools/test_finder.cpp

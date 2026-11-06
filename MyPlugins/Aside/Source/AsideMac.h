@@ -31,6 +31,9 @@ namespace aside::mac
     void removeItem (const std::string& id, bool event);
     void openReminders();
 
+    // ---- ほかのアプリ（Num Deck など）からの命令: 分散通知 com.myplugins.aside.command、object = "memo" / "undo" / "show"
+    void listenCommands (std::function<void (const std::string&)> onCommand);
+
     // ---- いま前にいるアプリ
     std::string frontBundle();
 

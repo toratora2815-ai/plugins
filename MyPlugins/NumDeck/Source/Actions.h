@@ -6,7 +6,7 @@
 namespace numdeck
 {
     enum class Icon { None, Play, Record, Rewind, Forward, ToStart, Cycle, Metronome, Undo, Redo, Split, Capture };
-    enum class Cat { Transport, Edit, Track, Window, File, RefMon, HumKeys, IdeaCatcher, General, Browser, Custom, App, Link, Macro };
+    enum class Cat { Transport, Edit, Track, Window, File, RefMon, HumKeys, IdeaCatcher, Aside, General, Browser, Custom, App, Link, Macro };
 
     struct ActionDef
     {
@@ -18,7 +18,7 @@ namespace numdeck
         bool repeat;        // 押しっぱなしで連打するか
         Icon icon;
         const char* glyph;  // アイコンがないときに大きく出す文字
-        const char* remote = nullptr; // 自作アプリへの命令（keyCode の代わり）。"hk:" で始まるのは Hum Keys へ、"ic:" は Idea Catcher へ、ほかは Reference Monitor へ
+        const char* remote = nullptr; // 自作アプリへの命令（keyCode の代わり）。"hk:" で始まるのは Hum Keys へ、"ic:" は Idea Catcher へ、"as:" は Aside へ、ほかは Reference Monitor へ
     };
 
     // キーコード（US 配列の位置。日本語配列でも英字・記号の位置は同じ）
@@ -129,6 +129,10 @@ namespace numdeck
             { "icTap",     "テンポをたたく",     Cat::IdeaCatcher, -1, 0, false, Icon::None, "TAP",   "ic:tap" },
             { "icOpen",    "Logic で開く",       Cat::IdeaCatcher, -1, 0, false, Icon::None, "OPEN",  "ic:open" },
             { "icShow",    "画面を出す",         Cat::IdeaCatcher, -1, 0, false, Icon::None, "SHOW",  "ic:show" },
+            // Aside（ひとりごと秘書）: 押したときだけ一言聞いて、やることをリマインダーへ
+            { "asMemo",    "一言メモ（押してから話す）", Cat::Aside, -1, 0, false, Icon::None, "MEMO", "as:memo" },
+            { "asUndo",    "最後のメモを取り消す", Cat::Aside, -1, 0, false, Icon::None, "UNDO", "as:undo" },
+            { "asShow",    "画面を出す",         Cat::Aside, -1, 0, false, Icon::None, "SHOW",  "as:show" },
             // どのアプリでも
             { "copy",      "コピー",            Cat::General, vk::C, kCmd,          false, Icon::None, "COPY" },
             { "paste",     "貼り付け",          Cat::General, vk::V, kCmd,          false, Icon::None, "PASTE" },
@@ -174,6 +178,7 @@ namespace numdeck
             case Cat::RefMon:    return jp ("Reference Monitor");
             case Cat::HumKeys:   return jp ("Hum Keys");
             case Cat::IdeaCatcher: return jp ("Idea Catcher");
+            case Cat::Aside:     return jp ("Aside（ひとりごと秘書）");
             case Cat::General:   return jp ("どのアプリでも");
             case Cat::Browser:   return jp ("ブラウザ");
             case Cat::Custom:    return jp ("自分で決めたキー");
@@ -196,6 +201,7 @@ namespace numdeck
             case Cat::RefMon:    return juce::Colour (0xffff7f5c);
             case Cat::HumKeys:   return juce::Colour (0xff38e1ff);
             case Cat::IdeaCatcher: return juce::Colour (0xffffc24b);
+            case Cat::Aside:     return juce::Colour (0xffb59cff);
             case Cat::General:   return juce::Colour (0xff4fd6c8);
             case Cat::Browser:   return juce::Colour (0xff6f9dff);
             case Cat::Custom:    return juce::Colour (0xffff6fae);

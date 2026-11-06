@@ -681,7 +681,7 @@ void MainComponent::paintTile (juce::Graphics& g, int index)
             return;
         }
 
-        const auto sc = res.kind == Resolved::Remote ? (res.remote.startsWith ("!") ? juce::String() : res.remote.startsWith ("hk:") ? juce::String ("Hum Keys") : res.remote.startsWith ("ic:") ? juce::String ("Idea") : juce::String ("RefMon"))
+        const auto sc = res.kind == Resolved::Remote ? (res.remote.startsWith ("!") ? juce::String() : res.remote.startsWith ("hk:") ? juce::String ("Hum Keys") : res.remote.startsWith ("ic:") ? juce::String ("Idea") : res.remote.startsWith ("as:") ? juce::String ("Aside") : juce::String ("RefMon"))
                       : res.kind == Resolved::Key ? shortcutText (res.keyCode, res.mods)
                       : res.kind == Resolved::App ? juce::String::fromUTF8 ("アプリ")
                       : res.kind == Resolved::Macro ? juce::String::fromUTF8 ("マクロ ") + juce::String ((int) res.steps.size()) + juce::String::fromUTF8 (" 手順")
@@ -738,7 +738,7 @@ void MainComponent::paintTile (juce::Graphics& g, int index)
     if (res.valid)
     {
         // ショートカット（右上）。アプリ・ページは何を開くか
-        const auto sc = res.kind == Resolved::Remote ? (res.remote.startsWith ("!") ? juce::String() : res.remote.startsWith ("hk:") ? juce::String ("Hum Keys") : res.remote.startsWith ("ic:") ? juce::String ("Idea") : juce::String ("RefMon"))
+        const auto sc = res.kind == Resolved::Remote ? (res.remote.startsWith ("!") ? juce::String() : res.remote.startsWith ("hk:") ? juce::String ("Hum Keys") : res.remote.startsWith ("ic:") ? juce::String ("Idea") : res.remote.startsWith ("as:") ? juce::String ("Aside") : juce::String ("RefMon"))
                       : res.kind == Resolved::Key ? shortcutText (res.keyCode, res.mods)
                       : res.kind == Resolved::App ? juce::String::fromUTF8 ("アプリ")
                       : res.kind == Resolved::Macro ? juce::String::fromUTF8 ("マクロ ") + juce::String ((int) res.steps.size()) + juce::String::fromUTF8 (" 手順")
@@ -1117,8 +1117,8 @@ void MainComponent::showTileMenu (int index)
     std::map<int, juce::String> ids;
     int id = 1;
     const std::vector<Cat> order = deck.mode == Deck::ModeLogic
-        ? std::vector<Cat> { Cat::Transport, Cat::Edit, Cat::Track, Cat::Window, Cat::File, Cat::RefMon, Cat::HumKeys, Cat::IdeaCatcher, Cat::General, Cat::Browser }
-        : std::vector<Cat> { Cat::General, Cat::Browser, Cat::Edit, Cat::File, Cat::RefMon, Cat::HumKeys, Cat::IdeaCatcher };
+        ? std::vector<Cat> { Cat::Transport, Cat::Edit, Cat::Track, Cat::Window, Cat::File, Cat::RefMon, Cat::HumKeys, Cat::IdeaCatcher, Cat::Aside, Cat::General, Cat::Browser }
+        : std::vector<Cat> { Cat::General, Cat::Browser, Cat::Edit, Cat::File, Cat::RefMon, Cat::HumKeys, Cat::IdeaCatcher, Cat::Aside };
     for (auto cat : order)
     {
         juce::PopupMenu sub;

@@ -197,6 +197,21 @@ static double nowSec() { return [NSDate timeIntervalSinceReferenceDate]; }
 @end
 
 //==============================================================================
+@interface AsideCommandListener : NSObject
+{
+@public
+    std::function<void (const std::string&)> onCommand;
+}
+- (void) got: (NSNotification*) n;
+@end
+@implementation AsideCommandListener
+- (void) got: (NSNotification*) n
+{
+    NSString* s = [n object];
+    if (onCommand && s != nil) onCommand (str (s));
+}
+@end
+
 @interface AsideMenuTarget : NSObject
 {
 @public
@@ -349,6 +364,19 @@ namespace aside::mac
     {
         NSURL* url = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier: @"com.apple.reminders"];
         if (url != nil) [[NSWorkspace sharedWorkspace] openApplicationAtURL: url configuration: [NSWorkspaceOpenConfiguration configuration] completionHandler: nil];
+    }
+
+    void listenCommands (std::function<void (const std::string&)> onCommand)
+    {
+        static AsideCommandListener* l = nil;
+        if (l == nil)
+        {
+            l = [[AsideCommandListener alloc] init];
+            [[NSDistributedNotificationCenter defaultCenter] addObserver: l selector: @selector (got:)
+                                                                    name: @"com.myplugins.aside.command" object: nil
+                                                      suspensionBehavior: NSNotificationSuspensionBehaviorDeliverImmediately];
+        }
+        l->onCommand = std::move (onCommand);
     }
 
     std::string frontBundle() { return str ([NSWorkspace sharedWorkspace].frontmostApplication.bundleIdentifier); }

@@ -42,6 +42,7 @@ private:
     bool forceNext = false;        // 次の一言は、きっかけの言葉がなくてもメモ
     double forceUntil = 0;
     bool pausedForApp = false;
+    bool oneShot = false;          // ボタンで開いたマイク（一言聞いたら閉じる）
     int hoverUndo = -1;
 
     juce::TextButton onBtn, settingsBtn, remindersBtn;
@@ -58,13 +59,16 @@ private:
     void updateIcon();
     void registerKey();
     void memoNext();
+    void command (const juce::String& c);
     void undo (int index);
     void showSettings();
     void save();
     void load();
     juce::String stateText() const;
 
-    bool wantOn() const          { return props->getBoolValue ("on", true); }
+    // いつも聞くか（OFF = Num Deck のボタンやキーを押したときだけ一言聞く。最初は OFF）
+    bool alwaysListen() const    { return props->getBoolValue ("always", false); }
+    bool wantOn() const          { return alwaysListen() && props->getBoolValue ("on", true); }
     bool pauseInLogic() const    { return props->getBoolValue ("pauseLogic", true); }
     bool everything() const      { return props->getBoolValue ("everything", false); }
     juce::String listName() const { return props->getValue ("list", juce::String::fromUTF8 ("ひとりごと")); }

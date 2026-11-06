@@ -32,9 +32,23 @@ class MainComponent::Hud : public juce::Component, private juce::Timer
 public:
     explicit Hud (MainComponent& o) : owner (o) { setSize (360, 74); }
 
+    // 一言メモで聞いている間: 「どうぞ」と聞こえている文字
+    void showListening()
+    {
+        index = -2;
+        place();
+        stopTimer();
+    }
+
     void show (int entryIndex)
     {
         index = entryIndex;
+        place();
+        startTimer (7000);
+    }
+
+    void place()
+    {
         if (! isOnDesktop())
         {
             addToDesktop (juce::ComponentPeer::windowHasDropShadow);
@@ -46,11 +60,31 @@ public:
         setVisible (true);
         if (auto* p = getPeer()) aside::mac::makeHud (p->getNativeHandle(), false);
         repaint();
-        startTimer (7000);
     }
+
+    bool listeningShown() const { return isVisible() && index == -2; }
+    void hideNow() { stopTimer(); setVisible (false); }
 
     void paint (juce::Graphics& g) override
     {
+        if (index == -2)
+        {
+            auto r = getLocalBounds().toFloat();
+            g.setColour (panel.withAlpha (0.97f));
+            g.fillRoundedRectangle (r, 12);
+            g.setColour (amber.withAlpha (0.8f));
+            g.drawRoundedRectangle (r.reduced (0.5f), 12, 1.5f);
+            auto b = getLocalBounds().reduced (14, 10);
+            g.setColour (amber);
+            g.setFont (juce::FontOptions (11.0f));
+            g.drawText (juce::String::fromUTF8 ("● 聞いています（言い終わったら自動で閉じます）"), b.removeFromTop (16), juce::Justification::centredLeft);
+            g.setColour (textC);
+            g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+            g.drawFittedText (owner.partial.isNotEmpty() ? juce::String::fromUTF8 ("「") + owner.partial + juce::String::fromUTF8 ("」")
+                                                         : juce::String::fromUTF8 ("どうぞ。やることを一言"),
+                              b, juce::Justification::centredLeft, 2);
+            return;
+        }
         if (! juce::isPositiveAndBelow (index, owner.entries.size())) return;
         const auto& e = owner.entries.getReference (index);
         auto r = getLocalBounds().toFloat();
@@ -84,6 +118,7 @@ public:
 
     void mouseDown (const juce::MouseEvent& e) override
     {
+        if (index == -2) { owner.command ("cancel"); return; }
         if (undoBtn.contains (e.getPosition())) { owner.undo (index); repaint(); startTimer (1500); }
         else { setVisible (false); if (owner.onShowRequest) owner.onShowRequest(); }
     }
@@ -103,7 +138,12 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
     props = std::make_unique<juce::PropertiesFile> (po);
     hud = std::make_unique<Hud> (*this);
 
-    onBtn.onClick = [this] { props->setValue ("on", ! wantOn()); setListening (wantOn()); };
+    onBtn.onClick = [this]
+    {
+        if (! alwaysListen()) { memoNext(); return; }
+        props->setValue ("on", ! wantOn());
+        setListening (wantOn());
+    };
     styleButton (onBtn, true);
     settingsBtn.setButtonText (u8 ("設定"));
     styleButton (settingsBtn);
@@ -118,10 +158,11 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
     {
         load();
         registerKey();
+        aside::mac::listenCommands ([this] (const std::string& c) { command (js (c)); });
         setListening (wantOn());
         startTimerHz (10);
     }
-    onBtn.setButtonText (wantOn() ? u8 ("聞くのを止める") : u8 ("聞く"));
+    onBtn.setButtonText (! alwaysListen() ? u8 ("一言メモ") : wantOn() ? u8 ("聞くのを止める") : u8 ("聞く"));
 }
 
 MainComponent::~MainComponent()
@@ -137,9 +178,18 @@ void MainComponent::startEngine()
     aside::mac::startListening (
         [this] (const std::string& text, bool fin)
         {
-            if (! fin) { partial = js (text); repaint (live_); return; }
+            if (! fin)
+            {
+                partial = js (text);
+                // 話している間は待つ
+                if (forceNext) forceUntil = std::max (forceUntil, juce::Time::getMillisecondCounterHiRes() + 3000.0);
+                repaint (live_);
+                if (hud->listeningShown()) hud->repaint();
+                return;
+            }
             partial = {};
             const bool forced = forceNext && juce::Time::getMillisecondCounterHiRes() < forceUntil;
+            if (oneShot) { oneShot = false; forceNext = false; hud->hideNow(); aside::mac::stopListening(); state = "off"; updateMenu(); }
             heard (js (text), forced || everything());
             if (forced) { forceNext = false; updateIcon(); }
             repaint();
@@ -150,7 +200,8 @@ void MainComponent::startEngine()
 
 void MainComponent::setListening (bool on)
 {
-    onBtn.setButtonText (on ? u8 ("聞くのを止める") : u8 ("聞く"));
+    oneShot = false;
+    onBtn.setButtonText (! alwaysListen() ? u8 ("一言メモ") : on ? u8 ("聞くのを止める") : u8 ("聞く"));
     if (on) { pausedForApp = false; startEngine(); }
     else { aside::mac::stopListening(); state = "off"; }
     updateIcon();
@@ -162,6 +213,7 @@ void MainComponent::updateIcon()
 {
     if (! live) return;
     const bool on = aside::mac::listening();
+    if (! alwaysListen()) { aside::mac::setStatusIcon (on ? 3 : 1); return; }   // ボタンのときだけ聞く形
     aside::mac::setStatusIcon (! on ? 0 : forceNext ? 3 : level > 0.35f ? 2 : 1);
 }
 
@@ -170,9 +222,22 @@ void MainComponent::registerKey()
     aside::mac::registerHotKey (props->getIntValue ("key", 0), [this] { memoNext(); });
 }
 
+void MainComponent::command (const juce::String& c)
+{
+    if (c == "memo") memoNext();
+    else if (c == "undo") undo (0);
+    else if (c == "show") { if (onShowRequest) onShowRequest(); }
+    else if (c == "cancel" && oneShot) { oneShot = false; forceNext = false; aside::mac::stopListening(); state = "off"; hud->hideNow(); updateIcon(); updateMenu(); repaint(); }
+}
+
 void MainComponent::memoNext()
 {
-    if (! aside::mac::listening()) { props->setValue ("on", true); setListening (true); }
+    if (oneShot) { command ("cancel"); return; }   // もう一度押したらやめる
+    if (! aside::mac::listening())
+    {
+        if (alwaysListen()) { props->setValue ("on", true); setListening (true); }
+        else { oneShot = true; partial = {}; startEngine(); hud->showListening(); }
+    }
     forceNext = true;
     forceUntil = juce::Time::getMillisecondCounterHiRes() + 12000.0;
     updateIcon();
@@ -188,8 +253,8 @@ void MainComponent::updateMenu()
     std::vector<std::pair<std::string, int>> items {
         { stateText().toStdString(), -1 },
         { "", 0 },
-        { (wantOn() ? u8 ("聞くのを止める") : u8 ("聞く")).toStdString(), 1 },
-        { (u8 ("次の一言をメモする") + keyName).toStdString(), 2 } };
+        { (u8 ("一言メモ（押してから話す）") + keyName).toStdString(), 2 } };
+    if (alwaysListen()) items.push_back ({ (wantOn() ? u8 ("聞くのを止める") : u8 ("聞く")).toStdString(), 1 });
     if (! entries.isEmpty() && entries.getReference (0).status == 1)
         items.push_back ({ (u8 ("取り消す: ") + entries.getReference (0).title).toStdString(), 3 });
     items.push_back ({ "", 0 });
@@ -210,6 +275,8 @@ void MainComponent::updateMenu()
 
 juce::String MainComponent::stateText() const
 {
+    if (oneShot && state == "listening") return u8 ("一言メモ: 聞いています");
+    if (! alwaysListen() && (state == "off" || state == "listening")) return u8 ("一言メモ・Num Deck のボタンを押したときだけ聞きます（ふだんマイクは閉じています）");
     if (pausedForApp) return u8 ("Logic が前にあるので休んでいます");
     if (state == "listening") return u8 ("聞いています（Mac の中だけで文字にしています）");
     if (state == "denied-mic") return u8 ("マイクの許可がありません");
@@ -283,6 +350,9 @@ void MainComponent::undo (int i)
 void MainComponent::timerCallback()
 {
     // Logic が前にある間は聞かない（歌や録音の邪魔をしないため）
+    // 一言メモ: 話し始めないまま 12 秒たったら閉じる
+    if (oneShot && juce::Time::getMillisecondCounterHiRes() > forceUntil) command ("cancel");
+
     if (wantOn() && pauseInLogic())
     {
         const bool logicFront = aside::mac::frontBundle() == "com.apple.logic10";
@@ -300,11 +370,12 @@ void MainComponent::timerCallback()
 void MainComponent::showSettings()
 {
     juce::PopupMenu m, keys;
-    m.addItem (1, u8 ("Logic が前にあるときは聞かない（歌・録音中に反応しないように）"), true, pauseInLogic());
+    m.addItem (6, u8 ("いつも聞く（ボタンを押さなくても、きっかけの言葉で入れる）"), true, alwaysListen());
+    m.addItem (1, u8 ("いつも聞くとき: Logic が前にあるときは聞かない"), alwaysListen(), pauseInLogic());
     m.addItem (2, u8 ("きっかけの言葉がなくても、聞こえた文を全部メモする"), true, everything());
     const auto& k = aside::mac::hotKeyChoices();
     for (int i = 0; i < (int) k.size(); ++i) keys.addItem (100 + i, u8 (k[(size_t) i].label), true, props->getIntValue ("key", 0) == i);
-    m.addSubMenu (u8 ("キー: 次の一言をメモする"), keys);
+    m.addSubMenu (u8 ("キー: 一言メモ"), keys);
     m.addItem (3, u8 ("リマインダーのリスト名: ") + listName() + u8 ("…"));
     m.addItem (4, u8 ("ログインしたら起動"), true, aside::mac::launchAtLogin());
     m.addSeparator();
@@ -327,6 +398,7 @@ void MainComponent::showSettings()
         }
         else if (r == 4) aside::mac::setLaunchAtLogin (! aside::mac::launchAtLogin());
         else if (r == 5) { entries.clear(); save(); updateMenu(); repaint(); }
+        else if (r == 6) { props->setValue ("always", ! alwaysListen()); props->setValue ("on", true); setListening (wantOn()); }
         else if (r >= 100) { props->setValue ("key", r - 100); registerKey(); updateMenu(); }
         props->saveIfNeeded();
     });
@@ -427,7 +499,7 @@ void MainComponent::paint (juce::Graphics& g)
         g.fillEllipse (top.removeFromLeft (12).withSizeKeepingCentre (9, 9).toFloat());
         top.removeFromLeft (6);
         g.setFont (juce::FontOptions (12.5f));
-        g.drawText (forceNext ? u8 ("次の一言をメモします。どうぞ") : (live ? stateText() : u8 ("聞いています（Mac の中だけで文字にしています）")),
+        g.drawText (forceNext ? u8 ("一言メモ: どうぞ") : (live ? stateText() : u8 ("聞いています（Mac の中だけで文字にしています）")),
                     top, juce::Justification::centredLeft, true);
         // 声のメーター
         auto meter = a.removeFromRight (8);
@@ -443,8 +515,11 @@ void MainComponent::paint (juce::Graphics& g)
         else
         {
             g.setColour (dim);
-            g.drawFittedText (u8 ("「あとで請求書出さなきゃ」「明日の3時までに見積もり送らないと」のように、"
-                                  "つぶやくだけでリマインダーに入ります。きっかけの言葉がないおしゃべりは何もしません。"),
+            g.drawFittedText (alwaysListen()
+                                  ? u8 ("「あとで請求書出さなきゃ」「明日の3時までに見積もり送らないと」のように、"
+                                        "つぶやくだけでリマインダーに入ります。きっかけの言葉がないおしゃべりは何もしません。")
+                                  : u8 ("Num Deck の「一言メモ」ボタン（または ⌃⌥M）を押してから、「明日の3時までに見積もり送る」のように一言。"
+                                        "言い終わるとリマインダーに入り、マイクは閉じます。"),
                               a, juce::Justification::topLeft, 3);
         }
     }
