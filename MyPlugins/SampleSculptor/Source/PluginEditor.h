@@ -22,7 +22,7 @@ public:
     void mouseMove (const juce::MouseEvent&) override;
     void refresh();                    // 音が変わったら、描く形を作り直す
     void resized() override { refresh(); }
-    std::function<void()> onEmptyClick;
+    std::function<void()> onEmptyClick, onDragOut;   // onDragOut = できた音の波形をつかんで外へ
 
 private:
     struct Peaks { std::vector<float> lo, hi; };
@@ -36,18 +36,19 @@ private:
     Peaks srcPeaks, outPeaks;
     double srcSec = 0, outSec = 0;
     const char* dragId = nullptr;
-    bool hasSource = false;
+    bool hasSource = false, outPress = false, outDragged = false;
 };
 
 // できた音（ドラッグで Logic へ）
 class ExportTile : public juce::Component
 {
 public:
-    std::function<void()> onDragOut;
+    std::function<void()> onDragOut, onClick;
     juce::String title, sub;
     bool enabled = false;
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override { dragging = false; }
+    void mouseUp (const juce::MouseEvent& e) override { if (! e.mouseWasDraggedSinceMouseDown() && onClick) onClick(); }
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (enabled && ! dragging && e.getDistanceFromDragStart() > 6 && onDragOut) { dragging = true; onDragOut(); }
@@ -82,6 +83,8 @@ private:
     void setupKnob (Knob&, const char* id, const char* name, bool bipolar, double def, juce::Colour);
     void timerCallback() override;
     void openChooser();
+    void dragOut (juce::Component& from);
+    void updateTile();
 
     SampleSculptorProcessor& processor;
     SculptLook look;
@@ -90,7 +93,7 @@ private:
     juce::ComboBox reverseBox;
     juce::Label reverseLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> reverseAtt;
-    juce::TextButton openButton { "OPEN" }, playButton { "PLAY" }, saveButton { "SAVE WAV" }, resetButton { "RESET" };
+    juce::TextButton openButton { "OPEN" }, playButton { "PLAY" }, saveButton { "EXPORT" }, resetButton { "RESET" };
     juce::ToggleButton normalize { "NORMALIZE" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> normalizeAtt;
     ExportTile exportTile;

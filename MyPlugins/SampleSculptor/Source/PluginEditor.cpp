@@ -129,7 +129,7 @@ void WaveView::paint (juce::Graphics& g)
     // できた音
     auto ol = outLane();
     g.setColour (accent);
-    g.drawText (juce::String (proc.busy.load() ? "RESULT  (working...)" : "RESULT  ") + juce::String (outSec, 2) + " s   -  click to play",
+    g.drawText (juce::String (proc.busy.load() ? "RESULT  (working...)" : "RESULT  ") + juce::String (outSec, 2) + " s   -  click to play, drag it into Logic",
                 juce::Rectangle<float> (ol.getX(), ol.getY() - 20, ol.getWidth(), 16), juce::Justification::centredLeft);
     g.setColour (edge);
     g.drawHorizontalLine ((int) ol.getCentreY(), ol.getX(), ol.getRight());
@@ -145,12 +145,15 @@ void WaveView::paint (juce::Graphics& g)
 void WaveView::mouseMove (const juce::MouseEvent& e)
 {
     const bool nearMarker = hasSource && srcLane().expanded (0, 6).contains (e.position);
-    setMouseCursor (nearMarker ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
+    const bool onOut = hasSource && outLane().expanded (0, 20).contains (e.position);
+    setMouseCursor (nearMarker ? juce::MouseCursor::LeftRightResizeCursor
+                               : (onOut ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor));
 }
 
 void WaveView::mouseDown (const juce::MouseEvent& e)
 {
     dragId = nullptr;
+    outPress = outDragged = false;
     if (! hasSource) { if (onEmptyClick) onEmptyClick(); return; }
     if (srcLane().expanded (0, 6).contains (e.position))
     {
@@ -159,12 +162,17 @@ void WaveView::mouseDown (const juce::MouseEvent& e)
         if (auto* p = proc.apvts.getParameter (dragId)) p->beginChangeGesture();
         mouseDrag (e);
     }
-    else if (outLane().contains (e.position))
-        proc.play();
+    else if (outLane().expanded (0, 20).contains (e.position))
+        outPress = true;   // 離したら試し聴き、動かしたら Logic へドラッグ
 }
 
 void WaveView::mouseDrag (const juce::MouseEvent& e)
 {
+    if (outPress)
+    {
+        if (! outDragged && e.getDistanceFromDragStart() > 6 && onDragOut) { outDragged = true; onDragOut(); }
+        return;
+    }
     if (dragId == nullptr) return;
     float f = xToFrac (e.position.x);
     const float st = proc.apvts.getRawParameterValue ("start")->load(), en = proc.apvts.getRawParameterValue ("end")->load();
@@ -176,6 +184,8 @@ void WaveView::mouseDrag (const juce::MouseEvent& e)
 
 void WaveView::mouseUp (const juce::MouseEvent&)
 {
+    if (outPress && ! outDragged) proc.play();
+    outPress = false;
     if (dragId != nullptr)
         if (auto* p = proc.apvts.getParameter (dragId)) p->endChangeGesture();
     dragId = nullptr;
@@ -243,11 +253,12 @@ SampleSculptorEditor::SampleSculptorEditor (SampleSculptorProcessor& p) : AudioP
     playButton.setColour (juce::TextButton::textColourOffId, accent);
     openButton.onClick = [this] { openChooser(); };
     playButton.onClick = [this] { if (processor.playPos.load() >= 0.0f) processor.stop(); else processor.play(); };
+    saveButton.setTooltip ("Write the result as a WAV file, then drag the box (or the orange waveform) into Logic");
     saveButton.onClick = [this]
     {
         auto f = processor.exportWav();
-        if (f.existsAsFile()) { status = "Saved " + f.getFileName(); f.revealToUser(); }
-        else status = "Nothing to save yet";
+        status = f.existsAsFile() ? "Ready - drag the box or the orange waveform into Logic" : "Nothing to export yet";
+        updateTile();
         repaint();
     };
     resetButton.setTooltip ("Set every knob back to the start (the sample stays)");
@@ -263,15 +274,9 @@ SampleSculptorEditor::SampleSculptorEditor (SampleSculptorProcessor& p) : AudioP
     addAndMakeVisible (normalize);
     normalizeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, "normalize", normalize);
 
-    exportTile.onDragOut = [this]
-    {
-        auto f = processor.exportWav();
-        if (f.existsAsFile())
-        {
-            status = "Made " + f.getFileName() + "  (in Music / Sample Sculptor)";
-            juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, &exportTile);
-        }
-    };
+    exportTile.onDragOut = [this] { dragOut (exportTile); };
+    exportTile.onClick = [this] { auto f = processor.exportWav(); if (f.existsAsFile()) f.revealToUser(); updateTile(); };
+    wave.onDragOut = [this] { dragOut (wave); };
     addAndMakeVisible (exportTile);
 
     setSize (900, 610);
@@ -304,6 +309,33 @@ void SampleSculptorEditor::setupKnob (Knob& k, const char* id, const char* name,
     addAndMakeVisible (k.label);
 }
 
+void SampleSculptorEditor::dragOut (juce::Component& from)
+{
+    if (processor.busy.load()) { status = "Still working - try again in a moment"; repaint(); return; }
+    auto f = processor.exportWav();   // 押していなくても、ここで書き出す
+    if (! f.existsAsFile()) return;
+    status = "Dragging " + f.getFileName() + "  (saved in Music / Sample Sculptor)";
+    updateTile();
+    repaint();
+    juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, &from);
+}
+
+void SampleSculptorEditor::updateTile()
+{
+    auto r = processor.getRendered();
+    exportTile.enabled = r != nullptr && r->length() > 0;
+    const auto name = processor.sourceFile().getFileNameWithoutExtension();
+    const bool ready = processor.isExported();
+    if (! exportTile.enabled) { exportTile.title = "no sample yet"; exportTile.sub = "drop a sample above first (from Splice or Finder)"; }
+    else
+    {
+        exportTile.title = juce::String::fromUTF8 ("\xe2\x87\xa6  ") + (ready ? "READY:  " : "") + name + " sculpted.wav";
+        exportTile.sub = ready ? "drag this into Logic  -  click = show in Finder"
+                               : "drag this into Logic (it is written when you drag or press EXPORT)";
+    }
+    exportTile.repaint();
+}
+
 void SampleSculptorEditor::openChooser()
 {
     chooser = std::make_unique<juce::FileChooser> ("Choose a sample", processor.sourceFile().getParentDirectory(),
@@ -328,12 +360,7 @@ void SampleSculptorEditor::timerCallback()
         seenVersion = v;
         wave.refresh();
         if (processor.message.isNotEmpty()) status = processor.message;
-        auto r = processor.getRendered();
-        exportTile.enabled = r != nullptr && r->length() > 0;
-        const auto name = processor.sourceFile().getFileNameWithoutExtension();
-        exportTile.title = exportTile.enabled ? juce::String::fromUTF8 ("\xe2\x87\xa6  ") + name + " sculpted.wav" : juce::String ("no sample yet");
-        exportTile.sub = exportTile.enabled ? "drag this box into Logic (a new file is made each time, in Music / Sample Sculptor)" : "drop a sample above first";
-        exportTile.repaint();
+        updateTile();
         repaint();
     }
     playButton.setButtonText (processor.playPos.load() >= 0.0f ? "STOP" : "PLAY");

@@ -86,6 +86,7 @@
 - Sample Sculptor（SampleSculptor）… サンプル編集プラグイン（AU 音源 aumu Smsc）。ファイルを落とす → 裏のスレッドで丸ごと作り直す（Render.h、JUCE なし、tools/test_render.cpp）→ 試し聴き（つまみを離すと自動、鍵盤 C3 基準でも）→ 箱をドラッグで Logic へ（毎回 ~/Music/Sample Sculptor に新しい WAV）。
   順番: START/END 切り取り → PITCH（速さごと、エルミート補間、上げるときは FIR で折り返し防止）→ 形（HitEngine.h = 元 Hit Sculptor の ATTACK/SNAP/LENGTH/ROOM の DRY 側）
   → REVERSE SOUND → ROOM の WET（hs::Room、尾の分だけ長く）→ REVERSE SOUND+ROOM（吸い込む響き）→ DRIVE（4 倍、FIR）→ FADE IN/OUT → NORMALIZE(-0.3 dB)+GAIN。apvts.state の "file" に元ファイルの場所
+  v1.1.0: Splice / Finder から落とす、EXPORT ボタン、RESULT の波形をつかんで Logic へ（WaveView::onDragOut）、同じ version なら同じファイルを使い回す（lastExportVersion）
   （2026-11-06: その場で加工する Hit Sculptor と、逆再生の Flipside を作ったが、本人の意図は「サンプル編集」だったので、これにまとめて 2 つは消した）
 - Reference Monitor（ReferenceMonitor）… 聴き比べ用の単体 Mac アプリ（macOS 14.2 以降、プロセスタップで Logic とミュージックの音を受け取る）。
   v1.1.0: LISTEN AS（PHONE / LAPTOP / EARBUDS / BT SPEAKER / CAR / CLUB の聞こえ方、ピンクノイズで音量を自動補正）、

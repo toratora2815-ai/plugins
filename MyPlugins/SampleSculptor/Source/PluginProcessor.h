@@ -49,7 +49,8 @@ public:
     void loadFile (const juce::File&);            // 裏で読む
     void play()  { playRequest = 1; }
     void stop()  { playRequest = 2; }
-    juce::File exportWav();                       // 今の音を WAV に（~/Music/Sample Sculptor）。失敗なら空
+    juce::File exportWav();                       // 今の音を WAV に（~/Music/Sample Sculptor）。変えていなければ前のファイルを使い回す。失敗なら空
+    bool isExported() const { return lastExportVersion == version.load() && lastExport.existsAsFile(); }
     std::shared_ptr<const SampleAudio> getSource() const   { const juce::SpinLock::ScopedLockType l (lock); return source; }
     std::shared_ptr<const SampleAudio> getRendered() const { const juce::SpinLock::ScopedLockType l (lock); return rendered; }
     juce::File sourceFile() const { return juce::File (apvts.state.getProperty ("file", "").toString()); }
@@ -75,6 +76,8 @@ private:
     juce::CriticalSection loadLock;
     juce::File pendingLoad;
     juce::String loadedPath, loadError;
+    juce::File lastExport;                        // メッセージスレッドだけ
+    int lastExportVersion = -1;
 
     // 試し聴き（1 声）
     double hostFs = 48000.0, pos = 0.0, rate = 1.0;

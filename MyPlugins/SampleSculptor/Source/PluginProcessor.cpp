@@ -254,6 +254,8 @@ juce::File SampleSculptorProcessor::outputFolder()
 
 juce::File SampleSculptorProcessor::exportWav()
 {
+    if (isExported()) return lastExport;   // つまみを変えていない = 同じ音なので、同じファイル
+    const int ver = version.load();
     auto a = getRendered();
     if (a == nullptr || a->length() == 0) return {};
     auto folder = outputFolder();
@@ -272,6 +274,8 @@ juce::File SampleSculptorProcessor::exportWav()
     for (auto& c : a->ch) ptrs.push_back (c.data());
     w->writeFromFloatArrays (ptrs.data(), (int) ptrs.size(), (int) a->length());
     w.reset();
+    lastExport = out;
+    lastExportVersion = ver;
     return out;
 }
 
