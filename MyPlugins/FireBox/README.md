@@ -49,6 +49,10 @@ IN → BASS → THICK → BODY → COMP（または OTT）→ SOFT CLIP → CRUN
 - BASS / SOFT CLIP / CRUNCH / LOUD: −140 dB 以下（計算の誤差だけ）
 - THICK −93 dB、COMP −86 dB、SOFT CLIP と CRUNCH の同時使用 −57 dB、UNITY −62 dB
 - BODY −44 dB（ゆっくり持ち上げる動きの細部が少し違う）
-- **OTT −23 dB**（ここだけまだ細かい動きが合いきっていない。音の方向性は同じ）
+- OTT（1.1.0 で作り直し）: 量 2 dB −53 dB、12 dB −40 dB、24 dB −33 dB、48 dB −27 dB、MIX 70% と組み合わせて −37 dB
+
+## 変更の記録
+- 1.1.0 … OTT を作り直し。88 Hz の帯域分けを測った形に、音量の見方を「dB で動く検出器を持ち上げ用・下げ用に 1 つずつ」に、
+  OTT のときの MIX の元の音も帯域分けを通す形に、量の表を 29 段階に（1.0.0 の OTT は差 −20〜−27 dB だった）
 
 測定と当てはめの道具は `build/fuellab/`（リポジトリには入れていない）、表のデータは `Source/Tables.h` と `Data/clip2d.bin`。

@@ -322,76 +322,103 @@ namespace firebox
     };
 
     //==================================================================== OTT（88 Hz / 2.5 kHz の 3 帯域、上げ下げ）
+    // 各帯域: dB で動く検出器を 2 つ（持ち上げ用・下げ用）。|x| を dB にして（下限 -100 dB）、
+    // 上がるときは速く（アタック）、下がるときはゆっくり（リリース）追う。ゲイン = P0 + U(持ち上げ用) - D(下げ用)
     struct OttBand
     {
-        KnotLine k; double g = 0, step = 0, T = 0, relC = 0, attTau = 24; bool att = false;
-        int band = 0;
-        const float* curve = nullptr; const float* curve2 = nullptr; double cfr = 0;   // 量の補間
-        inline double curveAt (double L) const
+        double eu = -100, ed = -100, cA = 0, cU = 0, cD = 0;
+        double P0 = 0; float U[data::ottGrid] {}, Dn[data::ottGrid] {};
+        void prepare (double sr, int b)
+        {
+            static constexpr double tU[3] = {2409.083, 2130.097, 1732.530};    // 48 kHz のサンプル数
+            static constexpr double tD[3] = {8701.993, 11223.961, 3823.533};
+            static constexpr double tA[3] = {46.42580, 11.24109, 4.18657};
+            const double r = sr / 48000.0;
+            cU = 1.0 / (tU[b] * r); cD = 1.0 / (tD[b] * r); cA = std::min (1.0, 1.0 / (tA[b] * r));
+            eu = ed = -100;
+        }
+        // 量の補間をした曲線から、-40 dB を境に持ち上げ分と下げ分に分ける
+        void setCurve (const float* c1, const float* c2, double fr)
         {
             using namespace data;
-            double p = (L - ottGridLo) / ottGridStep;
-            p = std::clamp (p, 0.0, (double) ottGrid - 1.0001);
-            const int i = (int) p; const double f = p - i;
-            const double c1 = curve[i] + f * (curve[i + 1] - curve[i]);
-            const double c2 = curve2[i] + f * (curve2[i + 1] - curve2[i]);
-            return c1 + cfr * (c2 - c1);
+            const int i40 = (int) std::lround ((-40.0 - ottGridLo) / ottGridStep);
+            P0 = c1[i40] + fr * (c2[i40] - c1[i40]);
+            for (int i = 0; i < ottGrid; ++i)
+            {
+                const double c = c1[i] + fr * (c2[i] - c1[i]);
+                U[i] = (float) (i < i40 ? std::max (c - P0, 0.0) : 0.0);
+                Dn[i] = (float) (i > i40 ? std::max (P0 - c, 0.0) : 0.0);
+            }
         }
-        void prepare (int la, double sr, int b)
+        static inline double look (const float* t, double L)
         {
-            band = b; k.prepare (la);
-            static constexpr double taus[3] = {0.12005, 0.0955, 0.05006};
-            static constexpr double att48[3] = {384, 70, 24};
-            relC = 1 - std::exp (-1 / (taus[b] * sr));
-            attTau = att48[b] * sr / 48000.0;
-            g = 0; step = 0; T = 0; att = false;
+            using namespace data;
+            double p = std::clamp ((L - ottGridLo) / ottGridStep, 0.0, (double) ottGrid - 1.001);
+            const int i = (int) p; const double f = p - i;
+            return t[i] + f * (t[i + 1] - t[i]);
         }
         inline double process (double x)
         {
-            k.push (x, curveAt (linToDb (std::fabs (x))));
-            if (! k.ready()) return 0;
-            const int64_t t = k.outIndex();
-            if (k.isEvent (t - 1))
-            {
-                const int64_t pn = k.popAndNext (t - 1);
-                const double Tn = k.targetAt (pn); const double gap = (double) (pn - (t - 1));
-                if (Tn < g) { att = true; step = (Tn - g) * (1 - std::exp (-gap / attTau)) / gap; }
-                else att = false;
-                T = Tn;
-            }
-            else if (att) g += step;
-            else if (T > g) g += (T - g) * relC;
-            return k.inputAt (t) * dbToLin (g);
+            const double v = std::max (20.0 * std::log10 (std::fabs (x) + 1e-30), -100.0);
+            eu += (v - eu) * (v > eu ? cA : cU);
+            ed += (v - ed) * (v > ed ? cA : cD);
+            return x * dbToLin (P0 + look (U, eu) - look (Dn, ed));
         }
     };
     struct Ott
     {
-        Biquad lp1a, lp1b, hp1a, hp1b, aLa, aLb, aHa, aHb, lp2a, lp2b, hp2a, hp2b;
+        // 88 Hz の分け方は測った形（Q の違う 2 段ずつ）、2.5 kHz は LR4
+        Biquad lpA, lpB, hpA, hpB, aLa, aLb, aHa, aHb, lp2a, lp2b, hp2a, hp2b;
         OttBand b[3];
+        Delay out;   // COMP と同じだけ遅らせる（OTT 自体は先読みなし）
         void prepare (int la, double sr)
         {
             const double q = 1 / std::sqrt (2.0);
-            lp1a.set (0, 88, q, 0, sr); lp1b = lp1a; hp1a.set (1, 88, q, 0, sr); hp1b = hp1a;
+            lpA.set (0, 86.3455, 0.8832, 0, sr); lpB.set (0, 80.8348, 0.6176, 0, sr);
+            hpA.set (1, 90.8755, 0.6118, 0, sr); hpB.set (1, 88.688, 0.8763, 0, sr);
             aLa.set (0, 2500, q, 0, sr); aLb = aLa; aHa.set (1, 2500, q, 0, sr); aHb = aHa;
             lp2a = aLa; lp2b = aLa; hp2a = aHa; hp2b = aHa;
             reset();
-            for (int i = 0; i < 3; ++i) b[i].prepare (la, sr, i);
+            for (int i = 0; i < 3; ++i) b[i].prepare (sr, i);
+            out.prepare (la);
         }
-        void reset() { for (auto* f : { &lp1a, &lp1b, &hp1a, &hp1b, &aLa, &aLb, &aHa, &aHb, &lp2a, &lp2b, &hp2a, &hp2b }) f->reset(); }
+        void reset() { for (auto* f : { &lpA, &lpB, &hpA, &hpB, &aLa, &aLb, &aHa, &aHb, &lp2a, &lp2b, &hp2a, &hp2b }) f->reset(); }
+        double curAmt = -1;
         void setAmount (double amtDb)
         {
+            if (amtDb == curAmt) return;
+            curAmt = amtDb;
             using namespace data;
             int k = 0;
             while (k < ottAmts - 2 && ottAmtDb[k + 1] <= amtDb) ++k;
             const double fr = std::clamp ((amtDb - ottAmtDb[k]) / (ottAmtDb[k + 1] - ottAmtDb[k]), 0.0, 1.0);
-            for (int i = 0; i < 3; ++i) { b[i].curve = ottCurve[k][i]; b[i].curve2 = ottCurve[k + 1][i]; b[i].cfr = fr; }
+            for (int i = 0; i < 3; ++i) b[i].setCurve (ottCurve[k][i], ottCurve[k + 1][i], fr);
         }
         inline double process (double x)
         {
-            const double lo0 = lp1b.process (lp1a.process (x)), hi1 = hp1b.process (hp1a.process (x));
+            const double lo0 = lpB.process (lpA.process (x)), hi1 = hpB.process (hpA.process (x));
             const double lo = aLb.process (aLa.process (lo0)) + aHb.process (aHa.process (lo0));
             const double mid = lp2b.process (lp2a.process (hi1)), high = hp2b.process (hp2a.process (hi1));
-            return b[0].process (lo) + b[1].process (mid) + b[2].process (high);
+            return out.process (b[0].process (lo) + b[1].process (mid) + b[2].process (high));
+        }
+    };
+
+    // OTT モードの MIX の元の音: FUEL は帯域分けフィルターを通した音（足すと全域通過）を使う
+    struct XoSum
+    {
+        Biquad lpA, lpB, hpA, hpB, aLa, aLb, aHa, aHb, lp2a, lp2b, hp2a, hp2b;
+        void prepare (double sr)
+        {
+            const double q = 1 / std::sqrt (2.0);
+            lpA.set (0, 86.3455, 0.8832, 0, sr); lpB.set (0, 80.8348, 0.6176, 0, sr);
+            hpA.set (1, 90.8755, 0.6118, 0, sr); hpB.set (1, 88.688, 0.8763, 0, sr);
+            aLa.set (0, 2500, q, 0, sr); aLb = aLa; aHa.set (1, 2500, q, 0, sr); aHb = aHa;
+            lp2a = aLa; lp2b = aLa; hp2a = aHa; hp2b = aHa;
+        }
+        inline double process (double x)
+        {
+            const double lo0 = lpB.process (lpA.process (x)), hi1 = hpB.process (hpA.process (x));
+            return aLb.process (aLa.process (lo0)) + aHb.process (aHa.process (lo0)) + lp2b.process (lp2a.process (hi1)) + hp2b.process (hp2a.process (hi1));
         }
     };
 
@@ -494,7 +521,7 @@ namespace firebox
             const int la = (int) std::lround ((live ? 256.0 : 1200.0) * r);
             for (int c = 0; c < 2; ++c)
             {
-                bass[c].prepare (sr); body[c].prepare (sr); comp[c].prepare (la); ott[c].prepare (la, sr); loud[c].prepare (la); unity[c].prepare (sr);
+                bass[c].prepare (sr); body[c].prepare (sr); comp[c].prepare (la); ott[c].prepare (la, sr); xo[c].prepare (sr); loud[c].prepare (la); unity[c].prepare (sr);
             }
             thick.prepare (sr);
             latency = body[0].LA + la + la;
@@ -543,7 +570,8 @@ namespace firebox
                     if (wBoth > 0) yc += wBoth * clip[c].both (y);
                     if (wSo > 0)   yc += wSo * clip[c].soft (y);
                     if (wCr > 0)   yc += wCr * clip[c].crunch (y);
-                    const double dry = dryD[c].process (d[c]);
+                    const double dxo = xo[c].process (d[c]);
+                    const double dry = dryD[c].process (d[c] + wO * (dxo - d[c]));
                     y = (1 - mix) * dry + mix * yc;
                     // LOUD: 先読みには常に gl を掛けた音を入れ、外すときは素通しの遅れと重ねる
                     const double zl = loud[c].process (y * gl), zp = loudPass[c].process (y);
@@ -574,7 +602,7 @@ namespace firebox
         }
 
         double sr = 48000; bool isLive = false; int latency = 0;
-        Bass bass[2]; Thick thick; Body body[2]; Comp comp[2]; Ott ott[2]; Clip clip[2]; Loud loud[2]; Unity unity[2];
+        Bass bass[2]; Thick thick; Body body[2]; Comp comp[2]; Ott ott[2]; XoSum xo[2]; Clip clip[2]; Loud loud[2]; Unity unity[2];
         Delay dryD[2], dry2[2], loudPass[2], bypD[2];   // dry2: LOUD の先読み分（UNITY の基準をそろえる）
         Ramp rBass, rThick, rBody, rComp, rOtt, rDyn, rSc, rCr, rLoud, rUnity, rByp;
         Params prev; bool havePrev = false;
