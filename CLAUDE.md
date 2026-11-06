@@ -240,6 +240,10 @@
   PatternFinder.h（JUCE なし）が新しい操作で終わる 3〜10 個の並びの 3 回目を探す（前の回の次がどれも同じなら続きを待つ、手が 5 秒止まったら確定、知らせた並びは skipKey＝2 回つなげて回しも除外）。
   「自動にする」で ⌃⌥1〜9、くり返しは AX で同じ名前を押す（なければ窓の中の同じ位置）、文字の入力は止まって待ち ⌃⌥T で続ける。入力監視とアクセシビリティの許可が要る。tools/test_finder.cpp
 
+- Forge Strip（ForgeStrip）… 11 モジュールのチャンネルストリップ。この Mac の定番ストリップ（AU 単体モジュール版）を AVAudioUnit で直接動かして測り、振る舞いを合わせたオリジナル（Source/dsp、JUCE なし、tools/fs_cli.cpp・test_engine.cpp）。
+  並び替えできるチェーン（apvts.state の "order"）＋最後にリミッター。SCULPTOR（23 楽器の目標カーブ ToneTargets.h、パワーを保って寄せる、STFT 1024）/ EQ 12 帯域 13 形 / COMP×2（検出 = 3.5 ms の最大、直線の倍率で τ = ATT/2・REL/2、戻りは 1/倍率で τ = min(ATT,REL)、ニー幅 = KNEE×1.5）/
+  EXCITER（XY の 4 角の歪み、4 倍 FIR OS）/ TRANSIENT（3 ms 先読み、tsTune）/ GATE（最低 20 ms 開く）/ DENSITY（34.6 ms 先読み）/ CLIPPER / PHASE（IIR の 90° 対）/ UNMASK（サイドチェーン、帯域の効きやすさは測定の表）。各モジュール最大 3 帯域（LR4）
+
 ## Claude からの提案（余った利用枠の活用）
 - Claude が自分で「次に作るもの・直すもの」を3つ提案し、本人が「GO」を出したら作る仕組み。指示書は `ideas/PROPOSAL_PROMPT.md`
 - 2つの入口:
