@@ -190,6 +190,19 @@
   ノイズ除去（NoiseReduce.h、JUCE なし。30 Hz ハイパス→STFT 2048/512、静かな 15% の平均をノイズに、ならしたパワーでウィーナー風に下げる。設定 noise 0/1/2 = なし/ふつう -15 dB/強め -24 dB。
   録り終えて解析する前にかけ、保存する声にも入る。静かな所と声の差が 12 dB 未満なら何もしない）
 
+- Sound Sketch（SoundSketch）… 口マネで手元のサンプルを探す単体 Mac アプリ。SketchEngine.h（JUCE なし）で 1 音 48 個の特徴（音量の形・重心の動き・平らさ・帯域・長さ・立ち上がり・重心の傾き）、
+  声の重心は voiceToLibrary（log2 Hz を 1.46 倍 − 5.37）で広げてから比べる。Library.h が裏でフォルダを読み ~/Library/Application Support/Sound Sketch/index.bin に保存。
+  最初は ~/Splice/sounds（ダウンロード済みだけ。Splice の全カタログは API がないので探さない）。クリックで試聴・ドラッグで Logic・ダブルクリックで「これに似た音」。tools/test_engine.cpp
+- Resume Card（ResumeCard）… 中断カード。メニューバー常駐。使っている間 90 秒ごとに状態（前のアプリ・窓・書類・カーソルの前の文・各ブラウザの前のタブ・Finder・前の窓の写真〔ScreenCaptureKit、macOS 14〜〕）を取り、
+  画面ロック・スリープ・スクリーンセーバー・操作なし（5 分）でカードに（~/Library/Application Support/Resume Card/cards、60 枚）。3 分以上離れて戻ったら「おかえりなさい」。⌃⌥P 中断＋メモ、⌃⌥R 最後のカード。
+  全部開き直す（もう開いているタブへは移るだけ）。パスワード管理アプリは取らない
+- Aside（Aside）… ひとりごと秘書。SFSpeechRecognizer（ja-JP、requiresOnDeviceRecognition。できない Mac では聞かない）で約 0.9 秒の無音ごとに確定、
+  TaskParser.h（JUCE なし）がきっかけの言葉（あとで・〜しなきゃ・忘れないように・メモして等）のある文だけ「やること」と日時に。EventKit でリマインダーのリスト「ひとりごと」へ、
+  打ち合わせ等で時刻があればカレンダー。右上の HUD で取り消し。⌃⌥M = 次の一言をメモ。Logic が前のときは聞かない（標準 ON）。tools/test_parser.cpp（17 例）
+- Third Time（ThirdTime）… 「3回目」検出係。CGEventTap（聞くだけ）でアプリ切り替え・⌘/⌃ ショートカット・特別なキー・クリックした所の AX 名を記録（打った文字の中身は記録しない）。
+  PatternFinder.h（JUCE なし）が新しい操作で終わる 3〜10 個の並びの 3 回目を探す（前の回の次がどれも同じなら続きを待つ、手が 5 秒止まったら確定、知らせた並びは skipKey＝2 回つなげて回しも除外）。
+  「自動にする」で ⌃⌥1〜9、くり返しは AX で同じ名前を押す（なければ窓の中の同じ位置）、文字の入力は止まって待ち ⌃⌥T で続ける。入力監視とアクセシビリティの許可が要る。tools/test_finder.cpp
+
 ## Claude からの提案（余った利用枠の活用）
 - Claude が自分で「次に作るもの・直すもの」を3つ提案し、本人が「GO」を出したら作る仕組み。指示書は `ideas/PROPOSAL_PROMPT.md`
 - 2つの入口:
