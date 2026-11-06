@@ -46,7 +46,8 @@ namespace plink
         kindModHost = 13,       // 受ける: Link の数値を動かす元にする
         kindSampleSculptor = 14,
         kindEchoDrift = 15,     // 受ける: 歌の間エコーを下げる（VocalDuck）
-        numKinds = 16
+        kindFireBox = 16,       // 受ける: 出口を Gain Stage の TARGET にそろえる（Wool Fuzz と同じ）
+        numKinds = 17
     };
 
     inline const char* kindName (uint32_t k)
@@ -68,6 +69,7 @@ namespace plink
             case kindModHost:       return "Mod Host";
             case kindSampleSculptor: return "Sample Sculptor";
             case kindEchoDrift:     return "Echo Drift";
+            case kindFireBox:       return "Fire Box";
             default:                return "?";
         }
     }
