@@ -32,7 +32,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`, `Pchd`, `Blsc`, `Rfrc`, `Hzsp`, `Vltm`, `Fdpl`, `Gnst`, `Lmrm`, `Htsc`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`, `Pchd`, `Blsc`, `Rfrc`, `Hzsp`, `Vltm`, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`, `Flps`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -86,6 +86,10 @@
 - Hit Sculptor（HitSculptor）… キック・スネアの 1 打ずつの形を作り直す（トランジェント＋長さ＋響き）。HitEngine.h（JUCE なし、tools/test_engine.cpp）。
   鳴り始めを検出（速い包絡〔25 ms ホールド〕と 10 ms 遅れの差 5 dB、30 ms 空ける）、ATTACK（±18 dB、SNAP 1〜50 ms）、LENGTH（左 = 時間で T60 2.5 s→30 ms、右 = 余韻を最大 +24 dB 持ち上げ）、
   ROOM（左 = 打った瞬間の RMS から 10〜30 dB 下を 1:4 で下げる、右 = 8 本 FDN の小部屋、120 Hz 以下は響かせない）/ SIZE / TONE、DRIVE（4 倍 OS の tanh）/ MIX / OUTPUT、プリセット 12 個（apvts.state の "preset"）
+- Flipside（Flipside）… 逆再生。LIVE REVERSE: GRID（1/16〜2 BARS）の枠ごとに逆、遅れ = 枠 1 つ分を setLatencySamples で伝えるので逆の音がもとの枠に収まる（FlipEngine.h、JUCE なし、tools/test_engine.cpp）。
+  枠は ppq から（再生中）、止まっているときは自由に。REVERSE = EVERY SLICE / 2ND / 4TH / OFF、FADE / MIX / OUTPUT。
+  FILE REVERSE（FileReverse.h）: 落としたファイルを丸ごと逆にして ~/Music/Flipside/<名前> reversed.wav（24bit、TRIM SILENCE で両端の -60 dB 未満を切る）、箱をドラッグで Logic へ（performExternalDragDropOfFiles）。apvts.state の "lastFile" / "trim"
+  Hit Sculptor は遅れゼロのまま残すため、逆再生は別プラグインにした
 - Reference Monitor（ReferenceMonitor）… 聴き比べ用の単体 Mac アプリ（macOS 14.2 以降、プロセスタップで Logic とミュージックの音を受け取る）。
   v1.1.0: LISTEN AS（PHONE / LAPTOP / EARBUDS / BT SPEAKER / CAR / CLUB の聞こえ方、ピンクノイズで音量を自動補正）、
   LEVEL に SPOTIFY / APPLE / YOUTUBE の音量正規化、メーターに各サービスで何 dB 上げ下げされるか
@@ -171,6 +175,12 @@
   同期テイクは先に「/」（位置へ移動）で "N 1 1 1"。アクセシビリティ許可が要る）。LOOP（L キー、LENGTH 1/2/4/8 小節、takeLoop 拍。rebuildTakeNotes で周をたたむ、
   1/8 拍早めはその周の頭、カウント中は捨てる。Metronome::setLoop で前の周を ToySynth（Preview.h）で鳴らす。⌫ / 命令 loopUndo で最後の周を消す）。
   命令 toLogic / loop / loopUndo。Num Deck 1.22.1 にその 3 つ
+
+- Hush Field（HushField）… 動的レゾナンス抑制。市販の定番（Mac に入っている本物）を AVAudioUnit で直接動かして測り、振る舞いを合わせたオリジナル。
+  HushEngine.h（JUCE なし、vDSP の FFT）: 4096 点を先読み解析 → posToHz の目盛り 1024 点で fine/coarse の山なみ（3 回の箱ならし）、+emph dB/oct で暗めの音を基準 →
+  soft/hard・DEPTH・DETAIL の量 → 帯ごとの ATTACK/RELEASE（低/高の TILT 倍率）→ LINK・MAX CUT → 最小位相 FIR（LINEAR PHASE は直線位相）をホップごとに作り FFT でたたみこみ・クロスフェード。
+  遅延 2304（LINEAR PHASE 3456、LOW LATENCY 0＝直接たたみこみ）。帯域カーブ 8 本（ID b1〜b8 の used/on/shape/freq/q/gain/slope/focus）、STEREO L/R・M/S、SC、A/B、プリセット 8 個。
+  合わせ込みの数値は Tuning（tools/hf_cli.cpp が測定用の CLI）
 
 - Plugin Link（MyPlugins/Shared/PluginLink.h・PluginLinkJuce.h）… 自作プラグイン同士の連携。
   ~/Library/Application Support/MyPlugins/PluginLink-v2.bin を mmap した共有メモリの掲示板（64 席・数値 24 個、atomic だけで読み書き、3 秒で不在、10 秒で席を回収）。
