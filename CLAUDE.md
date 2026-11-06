@@ -32,7 +32,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`, `Eldv`, `Ecdr`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`, `Eldv`, `Ecdr`, `Frbx`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -89,6 +89,7 @@
 - Gain Stage（GainStage）1.1.0 … トラックの入口の音量をワンクリックでそろえる（遅延ゼロ）。LEARN（鳴っている所だけ 5 秒測り GAIN を 1 回入れる）、TARGET / RMS・PEAK / Ø / MONO / SWAP、IN/OUT メーター。結果は apvts.state の "learnInfo"。GAIN / TARGET などを送る
 - Sample Sculptor（SampleSculptor）1.2.0 … サンプル編集（AU 音源 aumu Smsc）。切り取り→PITCH→STRETCH→形→REVERSE→ROOM→DRIVE→TONE→FADE→NORMALIZE、A/B、ドラッグで Logic へ。LINK 欄だけ
 - Echo Drift（EchoDrift）1.0.0 … テープ・BBD・ラジオ・コーラス系 31 スタイルのディレイ（市販の定番ディレイを測って合わせ込み）。SINGLE / DUAL / PING-PONG / RHYTHM。Fader Pilot から VOCAL DUCK
+- Fire Box（FireBox）1.0.0 … 太く・大きくする全部入り（本人の持っている市販プラグインを測って、音の処理を同じ動きに合わせ込み）。IN / BASS / THICK / BODY / COMP⇄OTT / SOFT CLIP / CRUNCH / MIX / LOUD / OUT、UNITY・LIVE・192k・BYPASS。測定の道具は build/fuellab（コミットしない）。OTT だけ差 −23 dB で細部が未完。Plugin Link は Gain Stage で MATCH
 - Mod Host（ModHost）1.1.0 … 好きな AU を中に読み込み、MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS / LINK）でつまみを動かす。3 帯域・DRIVE・MORPH・前後の解析
 - Forge Strip（ForgeStrip）1.1.0 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Forge Mixer から OUTPUT/PAN/WIDTH を受ける（独自の種類 200）
 - Forge Mixer（ForgeMixer）1.0.1 … Forge Strip 用のミキサー（音は素通し。つまみが LINK だけなのでプリセット・取り消し欄はなし＝例外）。同じ LINK の Strip を点で並べ（左右 = パン、上下 = 音量、大きさ = 幅）、ドラッグの指示を種類 201 で出す（最大 5 つ、放して 0.6 秒）。
