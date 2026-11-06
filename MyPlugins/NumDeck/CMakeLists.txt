@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
-project(NumDeck VERSION 1.22.1 LANGUAGES C CXX)
+project(NumDeck VERSION 1.23.0 LANGUAGES C CXX)
 if(APPLE)
     enable_language(OBJCXX)
 endif()

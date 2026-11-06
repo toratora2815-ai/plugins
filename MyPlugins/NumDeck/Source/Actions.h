@@ -63,6 +63,10 @@ namespace numdeck
             { "freeze",    "トラックをフリーズ", Cat::Track, vk::F, kCmd | kOpt | kCtrl | kShift, false, Icon::None, "FRZ" },
             { "inputMon",  "入力モニタリング",   Cat::Track, vk::I, kCmd | kOpt | kCtrl | kShift, false, Icon::None, "I" },
             { "lowLatency","低レイテンシモード", Cat::Transport, vk::L, kCmd | kOpt | kCtrl | kShift, false, Icon::None, "LOW" },
+            // オートメーションのモード（v1.23.0）。どれも Logic に 1 回だけキーを覚えさせる
+            { "autoLatch", "オートメーション Latch ⇔ Read", Cat::Track, vk::A, kCmd | kOpt | kCtrl | kShift, false, Icon::None, "LTCH" },
+            { "autoToLatch","オートメーションを Latch に", Cat::Track, vk::T, kCmd | kOpt | kCtrl | kShift, false, Icon::None, "LATCH" },
+            { "autoToRead", "オートメーションを Read に",  Cat::Track, vk::R, kCmd | kOpt | kCtrl | kShift, false, Icon::None, "READ" },
             { "newAudio",  "新規オーディオトラック", Cat::Track, vk::A, kCmd | kOpt, false, Icon::None, "+AU" },
             { "newInst",   "新規ソフト音源トラック", Cat::Track, vk::S, kCmd | kOpt, false, Icon::None, "+INST" },
             { "dupTrack",  "トラックを複製",     Cat::Track, vk::D, kCmd,          false, Icon::None, "+DUP" },

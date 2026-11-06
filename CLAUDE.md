@@ -144,6 +144,7 @@
   v1.3.3: Logic Pro モードのキー送信は前面アプリに関係なく Logic へ（KeyTap::sendKeyToLogic。Logic は後ろにいる間のキーを受けないので一瞬前に出して送り、150 ms 後に元のアプリへ戻す）。アプリのアイコン（Resources/Icon.png、tools/make-app-icons.swift で描く。Reference Monitor 1.3.2 も同じ）
 
   v1.22.0: タイルの種類に「Aside（ひとりごと秘書）」（"as:memo" / "as:undo" / "as:show" → 分散通知 com.myplugins.aside.command）
+  v1.23.0: 「トラック」にオートメーションの Latch ⇔ Read（⌃⌥⇧⌘A）/ Latch に（⌃⌥⇧⌘T）/ Read に（⌃⌥⇧⌘R）。最初の割り当てには入れない、Logic に 1 回覚えさせる
 - Hum Keys（HumKeys）… 鼻歌・口ドラムをその場で MIDI にする単体 Mac アプリ。仮想 MIDI「Hum Keys」（MidiOutput::createNewDevice）で Logic へ。
   MELODY: 12 kHz に間引いて YIN で約 2.7 ms ごとに音程 → KEY / SCALE に合わせる（今の音を少しひいき）、GLUE / HOLD / OCTAVE / VELOCITY / BEND（±2 半音）/ MIDI CH、
   音量のくぼみ→戻りで同じ音を打ち直す。DRUMS: 全体と 3 kHz 以上の包絡の立ち上がりで検出、14 ms の 150 Hz 以下・7 kHz 以上の割合（直前の残りを引く）で
