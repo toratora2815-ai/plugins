@@ -113,6 +113,17 @@ Balance Scope が測ったオケの音量で FOLLOW MUSIC が動きます。Logi
   **AUTO** は「いちばん新しく送ってきた相手」。選んだ相手はトラック名で覚えるので、プロジェクトを開き直しても同じ相手につながります
   （その相手がいないときは `(not here)` と出て、AUTO と同じ動きになります）
 
+### ほかに Fader Pilot の情報を使うもの
+- **Lumen Rooms / Elder Verb / Meld Verb** … 同じ LINK にすると、歌っている間だけ響きを下げます（各リバーブの LINK 欄の **VOCAL DUCK**、最初は 4 dB）
+- **Mod Host** … MOD の種類を **LINK** にすると、フェーダー位置（-12〜+12 dB）で中のプラグインのつまみを動かせます
+
+## プリセットの保存・取り消し（画面のいちばん下）
+右上のプリセットメニュー（上の表の 8 個）とは別に、自分の設定を保存できます。
+- **UNDO / REDO** … つまみの操作を 1 手ずつ取り消し・やり直し（100 手まで。画面を閉じても残ります。オートメーションの動きは入りません）
+- **< >** … 前／次の自分のプリセット。真ん中の名前を押すと一覧（Save as... / Delete / Show preset folder in Finder）
+- **SAVE** … 今のつまみに名前を付けて保存（~/Library/Audio/Presets/MyPlugins/Fader Pilot。Logic のプリセットと同じ場所）。呼び出した後につまみを変えると、名前の後ろに * が付きます
+- LINK の番号はプリセットで変わりません
+
 ## 変更履歴
 - v1.2.0 … Plugin Link：FOLLOW MUSIC で Balance Scope が送るオケの音量を使える（サイドチェーン不要）、FROM（相手選び）
 - v1.1.0 … Plugin Link（LINK 1〜4。フェーダーの位置を Horizon Spread へ送る）

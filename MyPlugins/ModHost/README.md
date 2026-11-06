@@ -84,12 +84,30 @@ MOD の TYPE を **SIDECHAIN** にすると、そのトラックの音で動き�
 行の名前のところをクリック →「◆ Mod Host」から、DRIVE / MIX / OUT / MORPH / SEND LOW・MID・HIGH / SPLIT LOW・HIGH を選べます。
 - 例: ENV → DRIVE（強く弾いた所だけ深く歪む）、SIDECHAIN → MIX（キックの間だけリバーブを引っ込める）、LFO → SPLIT HIGH（歪む帯域が動く）
 
+## 画面のいちばん下（LINK・プリセット・取り消し）
+### Plugin Link：ほかの自作プラグインの数値で動かす
+自作プラグイン同士が裏で情報をやりとりします。いちばん下の帯の **LINK**（LINK OFF / LINK 1〜4）を、つなげたいプラグイン同士で**同じ番号**にするだけです。最初は OFF。
+番号を変えれば、別々の組を 4 つまで同時に作れます。帯の左の丸が光っているときは、相手とつながって効いています。
+- MOD の TYPE を **LINK (Fader Pilot / Balance Scope)** にすると、同じ LINK の相手が送る数値で動きます
+  - **Fader Pilot** がいれば、そのフェーダー位置（-12〜+12 dB を 0〜100 %）。例: ボーカルを持ち上げている間だけ、オケのリバーブの MIX を下げる
+  - Fader Pilot がいなければ **Balance Scope** のオケの音量（-60〜0 dB を 0〜100 %）。例: オケが大きい所でディレイを控えめに
+  - ATTACK / RELEASE でならし、GAIN で振れ幅を大きくできます。BI / UNI や AMOUNT はほかの種類と同じ
+- 帯の文の例：`Fader Pilot ride -> LINK = 62 %`。相手が見つからないときは `waiting for Fader Pilot or Balance Scope`
+- **FROM**（LINK の右）… 同じ LINK に同じ種類の相手が 2 つ以上いるとき、どれを使うか選べます（AUTO = いちばん新しく送ってきた相手。トラック名で覚えます）
+
+### 自分のプリセットと取り消し
+- **UNDO / REDO** … つまみの操作を 1 手ずつ取り消し・やり直し（100 手まで。画面を閉じても残ります）
+- **< >** … 前／次の自分のプリセット。真ん中の名前を押すと一覧（Save as... / Delete / Show preset folder in Finder）
+- **SAVE** … 今のつまみに名前を付けて保存（~/Library/Audio/Presets/MyPlugins/Mod Host。Logic のプリセットと同じ場所）
+- プリセットに入るのは Mod Host 自身のつまみ（MOD の設定・AMOUNT・DRIVE / MIX など）だけです。中に入れたプラグイン、つないだ先、STEPS の段、MORPH の A / B は入りません
+- LINK の番号はプリセットで変わりません
+
 ## おすすめ設定
 
-- **キックでリバーブをよける**: 中に Nebula Reverb などを入れる → MOD 2 を SIDECHAIN、ATTACK 2 ms、RELEASE 250 ms、UNI → LEARN で MIX（Dry/Wet）→ AMOUNT -60 %
+- **キックでリバーブをよける**: 中に Lumen Rooms などのリバーブを入れる → MOD 2 を SIDECHAIN、ATTACK 2 ms、RELEASE 250 ms、UNI → LEARN で MIX（Dry/Wet）→ AMOUNT -60 %
 - **ディレイのフィードバックを 4 小節で上げる**: MOD 1 を LFO、SHAPE = SAW UP、SYNC ON、4 BARS、UNI → フィードバックの元の位置を低めにして AMOUNT +60 %
 - **ベースを低音はそのままで歪ませる**: 中に Wool Fuzz → BANDS ON、SPLIT LOW 150 Hz、LOW の SEND 0 %、MIX 60 %、AUTO GAIN ON → DRIVE で歪みの深さを決める
-- **高い所だけ響かせる**: 中に Nebula Reverb → BANDS ON、LOW と MID の SEND 0 %、SPLIT HIGH 3 kHz（WIDTH の数字で広がった量が見える）
+- **高い所だけ響かせる**: 中にリバーブ（Lumen Rooms など）→ BANDS ON、LOW と MID の SEND 0 %、SPLIT HIGH 3 kHz（WIDTH の数字で広がった量が見える）
 - **クリーン → クランチを 4 小節で**: 中に Porch Drive → GAIN を低くして STORE A、上げて STORE B → MOD 1 を LFO・SAW UP・4 BARS・UNI、行き先「◆ Mod Host: MORPH」AMOUNT +100 %
 - **フィルターを 16 分で刻む**: MOD 4 を STEPS、1/16、STEPS 8、SMOOTH 10 % → カットオフに AMOUNT +70 %、段を描く
 - **ゆらゆらコーラス風**: MOD 3 を RANDOM、1/2、SMOOTH 100 %、BI → ピッチやディレイタイムに AMOUNT +10 %
@@ -102,4 +120,4 @@ MOD の TYPE を **SIDECHAIN** にすると、そのトラックの音で動き�
 - つないだつまみは約 1.3 ms（64 サンプル）ごとに動かしています。つないでいないときは中のプラグインをそのまま 1 回で通します
 - 中のプラグインの遅れ（レイテンシー）は、そのまま Logic に伝えます
 - 中に入れられるのは AU のエフェクト（Mod Host 自身は入れられません）
-- **Logic 純正のエフェクト（ChromaVerb、Pedalboard、Channel EQ など）は AU ではないので入れられません**。自作のプラグイン（Wool Fuzz、Porch Drive、Nebula Reverb など）、市販のプラグイン、Apple の AU（AUDistortion、AUDelay など）が入ります
+- **Logic 純正のエフェクト（ChromaVerb、Pedalboard、Channel EQ など）は AU ではないので入れられません**。自作のプラグイン（Wool Fuzz、Porch Drive、Lumen Rooms など）、市販のプラグイン、Apple の AU（AUDistortion、AUDelay など）が入ります

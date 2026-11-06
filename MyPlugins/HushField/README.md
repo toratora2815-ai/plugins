@@ -63,3 +63,23 @@
 | 歯擦音（サ行） | hard, DEPTH 6, DETAIL 6, ATTACK 1, RELEASE 2, Bandpass 7 kHz |
 | アコギのボワつき | soft, DEPTH 5, DETAIL 4, Bell 200 Hz +3 |
 | ミックスバス | soft, DEPTH 3〜4, DETAIL 3, ATTACK 6, RELEASE 5 |
+
+## Plugin Link：Balance Scope と組む（v1.1）
+自作プラグイン同士が裏で情報をやりとりします。画面のいちばん下の帯の **LINK**（LINK OFF / LINK 1〜4）を、つなげたいプラグイン同士で**同じ番号**にするだけです。最初は OFF。
+（下の段の STEREO の **LINK** つまみ＝左右の削り方をそろえる量 とは別物です）
+
+- **受け取る**: 同じ LINK の **Balance Scope** が見つけた「出すぎの帯域」（上位 2 か所）に、**ベルを足して強めに処理**します。
+  強さは出すぎの量に応じて +2〜+8（2 か所目は控えめ）、約 0.8 秒でなめらかに出入りします。自分で置いた帯域カーブはそのまま
+  - LINK 欄の右の **FOLLOW**（最初は ON）を OFF にすると、受け取らずにいつもどおり動きます
+  - 帯の文の例：`Balance Scope: excess -> +4.3 at 2.87 kHz`（出すぎがないときは `Balance Scope: nothing sticking out`）
+- **送る**: いまどこをどれだけ削っているか（100 Hz〜16 kHz を 16 本）。Balance Scope のグラフに青緑の棒で出ます
+- **FROM**（LINK の右）… 同じ LINK に Balance Scope が 2 つ以上いるとき、どれに従うか選べます（AUTO = いちばん新しく送ってきた相手。トラック名で覚えます）
+
+使い方の例: ボーカルに Hush Field、その後ろ（かマスター）に Balance Scope → 両方の LINK を 1 → 再生して 3 秒ほど待つ
+
+## プリセットの保存・取り消し（画面のいちばん下）
+上の段の **Presets** は最初から入っている 8 個。自分の設定は、いちばん下の右の帯で保存できます。
+- **UNDO / REDO** … つまみの操作を 1 手ずつ取り消し・やり直し（100 手まで。画面を閉じても残ります）
+- **< >** … 前／次の自分のプリセット。真ん中の名前を押すと一覧（Save as... / Delete / Show preset folder in Finder）
+- **SAVE** … 今のつまみに名前を付けて保存（~/Library/Audio/Presets/MyPlugins/Hush Field。Logic のプリセットと同じ場所）
+- LINK の番号はプリセットで変わりません

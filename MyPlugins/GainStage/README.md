@@ -50,6 +50,14 @@
 - 同じ LINK の **Balance Scope** の帯に `Gain Stage +4.5 dB (learned)` のように出ます。
   「このトラックは入口でどれだけ持ち上げてあるか」を、Balance Scope を見ながら確かめられます
 - 音は何も変わりません（知らせるだけ）
+- 同じ LINK の **Wool Fuzz / Porch Drive** は、MATCH が ON なら出口の音量を Gain Stage の TARGET にそろえます（Gain Stage が **RMS** のときだけ）。
+  歪みを深くしても音が大きくならないので、音色だけで比べられます
+
+## プリセットの保存・取り消し（画面のいちばん下）
+- **UNDO / REDO** … つまみの操作を 1 手ずつ取り消し・やり直し（100 手まで。画面を閉じても残ります。オートメーションの動きは入りません）
+- **< >** … 前／次の自分のプリセット。真ん中の名前を押すと一覧（Save as... / Delete / Show preset folder in Finder）
+- **SAVE** … 今のつまみに名前を付けて保存（~/Library/Audio/Presets/MyPlugins/Gain Stage。Logic のプリセットと同じ場所）。呼び出した後につまみを変えると、名前の後ろに * が付きます
+- LINK の番号はプリセットで変わりません
 
 ## メモ
 - メーターの RMS は、0 dB のサイン波で -3 dB になる測り方です

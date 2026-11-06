@@ -161,6 +161,13 @@ CREATE でモノラルっぽい音から広がりを作り、SHAPE で帯域ご�
   （その相手がいないときは `(not here)` と出て、AUTO と同じ動きになります）
 - v1.3.1 … FROM（相手選び）を追加。Plugin Link のしくみを v2 にした（ほかの自作プラグインも v2 どうしでつながります）
 
+## プリセットの保存・取り消し（画面のいちばん下）
+右上のプリセットメニュー（内蔵の 11 個）とは別に、自分の設定を保存できます。
+- **UNDO / REDO** … つまみの操作を 1 手ずつ取り消し・やり直し（100 手まで。画面を閉じても残ります。オートメーションの動きは入りません）
+- **< >** … 前／次の自分のプリセット。真ん中の名前を押すと一覧（Save as... / Delete / Show preset folder in Finder）
+- **SAVE** … 今のつまみに名前を付けて保存（~/Library/Audio/Presets/MyPlugins/Horizon Spread。Logic のプリセットと同じ場所）。呼び出した後につまみを変えると、名前の後ろに * が付きます
+- LINK の番号はプリセットで変わりません
+
 ## 中身
 入力 → CREATE（SHIFT → DOUBLE → BANDS → HAZE で Mid から Side を作って足す → MOTION）→ Mid / Side に分解 → Side を4帯域に分割（24 dB/oct のクロスオーバー。Mid も同じ位相回転を通して位相を揃える）
 → 帯域ごとの幅 → AIR（Side のハイシェルフ）→ TRANSIENT（速い包絡と遅い包絡の差でアタック検出）

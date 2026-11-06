@@ -59,39 +59,45 @@ ITU-R BS.1770（EBU R128）の計算方法どおりに測ります（EBU の公�
 数値は一般的な市販曲の傾向をもとにした目安です。
 全体の音量差は自動で取り除くので、音量に関係なく形だけを比べられます。
 
-## Plugin Link：Velvet Tamer に「出すぎの帯域」を教える（v1.2）
+## Plugin Link：Hush Field に「出すぎの帯域」を教える（v1.2〜）
 自作プラグイン同士が裏で情報をやりとりします。画面のいちばん下の帯の **LINK** を、つなげたいプラグイン同士で**同じ番号（1〜4）**にするだけです。
 番号を変えれば、別々の組を 4 つまで同時に作れます（例：ボーカル用は LINK 1、ギター用は LINK 2）。最初は OFF（今までどおり）。
-帯の左の丸が光っているときは、相手とつながって実際に効いています。トラック名も相手に伝わるので、帯の文に「どのトラックの誰か」が出ます。
+帯の左の丸が光っているときは、相手とつながっています。トラック名も相手に伝わるので、帯の文に「どのトラックの誰か」が出ます。
 
-- Balance Scope は、RESET からの平均（AVERAGE）が 3 秒以上たまると、150 Hz〜12 kHz で**許容幅をいちばん大きく超えている山**を探して送ります
-  （参照曲 REF A〜C と比べているときは、目標カーブの代わりに参照曲と比べます）
-- 同じ LINK 番号の **Velvet Tamer** は、その帯域に FOCUS を自動で合わせます
-- 帯の文の例：`Sending: too much around 2.87 kHz (+2.4 dB) -> 2.28 kHz - 3.84 kHz`
-- 出すぎがなければ何も送らず、Velvet Tamer は自分の FOCUS つまみの値に戻ります
-- 曲を変えた・ミックスを大きく直したときは RESET を押すと、新しく測り直します
-
-### v1.3 で増えたこと
-- **上位 2 か所**を送ります。2 か所目は 1 か所目と重ならない所で、0.5 dB 以上超えているときだけ。Velvet Tamer はそこにも効かせます
+### 送るもの
+- **出すぎの帯域（上位 2 か所）** … RESET からの平均（AVERAGE）が 3 秒以上たまると、150 Hz〜12 kHz で**許容幅をいちばん大きく超えている山**を探して送ります
+  （参照曲 REF A〜C と比べているときは、目標カーブの代わりに参照曲と比べます）。2 か所目は 1 か所目と重ならない所で、0.5 dB 以上超えているときだけ
+  - 同じ LINK の **Hush Field**（FOLLOW が ON のとき）は、その帯域に**ベルを足して強めに処理**します。強さは出すぎの量に応じて +2〜+8（2 か所目は控えめ）、約 0.8 秒でなめらかに出入りします。Hush Field の画面の帯域カーブ（自分で置いた点）はそのまま
+  - グラフに、送っている帯域が**ピンクの帯**（濃いほうが 1 か所目）で出ます
+  - 帯の文の例：`Too loud: 2.87 kHz +2.4 dB,  5.10 kHz +0.9 dB`
+  - 出すぎがなければ何も送らず（`Balanced - nothing too loud`）、Hush Field は足したベルを外して元の処理に戻ります
+- **オケの音量** … オケのバスに挿した Balance Scope と、ボーカルの **Fader Pilot** を同じ LINK にすると、Fader Pilot の FOLLOW MUSIC がサイドチェーンなしで使えます
 - **JUDGE BY**（帯の右端）… 出すぎを何で判定するか
   - **WHOLE SONG**（最初）… RESET からの平均。どっしり、ほとんど動かない
   - **LAST 10 s** … 直近 10 秒の平均。サビだけ耳に痛い、のような曲の場所ごとの変化を追います（動きは大きめ）
-- グラフに、送っている帯域が**ピンクの帯**（濃いほうが 1 か所目）で出ます
-- 同じ LINK の **Velvet Tamer** がいまどこをどれだけ削っているかが、グラフの上から下がる**青緑の棒**で出ます（12 dB で棒が一番長い）
-- 同じ LINK の **Gain Stage** の GAIN が帯の文に出ます（`Gain Stage +4.5 dB (learned)`）
-- **オケの音量**も送ります。オケのバスに挿した Balance Scope と、ボーカルの Fader Pilot を同じ LINK にすると、
-  Fader Pilot の FOLLOW MUSIC がサイドチェーンなしで使えます
-- **FROM**（LINK の右、v1.3〜）… 同じ LINK に同じ種類の相手が 2 つ以上いるとき、どの Velvet Tamer / Gain Stage を表示するか選べます。
+- 曲を変えた・ミックスを大きく直したときは RESET を押すと、新しく測り直します
+
+### 受け取って表示するもの
+- 同じ LINK の **Hush Field** がいまどこをどれだけ削っているか … グラフの上から下がる**青緑の棒**（100 Hz〜16 kHz を 16 本、12 dB で棒が一番長い）と、帯の文の `Hush Field cutting -3.2 dB`
+- 同じ LINK の **Gain Stage** の GAIN … 帯の文に `Gain Stage +4.5 dB (learned)`
+- **FROM**（LINK の右）… 同じ LINK に同じ種類の相手が 2 つ以上いるとき、どの Hush Field / Gain Stage を表示するか選べます。
   **AUTO** は「いちばん新しく送ってきた相手」。選んだ相手はトラック名で覚えるので、プロジェクトを開き直しても同じ相手につながります
   （その相手がいないときは `(not here)` と出て、AUTO と同じ動きになります）
 
 使い方の例（ボーカルの耳に痛い所を自動で狙う）:
-1. ボーカルのトラックに Velvet Tamer、その後ろに Balance Scope を挿す（マスターに Balance Scope でもよい）
-2. 両方の LINK を **1** にする
-3. 再生して 3 秒ほど待つ → Velvet Tamer のグラフの明るい範囲（FOCUS）が、出すぎの帯域へ動く
+1. ボーカルのトラックに Hush Field、その後ろに Balance Scope を挿す（マスターに Balance Scope でもよい）
+2. 両方の LINK を **1** にする（Hush Field の LINK 欄の **FOLLOW** は最初から ON）
+3. 再生して 3 秒ほど待つ → Hush Field の LINK 欄に `Balance Scope: excess -> +4.3 at 2.87 kHz` のように出て、その帯域を強めに処理し始めます
+
+## プリセットの保存・取り消し（画面のいちばん下）
+- **UNDO / REDO** … つまみの操作を 1 手ずつ取り消し・やり直し（100 手まで。画面を閉じても残ります。オートメーションの動きは入りません）
+- **< >** … 前／次の自分のプリセット。真ん中の名前を押すと一覧（Save as... / Delete / Show preset folder in Finder）
+- **SAVE** … 今のつまみに名前を付けて保存（~/Library/Audio/Presets/MyPlugins/Balance Scope。Logic のプリセットと同じ場所）。呼び出した後につまみを変えると、名前の後ろに * が付きます
+- プリセットで変わるのはつまみだけ。覚えた参照曲（REF A〜C）と LINK の番号は変わりません
 
 ## 変更履歴
-- v1.3.0 … Plugin Link：出すぎを上位 2 か所、JUDGE BY（WHOLE SONG / LAST 10 s）、オケの音量を送る、Velvet Tamer の削り量と Gain Stage の GAIN を表示、FROM（相手選び）
-- v1.2.0 … Plugin Link（LINK 1〜4。出すぎの帯域を Velvet Tamer へ送る）
+- v1.3.0 … Plugin Link：出すぎを上位 2 か所、JUDGE BY（WHOLE SONG / LAST 10 s）、オケの音量を送る、削り量と Gain Stage の GAIN を表示、FROM（相手選び）
+- v1.2.0 … Plugin Link（LINK 1〜4。出すぎの帯域を送る）
 - v1.1.0 … 参考曲のカーブを覚えて比べる（REF A / B / C、DIFF）、ラウドネスメーター（LUFS / PEAK / PLR）、Custom の目標カーブ
 - v1.0.0 … 最初の版
+- （連携の相手は、最初は Velvet Tamer でした。Velvet Tamer は削除したので、今は Hush Field です）
