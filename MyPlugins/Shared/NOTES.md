@@ -10,7 +10,7 @@ v2 で並びを変えたので v1（PluginLink-v1.bin）の古い版とはつな
 FROM（相手選び、LinkBar::setSources）… apvts.state の "linkFrom" に「種類番号|トラック名」で保存、Endpoint::setPreferred で find がその相手を優先。
 今つながっているもの: Balance Scope → Hush Field（出すぎの帯域にベルを足して強めに処理、FOLLOW）、Balance Scope → Fader Pilot（オケの音量）、
 Fader Pilot → Horizon Spread（SPREAD を下げる）、Hush Field → Balance Scope（削り量の表示。並びは namespace tamer）、Gain Stage → Balance Scope（GAIN の表示）、
-Fader Pilot → Lumen Rooms / Elder Verb / Meld Verb（歌っている間リバーブを VOCAL DUCK dB 下げる。plink::VocalDuck、ID linkDuck）、
+Fader Pilot → Lumen Rooms / Elder Verb / Meld Verb / Echo Drift（歌っている間リバーブ・エコーを VOCAL DUCK dB 下げる。plink::VocalDuck、ID linkDuck）、
 Gain Stage → Wool Fuzz / Porch Drive（出口を TARGET にそろえる。plink::LevelMatch、ID linkMatch。RMS モードのときだけ）、
 Fader Pilot / Balance Scope → Mod Host（MOD の種類 LINK）。
 Sample Sculptor は LINK 欄だけ（自然な相手なし）。Kind 3 は前は Velvet Tamer、今は Hush Field

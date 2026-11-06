@@ -45,7 +45,8 @@ namespace plink
         kindPorchDrive = 12,
         kindModHost = 13,       // 受ける: Link の数値を動かす元にする
         kindSampleSculptor = 14,
-        numKinds = 15
+        kindEchoDrift = 15,     // 受ける: 歌の間エコーを下げる（VocalDuck）
+        numKinds = 16
     };
 
     inline const char* kindName (uint32_t k)
@@ -66,6 +67,7 @@ namespace plink
             case kindPorchDrive:    return "Porch Drive";
             case kindModHost:       return "Mod Host";
             case kindSampleSculptor: return "Sample Sculptor";
+            case kindEchoDrift:     return "Echo Drift";
             default:                return "?";
         }
     }
