@@ -58,12 +58,18 @@ jobs:
               MODE="all"
             fi
           fi
+          # 説明（.md）だけの変更ではビルドしない
+          CHANGED=$(echo "$CHANGED" | grep -v '\.md$' || true)
           ONLY="${{ github.event.inputs.only }}"
+          # MyPlugins/Shared が変わったら、CMakeLists で ../Shared を使っているものも一緒にビルド
+          SHARED_CHANGED=0
+          echo "$CHANGED" | grep -q "^MyPlugins/Shared/" && SHARED_CHANGED=1
           want() {
             case "$MODE" in
               all)    return 0 ;;
               manual) [ -z "$ONLY" ] || [ "$ONLY" = "$1" ] ;;
-              *)      echo "$CHANGED" | grep -q "^MyPlugins/$1/" ;;
+              *)      echo "$CHANGED" | grep -q "^MyPlugins/$1/" && return 0
+                      [ "$SHARED_CHANGED" = 1 ] && grep -q '\.\./Shared' "MyPlugins/$1/CMakeLists.txt" ;;
             esac
           }
           to_json() { local out="" x; for x in "$@"; do out="$out\"$x\","; done; echo "[${out%,}]"; }
@@ -75,6 +81,24 @@ jobs:
           echo "apps=$(to_json "${A[@]}")"    >> "$GITHUB_OUTPUT"
           echo "will build plugins: ${P[*]:-(none)}"
           echo "will build apps:    ${A[*]:-(none)}"
+
+      # 消したプラグイン／アプリ（MyPlugins/ にフォルダがないもの）の zip を Releases の latest から消す
+      # （残っていると install-app.sh や手動ダウンロードで入れ直してしまうため）
+      - name: Remove zips of deleted ones from Releases
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view latest --json assets -q '.assets[].name' 2>/dev/null | while read -r a; do
+            n="${a%.zip}"
+            [ "$n" = "$a" ] && continue
+            if [ ! -d "MyPlugins/$n" ]; then
+              echo "remove $a"
+              gh release delete-asset latest "$a" -y || true
+            fi
+          done
 
   # AU プラグインのビルド
   build:

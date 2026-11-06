@@ -39,7 +39,7 @@ func background(_ c: CGContext, top: UInt32, bottom: UInt32) {
 }
 
 
-// 2026-11 に足したアプリのアイコン（Sound Sketch / Resume Card / Aside / Third Time）
+// 2026-11 に足したアプリのアイコン（Sound Sketch / Aside）
 //   swift tools/make-app-icons-2.swift   （MyPlugins/<名前>/Resources/Icon.png に書き出す）
 func line(_ c: CGContext, _ pts: [CGPoint], _ color: CGColor, _ w: CGFloat) {
     c.setStrokeColor(color); c.setLineWidth(w); c.setLineCap(.round); c.setLineJoin(.round)
@@ -62,25 +62,6 @@ do {
     save(c, "MyPlugins/SoundSketch/Resources/Icon.png")
 }
 
-// Resume Card: しおりの付いたカード
-do {
-    let c = makeCtx()
-    background(c, top: 0x3a2a14, bottom: 0x16100a)
-    c.saveGState()
-    c.setShadow(offset: CGSize(width: 0, height: 14), blur: 30, color: col(0x000000, 0.5))
-    c.addPath(rr(CGRect(x: 230, y: 250, width: 564, height: 520), 48)); c.setFillColor(col(0xf4efe6)); c.fillPath()
-    c.restoreGState()
-    for (i, w) in [380.0, 300.0, 340.0].enumerated() {
-        c.addPath(rr(CGRect(x: 300, y: 430 + CGFloat(i) * 90, width: CGFloat(w), height: 34), 17))
-        c.setFillColor(col(0x8d7f6a, 0.55)); c.fillPath()
-    }
-    let bm = CGMutablePath()
-    bm.move(to: CGPoint(x: 600, y: 210)); bm.addLine(to: CGPoint(x: 720, y: 210)); bm.addLine(to: CGPoint(x: 720, y: 420))
-    bm.addLine(to: CGPoint(x: 660, y: 370)); bm.addLine(to: CGPoint(x: 600, y: 420)); bm.closeSubpath()
-    c.addPath(bm); c.setFillColor(col(0xffb35c)); c.fillPath()
-    save(c, "MyPlugins/ResumeCard/Resources/Icon.png")
-}
-
 // Aside: 吹き出し ＋ チェック
 do {
     let c = makeCtx()
@@ -93,27 +74,4 @@ do {
     save(c, "MyPlugins/Aside/Resources/Icon.png")
 }
 
-// Third Time: くるっと回る矢印と「3」
-do {
-    let c = makeCtx()
-    background(c, top: 0x3d2410, bottom: 0x170d06)
-    c.setStrokeColor(col(0xff9f43)); c.setLineWidth(56); c.setLineCap(.round)
-    c.addArc(center: CGPoint(x: 512, y: 512), radius: 270, startAngle: -.pi * 0.35, endAngle: .pi * 1.45, clockwise: false)
-    c.strokePath()
-    let a = CGMutablePath()
-    let tip = CGPoint(x: 512 + 270 * cos(-.pi * 0.35), y: 512 + 270 * sin(-.pi * 0.35))
-    a.move(to: CGPoint(x: tip.x + 70, y: tip.y - 40)); a.addLine(to: CGPoint(x: tip.x - 30, y: tip.y - 95)); a.addLine(to: CGPoint(x: tip.x - 20, y: tip.y + 40)); a.closeSubpath()
-    c.addPath(a); c.setFillColor(col(0xff9f43)); c.fillPath()
-    // 「3」（上下反転した座標なので、文字は一度戻して描く）
-    c.saveGState()
-    c.translateBy(x: 0, y: N); c.scaleBy(x: 1, y: -1)
-    let font = NSFont.systemFont(ofSize: 380, weight: .heavy)
-    let s = NSAttributedString(string: "3", attributes: [.font: font, .foregroundColor: NSColor.white])
-    let ln = CTLineCreateWithAttributedString(s)
-    let bounds = CTLineGetImageBounds(ln, c)
-    c.textPosition = CGPoint(x: 512 - bounds.width / 2 - bounds.origin.x, y: 512 - bounds.height / 2 - bounds.origin.y)
-    CTLineDraw(ln, c)
-    c.restoreGState()
-    save(c, "MyPlugins/ThirdTime/Resources/Icon.png")
-}
 print("ok")

@@ -12,12 +12,15 @@ tools: Read, Grep, Glob, Bash
 - Velvet Tamer と Hush Field はどちらもレゾナンス抑制で被っていた → 本人が「ややこしい」と言い、Hush Field に一本化
 - Hit Sculptor（その場で加工）と Flipside（逆再生）は、本人の意図が「サンプル編集」だった → Sample Sculptor にまとめた
 - Third Time は「うっとうしい」で外した
+- 2026-11-06 の整理: Nebula（Lumen Rooms と被り）、Reference プラグイン（Reference Monitor で足りる）、Resume Card（見張り系でうっとうしい）を削除。
+  Mix Time Machine は「今は作曲初期で使わないが、マスタリングで使う」ので残す（使っていない＝不要、ではない）
+- 常に記録・見張りをする常駐アプリは、本人が「うっとうしい」と感じやすい
 - 一方で「1 つにまとめる」より「別々のまま Plugin Link でつなぐ」のが基本方針
 
 ## 調べること
-1. `/Users/torsas/plugins/CLAUDE.md` の「作ったもの」と、`MyPlugins/` の中の実際のフォルダ
+1. `/Users/torsas/plugins/CLAUDE.md` の「作ったもの」（細かい中身は各フォルダの NOTES.md）と、`MyPlugins/` の中の実際のフォルダ
 2. `git log --since="3 months ago" --stat -- MyPlugins/<名前>` で、最近触っているもの・放置されているもの
-3. 被り: 同じ目的のもの（リバーブが Nebula / Lumen Rooms / Elder Verb / Meld Verb と 4 つ、聴き比べが Reference / Reference Monitor / Mix Time Machine など）。
+3. 被り: 同じ目的のもの（リバーブが Lumen Rooms / Elder Verb / Meld Verb、聴き比べが Reference Monitor / Mix Time Machine / Balance Scope、鼻歌が Idea Catcher / Hum Keys など）。
    本当に役割が分かれているか、本人が迷わないか
 4. ややこしさ: つまみ・ページ・モードが増えすぎたもの（README とパラメーター数で見る）
 5. 抜け: よく使いそうなのにまだないもの、Plugin Link でつなぐと便利なのにつないでいない組み合わせ
