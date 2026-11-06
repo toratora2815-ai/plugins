@@ -1,5 +1,5 @@
 #pragma once
-// Hit Sculptor の音の処理（JUCE なし。tools/test_engine.cpp で単体テストできる）
+// Sample Sculptor の「1 打ずつの形」の処理（元は Hit Sculptor）（JUCE なし。tools/test_engine.cpp で単体テストできる）
 //
 // 1 打ごとに「鳴り始め」を見つけて、
 //   ATTACK … 立ち上がり（最初の数 ms）を強く／弱く
@@ -70,6 +70,9 @@ namespace hs
             const float fc = 1200.0f * std::pow (12.0f, std::clamp (tone, 0.0f, 1.0f));
             dampA = 1.0f - std::exp (-2.0f * 3.14159265f * fc / (float) fs);
         }
+
+        // 今の設定へすぐ合わせる（書き出しの頭で、大きさが動かないように）
+        void snap() { for (int i = 0; i < N; ++i) cur[i] = tgt[i]; curPre = tgtPre; }
 
         void process (float inL, float inR, float& outL, float& outR)
         {

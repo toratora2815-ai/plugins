@@ -32,7 +32,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`, `Pchd`, `Blsc`, `Rfrc`, `Hzsp`, `Vltm`, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`, `Flps`, `Mldv`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`, `Pchd`, `Blsc`, `Rfrc`, `Hzsp`, `Vltm`, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -83,13 +83,10 @@
 - Gain Stage（GainStage）… トラックの入口の音量をワンクリックでそろえる（遅延ゼロ）。LEARN（鳴っている所だけ 5 秒測り、TARGET になる GAIN を 1 回だけ入れる。
   -60 dB より小さい 100 ms は数えない）、TARGET / RMS・PEAK / Ø POLARITY / MONO / SWAP L/R、IN/OUT メーター。結果は apvts.state の "learnInfo"
   v1.1.0: Plugin Link で GAIN / TARGET / LEARN 済みかなどを送る（Balance Scope が表示）
-- Hit Sculptor（HitSculptor）… キック・スネアの 1 打ずつの形を作り直す（トランジェント＋長さ＋響き）。HitEngine.h（JUCE なし、tools/test_engine.cpp）。
-  鳴り始めを検出（速い包絡〔25 ms ホールド〕と 10 ms 遅れの差 5 dB、30 ms 空ける）、ATTACK（±18 dB、SNAP 1〜50 ms）、LENGTH（左 = 時間で T60 2.5 s→30 ms、右 = 余韻を最大 +24 dB 持ち上げ）、
-  ROOM（左 = 打った瞬間の RMS から 10〜30 dB 下を 1:4 で下げる、右 = 8 本 FDN の小部屋、120 Hz 以下は響かせない）/ SIZE / TONE、DRIVE（4 倍 OS の tanh）/ MIX / OUTPUT、プリセット 12 個（apvts.state の "preset"）
-- Flipside（Flipside）… 逆再生。LIVE REVERSE: GRID（1/16〜2 BARS）の枠ごとに逆、遅れ = 枠 1 つ分を setLatencySamples で伝えるので逆の音がもとの枠に収まる（FlipEngine.h、JUCE なし、tools/test_engine.cpp）。
-  枠は ppq から（再生中）、止まっているときは自由に。REVERSE = EVERY SLICE / 2ND / 4TH / OFF、FADE / MIX / OUTPUT。
-  FILE REVERSE（FileReverse.h）: 落としたファイルを丸ごと逆にして ~/Music/Flipside/<名前> reversed.wav（24bit、TRIM SILENCE で両端の -60 dB 未満を切る）、箱をドラッグで Logic へ（performExternalDragDropOfFiles）。apvts.state の "lastFile" / "trim"
-  Hit Sculptor は遅れゼロのまま残すため、逆再生は別プラグインにした
+- Sample Sculptor（SampleSculptor）… サンプル編集プラグイン（AU 音源 aumu Smsc）。ファイルを落とす → 裏のスレッドで丸ごと作り直す（Render.h、JUCE なし、tools/test_render.cpp）→ 試し聴き（つまみを離すと自動、鍵盤 C3 基準でも）→ 箱をドラッグで Logic へ（毎回 ~/Music/Sample Sculptor に新しい WAV）。
+  順番: START/END 切り取り → PITCH（速さごと、エルミート補間、上げるときは FIR で折り返し防止）→ 形（HitEngine.h = 元 Hit Sculptor の ATTACK/SNAP/LENGTH/ROOM の DRY 側）
+  → REVERSE SOUND → ROOM の WET（hs::Room、尾の分だけ長く）→ REVERSE SOUND+ROOM（吸い込む響き）→ DRIVE（4 倍、FIR）→ FADE IN/OUT → NORMALIZE(-0.3 dB)+GAIN。apvts.state の "file" に元ファイルの場所
+  （2026-11-06: その場で加工する Hit Sculptor と、逆再生の Flipside を作ったが、本人の意図は「サンプル編集」だったので、これにまとめて 2 つは消した）
 - Reference Monitor（ReferenceMonitor）… 聴き比べ用の単体 Mac アプリ（macOS 14.2 以降、プロセスタップで Logic とミュージックの音を受け取る）。
   v1.1.0: LISTEN AS（PHONE / LAPTOP / EARBUDS / BT SPEAKER / CAR / CLUB の聞こえ方、ピンクノイズで音量を自動補正）、
   LEVEL に SPOTIFY / APPLE / YOUTUBE の音量正規化、メーターに各サービスで何 dB 上げ下げされるか
