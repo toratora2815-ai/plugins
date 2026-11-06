@@ -1,11 +1,12 @@
 #include "PluginEditor.h"
+#include <complex>
 
 namespace
 {
 const juce::Colour bg (0xff1b1714), panel (0xff26201b), panelHi (0xff302820), ink (0xffeadfce), dim (0xff9c8f7e),
                    amber (0xffe7a04a), amberDim (0xff7a5426), teal (0xff7fc4b8);
 
-juce::Complex<double> onePoleLP (double f, double fc, double fs)
+std::complex<double> onePoleLP (double f, double fc, double fs)
 {
     const double k = std::tan (juce::MathConstants<double>::pi * std::min (fc, fs * 0.49) / fs);
     const double a = k / (1 + k), b = (1 - k) / (1 + k);
@@ -94,7 +95,7 @@ void DecayGraph::paint (juce::Graphics& g)
     const double loopSec = pr.loopMs / 1000.0 * Maps::sizeFactor (p.size, pr.sizeMin);
     const double bLen = loopSec / 4.0;
     const double gMid = std::pow (10.0, -3.0 * bLen / rtMid), gLow = std::pow (10.0, -3.0 * bLen / (rtMid * bm));
-    const double hs = std::pow (10.0, Maps::highShelfDb (p.highShelf) * pr.hsScale / 20.0);
+    const double hs = std::pow (10.0, Maps::highShelfDb (p.highShelf) * pr.hsScale / 80.0);
     const double xo = Maps::bassXoverHz (p.bassXover), hf = Maps::highFreqHz (p.highFreq);
     auto xOf = [&] (double f) { return plot.getX() + (float) (std::log (f / 20.0) / std::log (1000.0)) * plot.getWidth(); };
     const double tLo = 0.1, tHi = 100.0;

@@ -36,9 +36,14 @@ struct Maps
     static float decaySec (float v)   { return 0.2f + 69.8f * std::pow (v, 3.33f); }
     static float predelayMs (float v) { return 500.0f * v * v; }
     static float bassMult (float v)   { return std::pow (4.0f, 2.0f * v - 1.0f); }
-    static float bassXoverHz (float v){ return 50.0f * std::pow (80.0f, v); }
-    static float highShelfDb (float v){ return -24.0f * (1.0f - v); }
-    static float highFreqHz (float v) { return 200.0f * std::pow (100.0f, v); }
+    static float table5 (const float* t, float v, bool logScale)   // 0 / 0.25 / 0.5 / 0.75 / 1 の 5 点の間をつなぐ
+    {
+        v = std::clamp (v, 0.0f, 1.0f) * 4.0f; const int i = std::min (3, (int) v); const float f = v - (float) i;
+        return logScale ? t[i] * std::pow (t[i + 1] / t[i], f) : t[i] + (t[i + 1] - t[i]) * f;
+    }
+    static float bassXoverHz (float v){ static const float t[5] = { 96, 156, 765, 4163, 18406 }; return table5 (t, v, true); }
+    static float highShelfDb (float v){ return 20.0f * std::log10 (0.229f + 0.771f * v * v * v * v); }   // ループ 1 周あたり（0 〜 -12.8 dB）
+    static float highFreqHz (float v) { static const float t[5] = { 101, 1723, 5145, 9554, 13697 }; return table5 (t, v, false); }
     static float highCutHz (float v)  // 0.05 きざみの表（本物の 1 次ローパスに当てはめた値）。1.0 で切らない
     {
         static const float t[21] = { 102.5f, 207.0f, 458.2f, 832.5f, 1327.6f, 1948.3f, 2673.8f, 3522.9f, 4504.1f, 5637.1f, 6941.8f,
@@ -320,7 +325,7 @@ private:
         // ---- ループ
         const float rt = std::max (0.05f, Maps::decaySec (p.decay) * pr.rtScale);
         const float bm = Maps::bassMult (p.bassMult);
-        const float hsLin = std::pow (10.0f, Maps::highShelfDb (p.highShelf) * pr.hsScale / 20.0f);
+        const float hsLin = std::pow (10.0f, Maps::highShelfDb (p.highShelf) * pr.hsScale / (20.0f * kBranches));   // 1 枝ぶん
         for (int i = 0; i < kBranches; ++i)
         {
             Branch& b = br[i];
