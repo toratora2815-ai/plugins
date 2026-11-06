@@ -165,7 +165,7 @@ private:
     juce::Rectangle<int> takeArea, dragArea, playArea;
     bool dragStarted = false;
     juce::Slider tempoSlider;
-    juce::TextButton folderButton, newTakeButton, historyButton, editButton;
+    juce::TextButton folderButton, newTakeButton, historyButton, editButton, toLogicButton;
     void pullCapture();
     void finishTake();
     void newTake();
@@ -192,6 +192,20 @@ private:
 
     std::unique_ptr<EditPanel> editor;
     void openEditor();
+
+    // ---- Logic へ入れる（ドラッグなし） ----
+    bool inserting = false;
+    void sendToLogic();
+
+    // ---- ループで重ねて録る ----
+    juce::TextButton loopButton { "LOOP" };
+    juce::ComboBox loopBox;
+    bool loopActive = false, clickBeforeLoop = false;
+    double takeLoop = 0;            // このテイクのループの長さ（拍。0 = ループでない）
+    void toggleLoop();
+    void stopLoop();
+    void loopUndo();
+    void pushLoopToMetro();
 
     std::unique_ptr<HistoryPanel> history;
     void openHistory();

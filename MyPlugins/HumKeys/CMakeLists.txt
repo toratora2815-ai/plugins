@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
-project(HumKeys VERSION 1.3.0 LANGUAGES C CXX OBJCXX)
+project(HumKeys VERSION 1.4.0 LANGUAGES C CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -35,7 +35,7 @@ target_sources(HumKeys PRIVATE
     Source/Main.cpp
     Source/MainComponent.cpp
     Source/MacSupport_mac.mm)
-target_link_libraries(HumKeys PRIVATE "-framework AVFoundation" "-framework AppKit")
+target_link_libraries(HumKeys PRIVATE "-framework AVFoundation" "-framework AppKit" "-framework ApplicationServices" "-framework Carbon")
 
 target_compile_definitions(HumKeys PRIVATE
     DONT_SET_USING_JUCE_NAMESPACE=1

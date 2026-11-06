@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include <cmath>
+#include "Preview.h"
 
 // メトロノーム（クリック）とカウントイン。Mac の標準の出力（ヘッドホン推奨）から鳴らす。
 // 鳴らしている「拍の目盛り」を覚えていて、テイクの音が何拍目だったかを出せる（Logic と同期していないときの拍）。
@@ -75,6 +76,18 @@ public:
     double nowBeat() const { return beatAt (juce::Time::getMillisecondCounterHiRes()); }
     float volume = 0.5f;
 
+    // ---- ループ録音の再生（0 拍目からの loopBeats 拍を、くり返し鳴らす） ----
+    struct LoopNote { double bs, be; int n, vel; bool drum; };
+    void setLoop (double loopBeats, std::vector<LoopNote> notes)
+    {
+        std::sort (notes.begin(), notes.end(), [] (auto& a, auto& b) { return a.bs < b.bs; });
+        const juce::SpinLock::ScopedLockType sl (loopLock);
+        loopLen = loopBeats;
+        loopNotes = std::move (notes);
+        loopDirty = true;
+    }
+    float loopVolume = 0.7f;
+
 private:
     juce::AudioDeviceManager out;
     bool isOpen = false;
@@ -87,6 +100,16 @@ private:
     double sr = 48000;
     int latency = 0;
     double clickAge = 1e9, clickFreq = 1500, clickAmp = 0, clickPh = 0;
+
+    juce::SpinLock loopLock;
+    double loopLen = 0;
+    std::vector<LoopNote> loopNotes;
+    bool loopDirty = false;
+    // 音の処理側だけが触る写し
+    std::vector<LoopNote> playNotes;
+    double playLen = 0, lastLoopPos = -1;
+    size_t loopNext = 0;
+    ToySynth synth;
 
     double beatAtLocked (double ms) const { return anchorBeat + (ms - anchorMs) * bpm / 60000.0; }
 
@@ -101,6 +124,7 @@ private:
     void audioDeviceAboutToStart (juce::AudioIODevice* d) override
     {
         sr = d->getCurrentSampleRate();
+        synth.prepare (sr);
         latency = d->getOutputLatencyInSamples() + d->getCurrentBufferSizeSamples();
     }
     void audioDeviceStopped() override {}
@@ -119,7 +143,16 @@ private:
             on = alive && audible;
             barQ = sigNum * 4.0 / sigDen; unit = unitOf (sigNum, sigDen);
         }
-        if (! live && clickAge > 1.0) return;
+        {
+            const juce::SpinLock::ScopedTryLockType tl (loopLock);
+            if (tl.isLocked() && loopDirty)
+            {
+                playNotes = loopNotes; playLen = loopLen; loopDirty = false;
+                lastLoopPos = -1;   // 次のサンプルで位置を合わせ直す
+            }
+        }
+        const bool looping = live && playLen > 0;
+        if (! live && clickAge > 1.0 && synth.voices.empty()) return;
         // このブロックの最初のサンプルが耳に届く時刻
         const double t0 = juce::Time::getMillisecondCounterHiRes() + (double) latency / sr * 1000.0;
         const double beatsPerSample = b / 60.0 / sr;
@@ -147,14 +180,32 @@ private:
                     }
                 }
             }
+            float s = 0;
+            if (looping && beat >= 0)
+            {
+                const double lp = std::fmod (beat, playLen);
+                if (lastLoopPos < 0 || lp < lastLoopPos)
+                {
+                    // 頭に戻った（か、合わせ直し）：今の位置より後の最初の音から
+                    loopNext = 0;
+                    if (lastLoopPos < 0) while (loopNext < playNotes.size() && playNotes[loopNext].bs < lp) ++loopNext;
+                }
+                while (loopNext < playNotes.size() && playNotes[loopNext].bs <= lp)
+                {
+                    const auto& ln = playNotes[loopNext++];
+                    synth.start (ln.n, ln.vel, ln.drum, (ln.be - ln.bs) * 60.0 / b);
+                }
+                lastLoopPos = lp;
+            }
+            if (! synth.voices.empty() || looping) s += synth.next() * loopVolume;
             if (clickAge < 0.06)
             {
                 clickPh += clickFreq / sr;
                 const double env = std::exp (-clickAge / 0.012) * std::min (1.0, clickAge * sr / 8.0);
-                const float s = (float) (std::sin (2 * M_PI * clickPh) * env * clickAmp * vol * 0.6);
-                for (int c = 0; c < numOut; ++c) if (outs[c] != nullptr) outs[c][i] = s;
+                s += (float) (std::sin (2 * M_PI * clickPh) * env * clickAmp * vol * 0.6);
             }
             clickAge += 1.0 / sr;
+            for (int c = 0; c < numOut; ++c) if (outs[c] != nullptr) outs[c][i] = s;
         }
     }
 };

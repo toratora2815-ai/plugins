@@ -24,6 +24,10 @@ public:
                 png.writeImageToStream (c.createComponentSnapshot (c.getLocalBounds(), true, 2.0f), os);
             }
             c.writeTakeForSnapshot (dir.getChildFile ("humkeys_take.mid"));
+            c.showSnapshot (5);
+            c.writeTakeForSnapshot (dir.getChildFile ("humkeys_loop.mid"));
+            c.handleCommand ("loopUndo");
+            c.writeTakeForSnapshot (dir.getChildFile ("humkeys_loop_undo.mid"));
             quit();
             return;
         }

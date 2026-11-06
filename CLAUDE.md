@@ -164,6 +164,10 @@
   TIME SIG（4/4〜12/8、settings "sig"）。MIDI はメロディーとドラムの 2 トラック（ドラムのトラックに "Hum Keys drums"）。
   EDIT（EditPanel、選ぶ・上下・消す・⌘Z・最初の状態。takeLocked = 手直し済み、次の音から新テイク）。命令 auto/click/count/edit/quantize、キー 3/C/R/E/Q。
   Num Deck 1.21.1 にその 5 つ。Idea Catcher 1.1.1 に VoiceEngine.h を写した
+  v1.4.0: 「Logic へ」（I キー、macsupport::insertMidiIntoLogic。AX で「読み込む → MIDI…」を押し ⇧⌘G でパス。Logic は再生ヘッド＝小節頭に置くので、
+  同期テイクは先に「/」（位置へ移動）で "N 1 1 1"。アクセシビリティ許可が要る）。LOOP（L キー、LENGTH 1/2/4/8 小節、takeLoop 拍。rebuildTakeNotes で周をたたむ、
+  1/8 拍早めはその周の頭、カウント中は捨てる。Metronome::setLoop で前の周を ToySynth（Preview.h）で鳴らす。⌫ / 命令 loopUndo で最後の周を消す）。
+  命令 toLogic / loop / loopUndo。Num Deck 1.22.1 にその 3 つ
 
 - Plugin Link（MyPlugins/Shared/PluginLink.h・PluginLinkJuce.h）… 自作プラグイン同士の連携。
   ~/Library/Application Support/MyPlugins/PluginLink-v2.bin を mmap した共有メモリの掲示板（64 席・数値 24 個、atomic だけで読み書き、3 秒で不在、10 秒で席を回収）。

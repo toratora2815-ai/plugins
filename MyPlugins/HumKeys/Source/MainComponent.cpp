@@ -696,7 +696,7 @@ MainComponent::MainComponent (bool live) : snapshotMode (! live)
     countButton.onClick = [this] { countIn(); };
     for (auto* t : { "OFF", "1/4", "1/8", "1/16", "1/8 3連", "1/16 3連" }) quantBox.addItem (jp (t), quantBox.getNumItems() + 1);
     quantBox.setTooltip (jp ("クオンタイズ：音の出だしを、選んだ細かさの拍に寄せる（Q キーで切替）。ドラッグ・保存・試し聴きに効きます"));
-    quantBox.onChange = [this] { quantize = quantBox.getSelectedId() - 1; saveSettings(); resaveIfNeeded(); repaint(); };
+    quantBox.onChange = [this] { quantize = quantBox.getSelectedId() - 1; saveSettings(); resaveIfNeeded(); if (loopActive) pushLoopToMetro(); repaint(); };
     caption (quantBox, "QUANTIZE");
     for (auto* t : { "100%", "75%", "50%" }) strengthBox.addItem (t, strengthBox.getNumItems() + 1);
     strengthBox.setTooltip (jp ("どれだけ寄せるか。100% = ぴったり、50% = ずれを半分に（人っぽさが残る）"));
@@ -706,7 +706,16 @@ MainComponent::MainComponent (bool live) : snapshotMode (! live)
         saveSettings(); resaveIfNeeded(); repaint();
     };
     caption (strengthBox, "STRENGTH");
-    for (auto* c : std::initializer_list<juce::Component*> { &sigBox, &clickButton, &countButton, &quantBox, &strengthBox })
+    loopButton.setTooltip (jp ("ループで重ねて録る（L キー）。1 小節カウントのあと、LENGTH の小節をくり返します。"
+                               "前の周で録った音を鳴らしながら、1 周目はキック、2 周目はハット…と重ねて 1 つのテイクに。"
+                               "もう一度押すと終わって保存。⌫ キーで最後の周を消す"));
+    loopButton.onClick = [this] { toggleLoop(); };
+    caption (loopButton, "LOOP");
+    for (auto* t : { "1 小節", "2 小節", "4 小節", "8 小節" }) loopBox.addItem (jp (t), loopBox.getNumItems() + 1);
+    loopBox.setTooltip (jp ("ループの長さ"));
+    loopBox.onChange = [this] { saveSettings(); };
+    caption (loopBox, "LENGTH");
+    for (auto* c : std::initializer_list<juce::Component*> { &sigBox, &clickButton, &countButton, &quantBox, &strengthBox, &loopButton, &loopBox })
         addAndMakeVisible (c);
     folderButton.setButtonText (jp ("フォルダ"));
     folderButton.setTooltip (jp ("保存したテイク（~/Music/Hum Keys）を Finder で開く"));
@@ -721,6 +730,12 @@ MainComponent::MainComponent (bool live) : snapshotMode (! live)
     editButton.setTooltip (jp ("今のテイクを手直しする（E キー）：いらない音を消す・高さを変える・ドラムの音を差し替える"));
     editButton.onClick = [this] { if (editor != nullptr) closeEditor(); else openEditor(); };
     addAndMakeVisible (editButton);
+    toLogicButton.setButtonText (jp ("Logic へ"));
+    toLogicButton.setTooltip (jp ("今のテイクを、開いている Logic のプロジェクトに入れる（I キー）。ドラッグしなくてよい。"
+                                  "Logic と同期していたテイクは元の小節に、ほかは再生ヘッドの位置（の小節の頭）に入ります。"
+                                  "初回はアクセシビリティの許可が要ります"));
+    toLogicButton.onClick = [this] { sendToLogic(); };
+    addAndMakeVisible (toLogicButton);
     addAndMakeVisible (folderButton);
     addAndMakeVisible (historyButton);
     addAndMakeVisible (newTakeButton);
@@ -923,6 +938,15 @@ void MainComponent::timerCallback()
     juce::String st = midiStatus;
     if (bpm > 0)
         st = jp ("Logic と同期中  ♩=") + juce::String (bpm, 1) + (sync.isRunning() ? jp ("  ● 再生中") : jp ("  停止中"));
+    if (loopActive)
+    {
+        const double nb = metro.nowBeat();
+        const int bars = (int) std::lround (takeLoop / barQuarters());
+        if (std::isfinite (nb) && nb < 0) st = jp ("● LOOP  カウント中…");
+        else if (std::isfinite (nb))
+            st = jp ("● LOOP ") + juce::String (bars) + jp (" 小節 · ") + juce::String ((int) std::floor (nb / takeLoop) + 1) + jp (" 周目 · ")
+               + juce::String ((int) std::floor (std::fmod (nb, takeLoop) / barQuarters()) + 1) + jp (" 小節目   （⌫ で最後の周を消す）");
+    }
     if (nowMs() < flashUntil) st = flashMsg;
     if (statusLabel.getText() != st) statusLabel.setText (st, juce::dontSendNotification);
     statusLabel.setColour (juce::Label::textColourId, nowMs() < flashUntil ? orange : (bpm > 0 ? green : dim));
@@ -1049,6 +1073,9 @@ void MainComponent::handleCommand (const juce::String& c)
     else if (c == "count")    countIn();
     else if (c == "edit")     { if (editor != nullptr) closeEditor(); else openEditor(); }
     else if (c == "quantize") quantBox.setSelectedId ((quantize + 1) % 6 + 1);
+    else if (c == "toLogic")  sendToLogic();
+    else if (c == "loop")     toggleLoop();
+    else if (c == "loopUndo") loopUndo();
     else if (c == "new")      newTake();
     else if (c == "panic")    engine.panicRequest = true;
     else if (c == "autoKey")  autoKey();
@@ -1082,6 +1109,9 @@ void MainComponent::refreshButtons()
     autoTab.setToggleState (mode == 2, juce::dontSendNotification);
     clickButton.setToggleState (clickOn, juce::dontSendNotification);
     clickButton.setButtonText (clickOn ? "ON" : "OFF");
+    loopButton.setToggleState (loopActive, juce::dontSendNotification);
+    loopButton.setButtonText (loopActive ? jp ("■ 終わる") : jp ("● 録る"));
+    toLogicButton.setEnabled (! inserting);
     editButton.setToggleState (editor != nullptr, juce::dontSendNotification);
     exprButton.setButtonText (engine.p.expression.load() ? "ON" : "OFF");
     exprButton.setToggleState (engine.p.expression.load(), juce::dontSendNotification);
@@ -1098,7 +1128,8 @@ void MainComponent::refreshButtons()
     sensSlider.setVisible (full && mode == 1);
     for (auto* c : std::initializer_list<juce::Component*> { &velButton, &chanBox, &audioButton, &panicButton, &statusLabel, &autoGateButton,
                                                              &tempoSlider, &folderButton, &historyButton, &newTakeButton, &drumsTab, &autoTab,
-                                                             &editButton, &sigBox, &clickButton, &countButton, &quantBox, &strengthBox })
+                                                             &editButton, &sigBox, &clickButton, &countButton, &quantBox, &strengthBox,
+                                                             &toLogicButton, &loopButton, &loopBox })
         c->setVisible (full);
 
     const int lc = engine.learnClass.load();
@@ -1173,6 +1204,7 @@ void MainComponent::loadSettings()
     strengthBox.setSelectedId (juce::jlimit (1, 3, props->getIntValue ("qstrength", 1)), juce::dontSendNotification);
     quantStrength = strengthBox.getSelectedId() == 3 ? 0.5f : strengthBox.getSelectedId() == 2 ? 0.75f : 1.0f;
     applySignature();
+    loopBox.setSelectedId (juce::jlimit (1, 4, props->getIntValue ("loopLen", 2)), juce::dontSendNotification);
     for (int i = 0; i < numPads; ++i)
     {
         const auto c = juce::String (i);
@@ -1222,6 +1254,7 @@ void MainComponent::saveSettings()
     props->setValue ("sig", sigBox.getSelectedId());
     props->setValue ("quant", quantize);
     props->setValue ("qstrength", strengthBox.getSelectedId());
+    props->setValue ("loopLen", loopBox.getSelectedId());
     for (int i = 0; i < numPads; ++i)
     {
         const auto c = juce::String (i);
@@ -1274,6 +1307,9 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
     if (ch == 'c' || ch == 'C') { setClick (! clickOn); return true; }
     if (ch == 'r' || ch == 'R') { countIn(); return true; }
     if (ch == 'q' || ch == 'Q') { quantBox.setSelectedId ((quantize + 1) % 6 + 1); return true; }
+    if (ch == 'l' || ch == 'L') { toggleLoop(); return true; }
+    if (ch == 'i' || ch == 'I') { sendToLogic(); return true; }
+    if (loopActive && (k == juce::KeyPress::backspaceKey || k == juce::KeyPress::deleteKey)) { loopUndo(); return true; }
     if (ch == 'm' || ch == 'M') { setMini (! mini); return true; }
     if (ch == 'p' || ch == 'P') { setPinned (! pinned); return true; }
     if (ch == 'n' || ch == 'N') { newTake(); return true; }
@@ -1365,13 +1401,15 @@ void MainComponent::resized()
         r.removeFromBottom (6);
         newTakeButton.setBounds (strip.removeFromRight (52).reduced (0, 7));
         strip.removeFromRight (5);
-        folderButton.setBounds (strip.removeFromRight (70).reduced (0, 7));
+        folderButton.setBounds (strip.removeFromRight (74).reduced (0, 7));
         strip.removeFromRight (5);
         historyButton.setBounds (strip.removeFromRight (56).reduced (0, 7));
         strip.removeFromRight (5);
         editButton.setBounds (strip.removeFromRight (52).reduced (0, 7));
         strip.removeFromRight (8);
-        dragArea = strip.removeFromRight (148);
+        toLogicButton.setBounds (strip.removeFromRight (78).reduced (0, 7));
+        strip.removeFromRight (5);
+        dragArea = strip.removeFromRight (juce::jlimit (104, 148, strip.getWidth() - 190));
         strip.removeFromRight (6);
         playArea = strip.removeFromRight (46);
         strip.removeFromRight (6);
@@ -1381,9 +1419,11 @@ void MainComponent::resized()
         auto rh = r.removeFromBottom (48);
         r.removeFromBottom (4);
         rh.removeFromTop (18);
-        auto put = [&rh] (juce::Component& c, int w, int gap = 10) { c.setBounds (rh.removeFromLeft (w)); rh.removeFromLeft (gap); };
-        put (tempoSlider, 112); put (sigBox, 72); put (clickButton, 62, 4); put (countButton, 96, 18);
-        put (quantBox, 104); put (strengthBox, 74);
+        // 幅に合わせて伸び縮み（1 目盛り = 最大 74 px）
+        const float u = juce::jmin (74.0f, (float) (rh.getWidth() - 8 * 8) / 10.4f);
+        auto put = [&rh, u] (juce::Component& c, float w, int gap = 8) { c.setBounds (rh.removeFromLeft ((int) (w * u))); rh.removeFromLeft (gap); };
+        put (tempoSlider, 1.55f); put (sigBox, 1.0f); put (clickButton, 0.85f, 4); put (countButton, 1.3f, 16);
+        put (quantBox, 1.4f); put (strengthBox, 1.0f, 16); put (loopButton, 1.25f, 4); put (loopBox, 1.05f);
     }
     displayArea = r;
     meterArea = r.removeFromLeft (26).reduced (0, 6);
@@ -1749,7 +1789,9 @@ void MainComponent::pullCapture()
     while (engine.capture.pop (c))
     {
         // 手直ししたテイクには足さない（次の音から新しいテイク）
-        if (! take.empty() && (takeLocked || c.t - takeLastT > gap || c.t < takeLastT - (int64_t) fs))
+        // ループ録音中は区切らない。終わったループのテイクにも足さない
+        if (! take.empty() && ! loopActive
+            && (takeLocked || takeLoop > 0 || c.t - takeLastT > gap || c.t < takeLastT - (int64_t) fs))
             newTake();
         const double ms = hostMsOf (c.t);
         if (take.empty())
@@ -1764,7 +1806,7 @@ void MainComponent::pullCapture()
         takeRate = fs;
         changed = true;
     }
-    if (changed && ! takeLocked) rebuildTakeNotes();
+    if (changed && ! takeLocked) { rebuildTakeNotes(); if (loopActive) pushLoopToMetro(); }
 
     // Logic が止まった → そこまでを 1 テイクに
     const int stops = sync.stops();
@@ -1774,7 +1816,7 @@ void MainComponent::pullCapture()
         if (! take.empty() && takeSynced()) newTake();
     }
 
-    if (! take.empty() && ! takeSaved && engine.currentNote.load() < 0
+    if (! take.empty() && ! takeSaved && ! loopActive && engine.currentNote.load() < 0
         && engine.clockNow.load() - takeLastT > gap)
     {
         finishTake();
@@ -1787,7 +1829,7 @@ void MainComponent::newTake()
     finishTake();
     take.clear(); takeBeats.clear();
     takeSaved = false; takeLocked = false; undoStack.clear();
-    takeSource = srcNone;
+    takeSource = srcNone; takeLoop = 0;
     repaint();
 }
 
@@ -1840,7 +1882,19 @@ void MainComponent::rebuildTakeNotes()
     {
         if (n.e < 0) n.e = std::max (now, n.s + 0.05);   // まだ鳴っている
         if (std::isfinite (n.bs) && ! (std::isfinite (n.be) && n.be > n.bs)) n.be = n.bs + (n.e - n.s) * bpm / 60.0;
-        if (n.e - n.s >= 0.02) keep.push_back (n);        // 20 ms 未満のかけらは捨てる
+        if (n.e - n.s < 0.02) continue;                    // 20 ms 未満のかけらは捨てる
+        if (takeLoop > 0 && std::isfinite (n.bs))
+        {
+            // ループ：何周目でも、ループの中の位置に重ねる（頭より 1/8 拍までの早めは、その周の頭に）
+            constexpr double early = 0.125;
+            if (n.bs < -early) continue;                   // カウントインの間の音は使わない
+            const double pass = std::floor ((n.bs + early) / takeLoop);
+            const double len = n.be - n.bs;
+            n.bs -= pass * takeLoop;
+            n.be = std::min (n.bs + len, takeLoop);
+            if (n.be < n.bs + 0.02) n.be = n.bs + 0.02;
+        }
+        keep.push_back (n);
     }
     takeNotes = std::move (keep);
 }
@@ -1912,7 +1966,7 @@ std::vector<MainComponent::ENote> MainComponent::exportNotes (double* startOut, 
         first = std::min (first, bs);
     }
     const double barQ = barQuarters();
-    const double start = beats ? std::floor (first / barQ + 1e-9) * barQ : first;
+    const double start = takeLoop > 0 ? 0.0 : beats ? std::floor (first / barQ + 1e-9) * barQ : first;
     if (startOut != nullptr) *startOut = start;
     if (t0Out != nullptr) *t0Out = t0;
     const double u = quantUnit();
@@ -1985,6 +2039,7 @@ juce::File MainComponent::writeTakeMidi (const juce::File& dest) const
         if (b < -0.05) continue;
         mel.addEvent (juce::MidiMessage ((int) c.st, (int) c.d1, (int) c.d2), tick (b));
     }
+    if (takeLoop > 0) head.addEvent (juce::MidiMessage::textMetaEvent (6, "loop end"), tick (takeLoop));   // ループの長さぴったりに
     mel.sort(); mel.updateMatchedPairs();
     drm.sort(); drm.updateMatchedPairs();
 
@@ -2006,6 +2061,7 @@ void MainComponent::finishTake()
     if (takeNotes.empty()) return;
     auto name = "Hum Keys " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S");
     if (takeSynced()) name += " bar" + juce::String (takeBar());
+    if (takeLoop > 0) name += " loop" + juce::String ((int) std::lround (takeLoop / barQuarters()));
     takeFile = writeTakeMidi (takeFolder().getChildFile (name + ".mid"));
     takeSaved = takeFile.existsAsFile();
     repaint();
@@ -2041,6 +2097,7 @@ void MainComponent::startDragOut()
 //==============================================================================
 void MainComponent::beginEdit()
 {
+    if (loopActive) stopLoop();
     undoStack.push_back (takeNotes);
     if (undoStack.size() > 60) undoStack.erase (undoStack.begin());
     takeLocked = true;
@@ -2060,6 +2117,118 @@ void MainComponent::revertEdits()
     beginEdit();
     rebuildTakeNotes();
     editDone();
+}
+
+//==============================================================================
+void MainComponent::pushLoopToMetro()
+{
+    std::vector<Metronome::LoopNote> v;
+    for (auto& e : exportNotes())
+        v.push_back ({ std::min (e.bs, takeLoop - 1e-6), std::min (e.be, takeLoop), e.n, e.vel, e.drum });
+    metro.setLoop (takeLoop, std::move (v));
+}
+
+void MainComponent::toggleLoop()
+{
+    if (loopActive) { stopLoop(); return; }
+    if (sync.isRunning()) { flash (jp ("Logic の再生中はループ録音できません（Logic を止めてから）")); return; }
+    closeEditor();
+    closeHistory();
+    newTake();
+    static const int barsOf[] = { 1, 2, 4, 8 };
+    const int bars = barsOf[juce::jlimit (0, 3, loopBox.getSelectedId() - 1)];
+    takeLoop = bars * barQuarters();
+    clickBeforeLoop = clickOn;
+    clickOn = true;
+    metro.setBpm (tempoSlider.getValue());
+    metro.setLoop (takeLoop, {});
+    metro.start (true, 1);
+    loopActive = true;
+    refreshButtons();
+    flash (jp ("ループ録音：1 小節カウントのあと ") + juce::String (bars) + jp (" 小節をくり返します。もう一度 LOOP で終わり"), 4.0);
+}
+
+void MainComponent::stopLoop()
+{
+    if (! loopActive) return;
+    loopActive = false;
+    metro.setLoop (0, {});
+    finishTake();
+    clickOn = clickBeforeLoop;
+    if (! clickOn) metro.stop();
+    refreshButtons();
+    flash (takeNotes.empty() ? jp ("ループ録音をやめました（音はありませんでした）")
+                             : jp ("ループのテイクを保存しました。「Logic へ」かドラッグで入れられます"), 4.0);
+}
+
+// ループ：最後に音を入れた周を、まるごと消す
+void MainComponent::loopUndo()
+{
+    if (takeLoop <= 0 || take.empty()) return;
+    constexpr double early = 0.125;
+    auto passOf = [&] (double b) { return (long) std::floor ((b + early) / takeLoop); };
+    long last = -1;
+    for (size_t i = 0; i < take.size() && i < takeBeats.size(); ++i)
+        if ((take[i].st & 0xF0) == 0x90 && take[i].d2 > 0 && std::isfinite (takeBeats[i]) && takeBeats[i] >= -early)
+            last = std::max (last, passOf (takeBeats[i]));
+    if (last < 0) return;
+    std::vector<hum::CapEvent> t2; std::vector<double> b2;
+    for (size_t i = 0; i < take.size(); ++i)
+    {
+        const double b = i < takeBeats.size() ? takeBeats[i] : std::nan ("");
+        if (std::isfinite (b) && passOf (b) == last) continue;
+        t2.push_back (take[i]); b2.push_back (b);
+    }
+    take = std::move (t2); takeBeats = std::move (b2);
+    takeLocked = false;
+    rebuildTakeNotes();
+    if (loopActive) pushLoopToMetro();
+    resaveIfNeeded();
+    flash (juce::String (last + 1) + jp (" 周目の音を消しました"), 3.0);
+    repaint();
+}
+
+void MainComponent::sendToLogic()
+{
+    if (inserting) return;
+    if (loopActive) stopLoop();
+    closeEditor();
+    finishTake();
+    if (takeNotes.empty()) { flash (jp ("入れるテイクがありません（歌うと自動でたまります）")); return; }
+    if (! macsupport::accessibilityTrusted (true))
+    {
+        flash (jp ("Logic を操作する許可が要ります：システム設定 → プライバシーとセキュリティ → アクセシビリティ で Hum Keys をオン → もう一度「Logic へ」"), 12.0);
+        return;
+    }
+    const auto f = takeSaved && takeFile.existsAsFile()
+                     ? takeFile
+                     : writeTakeMidi (juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Hum Keys take.mid"));
+    if (! f.existsAsFile()) { flash (jp ("MIDI ファイルを書けませんでした")); return; }
+    const int bar = takeSynced() ? takeBar() : 0;
+    inserting = true;
+    refreshButtons();
+    flash (jp ("Logic に入れています…（終わるまで Logic を触らないでください）"), 15.0);
+    juce::Component::SafePointer<MainComponent> safe (this);
+    macsupport::insertMidiIntoLogic (f.getFullPathName().toStdString(), bar, [safe, bar] (bool ok, const std::string& why, bool moved)
+    {
+        if (safe == nullptr) return;
+        safe->inserting = false;
+        safe->refreshButtons();
+        juce::String msg;
+        if (ok)
+            msg = bar > 0 ? (moved ? juce::String (bar) + jp (" 小節目に入れました")
+                                   : jp ("再生ヘッドの位置に入れました（") + juce::String (bar) + jp (" 小節目へ動かせませんでした。リージョンを動かしてください）"))
+                          : jp ("Logic の再生ヘッドの位置（の小節の頭）に入れました");
+        else if (why == "accessibility") msg = jp ("アクセシビリティの許可がありません（システム設定で Hum Keys をオン）");
+        else if (why == "nologic")    msg = jp ("Logic が開いていません");
+        else if (why == "noproject")  msg = jp ("Logic のプロジェクトが開いていません");
+        else if (why == "notfront")   msg = jp ("Logic を前に出せませんでした。もう一度押してください");
+        else if (why == "busy")       msg = jp ("Logic で別の画面が開いています。閉じてからもう一度");
+        else if (why == "nomenu")     msg = jp ("Logic のメニューに「読み込む → MIDI ファイル」が見つかりませんでした。ドラッグで入れてください");
+        else if (why == "nopanel")    msg = jp ("ファイルを選ぶ画面が出ませんでした。ドラッグで入れてください");
+        else                          msg = jp ("ファイルを選ぶ画面が閉じませんでした。Logic の画面を確かめてください");
+        safe->flash (msg, 8.0);
+    });
 }
 
 //==============================================================================
@@ -2186,4 +2355,19 @@ void MainComponent::showSnapshot (int which)
     else { mini = false; setSize (860, 620); }
     refreshButtons();
     if (which == 4) { openEditor(); resized(); }
+    if (which == 5)
+    {
+        // ループの確認：2 小節（8 拍）を 3 周。1 周目キック、2 周目ハット、3 周目メロディー（少し早めの出だしも）
+        closeEditor();
+        take.clear(); takeBeats.clear(); takeSaved = false; takeLocked = false;
+        takeSource = srcClick; takeLoop = 8.0; quantize = 0; quantBox.setSelectedId (1, juce::dontSendNotification);
+        int64_t t = 1000;
+        auto add = [&] (double b, int st, int n, int v, int kind) { take.push_back ({ t, (uint8_t) st, (uint8_t) n, (uint8_t) v, (uint8_t) kind }); takeBeats.push_back (b); t += 4800; };
+        add (-1.0, 0x90, 60, 90, 0); add (-0.6, 0x80, 60, 0, 0);                        // カウント中（使わない）
+        for (double b : { 0.0, 4.0 }) { add (b, 0x99, 36, 110, 2); add (b + 0.1, 0x89, 36, 0, 2); }
+        for (double b : { 8.5, 9.5, 10.5, 11.5 }) { add (b, 0x99, 42, 80, 2); add (b + 0.1, 0x89, 42, 0, 2); }
+        add (15.95, 0x90, 64, 100, 0); add (17.9, 0x80, 64, 0, 0);                     // 3 周目の頭より少し早い
+        add (21.0, 0x90, 67, 100, 0); add (25.5, 0x80, 67, 0, 0);                      // ループの終わりをまたぐ
+        rebuildTakeNotes();
+    }
 }

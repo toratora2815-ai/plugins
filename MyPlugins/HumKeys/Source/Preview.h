@@ -3,91 +3,38 @@
 #include <cmath>
 #include <random>
 
-// テイクの試し聴き。Logic を開かずに、アプリの中の簡単な音で鳴らす。
-// マイク用とは別に、Mac の標準の出力を使う（鳴らすときだけ開く）。
-class Preview : private juce::AudioIODeviceCallback
+// 試し聴き・ループの再生に使う、簡単な音源（メロディー：やわらかい三角波、ドラム：General MIDI の並び）
+struct ToySynth
 {
-public:
-    struct Note { double s, e; int n, vel; bool drum = false; };
-
-    ~Preview() override { stop(); out.closeAudioDevice(); }
-
-    void play (std::vector<Note> notes, juce::String id)
-    {
-        stop();
-        if (notes.empty()) return;
-        std::sort (notes.begin(), notes.end(), [] (auto& a, auto& b) { return a.s < b.s; });
-        const double t0 = notes.front().s;
-        for (auto& n : notes) { n.s -= t0; n.e -= t0; }
-        seq = std::move (notes);
-        playingId = id;
-        if (out.getCurrentAudioDevice() == nullptr)
-            out.initialise (0, 2, nullptr, true);
-        pos = 0; next = 0; voices.clear();
-        playing = true;
-        out.addAudioCallback (this);
-    }
-
-    void stop()
-    {
-        if (! playing.load() && playingId.isEmpty()) return;
-        out.removeAudioCallback (this);
-        playing = false;
-        playingId.clear();
-    }
-
-    bool isPlaying() const { return playing.load(); }
-    const juce::String& currentId() const { return playingId; }
-    double progress() const { return seq.empty() ? 0 : juce::jlimit (0.0, 1.0, (double) pos.load() / std::max (1.0, length() * sr)); }
-
-private:
-    juce::AudioDeviceManager out;
-    std::vector<Note> seq;
-    juce::String playingId;
-    std::atomic<bool> playing { false };
-    std::atomic<int64_t> pos { 0 };
-    size_t next = 0;
-    double sr = 48000;
-    std::minstd_rand rng { 1 };
-
     struct Voice { int n; double vel; int64_t start, end; bool drum; double ph = 0, ph2 = 0, lp = 0, hp = 0, hpPrev = 0; };
     std::vector<Voice> voices;
+    double sr = 48000;
+    int64_t pos = 0;
+    std::minstd_rand rng { 1 };
 
-    double length() const { double l = 0; for (auto& n : seq) l = std::max (l, n.e); return l + 0.4; }
-
-    void audioDeviceAboutToStart (juce::AudioIODevice* d) override { sr = d->getCurrentSampleRate(); voices.reserve (64); }
-    void audioDeviceStopped() override {}
-
-    float noise() { return (float) ((double) rng() / (double) rng.max() * 2.0 - 1.0); }
-
-    void audioDeviceIOCallbackWithContext (const float* const*, int, float* const* outs, int numOut, int n,
-                                           const juce::AudioIODeviceCallbackContext&) override
+    void prepare (double rate) { sr = rate; voices.reserve (64); }
+    void clear() { voices.clear(); }
+    void start (int n, int vel, bool drum, double lengthSec)
     {
-        for (int c = 0; c < numOut; ++c) if (outs[c] != nullptr) juce::FloatVectorOperations::clear (outs[c], n);
-        if (! playing.load()) return;
-        const int64_t endAt = (int64_t) (length() * sr);
-        int64_t p = pos.load();
-        for (int i = 0; i < n; ++i, ++p)
-        {
-            while (next < seq.size() && (int64_t) (seq[next].s * sr) <= p)
-            {
-                const auto& s = seq[next++];
-                if (voices.size() < 48)
-                    voices.push_back ({ s.n, s.vel / 127.0, p, (int64_t) (s.e * sr), s.drum });
-            }
-            double mix = 0;
-            for (auto& v : voices) mix += v.drum ? drum (v, p) : tone (v, p);
+        if (voices.size() >= 48) voices.erase (voices.begin());
+        voices.push_back ({ n, vel / 127.0, pos, pos + (int64_t) (lengthSec * sr), drum });
+    }
+    float next()
+    {
+        double mix = 0;
+        for (auto& v : voices) mix += v.drum ? drum (v, pos) : tone (v, pos);
+        if (! voices.empty() && (pos & 63) == 0)
             voices.erase (std::remove_if (voices.begin(), voices.end(), [&] (const Voice& v)
             {
-                const double age = (double) (p - v.start) / sr;
-                return v.drum ? age > 0.6 : p > v.end + (int64_t) (0.15 * sr);
+                const double age = (double) (pos - v.start) / sr;
+                return v.drum ? age > 0.6 : pos > v.end + (int64_t) (0.15 * sr);
             }), voices.end());
-            const float s = (float) std::tanh (mix * 0.6);
-            for (int c = 0; c < numOut; ++c) if (outs[c] != nullptr) outs[c][i] = s;
-        }
-        pos = p;
-        if (p > endAt) { playing = false; }
+        ++pos;
+        return (float) std::tanh (mix * 0.6);
     }
+
+private:
+    float noise() { return (float) ((double) rng() / (double) rng.max() * 2.0 - 1.0); }
 
     // メロディ: やわらかい三角波＋少し倍音
     double tone (Voice& v, int64_t p)
@@ -143,5 +90,79 @@ private:
                 return (0.5 * std::sin (2 * M_PI * v.ph) * std::exp (-t / 0.05) + hpNoise (1500) * std::exp (-t / 0.12)) * a;
             }
         }
+    }
+};
+
+// テイクの試し聴き。Logic を開かずに、アプリの中の簡単な音で鳴らす。
+// マイク用とは別に、Mac の標準の出力を使う（鳴らすときだけ開く）。
+class Preview : private juce::AudioIODeviceCallback
+{
+public:
+    struct Note { double s, e; int n, vel; bool drum = false; };
+
+    ~Preview() override { stop(); out.closeAudioDevice(); }
+
+    void play (std::vector<Note> notes, juce::String id)
+    {
+        stop();
+        if (notes.empty()) return;
+        std::sort (notes.begin(), notes.end(), [] (auto& a, auto& b) { return a.s < b.s; });
+        const double t0 = notes.front().s;
+        for (auto& n : notes) { n.s -= t0; n.e -= t0; }
+        seq = std::move (notes);
+        playingId = id;
+        if (out.getCurrentAudioDevice() == nullptr)
+            out.initialise (0, 2, nullptr, true);
+        pos = 0; next = 0; synth.clear();
+        playing = true;
+        out.addAudioCallback (this);
+    }
+
+    void stop()
+    {
+        if (! playing.load() && playingId.isEmpty()) return;
+        out.removeAudioCallback (this);
+        playing = false;
+        playingId.clear();
+    }
+
+    bool isPlaying() const { return playing.load(); }
+    const juce::String& currentId() const { return playingId; }
+    double progress() const { return seq.empty() ? 0 : juce::jlimit (0.0, 1.0, (double) pos.load() / std::max (1.0, length() * synth.sr)); }
+
+private:
+    juce::AudioDeviceManager out;
+    std::vector<Note> seq;
+    juce::String playingId;
+    std::atomic<bool> playing { false };
+    std::atomic<int64_t> pos { 0 };
+    size_t next = 0;
+    ToySynth synth;
+
+    double length() const { double l = 0; for (auto& n : seq) l = std::max (l, n.e); return l + 0.4; }
+
+    void audioDeviceAboutToStart (juce::AudioIODevice* d) override { synth.prepare (d->getCurrentSampleRate()); }
+    void audioDeviceStopped() override {}
+
+    void audioDeviceIOCallbackWithContext (const float* const*, int, float* const* outs, int numOut, int n,
+                                           const juce::AudioIODeviceCallbackContext&) override
+    {
+        for (int c = 0; c < numOut; ++c) if (outs[c] != nullptr) juce::FloatVectorOperations::clear (outs[c], n);
+        if (! playing.load()) return;
+        const double sr = synth.sr;
+        const int64_t endAt = (int64_t) (length() * sr);
+        int64_t p = pos.load();
+        for (int i = 0; i < n; ++i, ++p)
+        {
+            while (next < seq.size() && (int64_t) (seq[next].s * sr) <= p)
+            {
+                const auto& s = seq[next++];
+                synth.start (s.n, s.vel, s.drum, s.e - s.s);
+            }
+            const float v = synth.next();
+            for (int c = 0; c < numOut; ++c) if (outs[c] != nullptr) outs[c][i] = v;
+        }
+        pos = p;
+        if (p > endAt) { playing = false; }
     }
 };
