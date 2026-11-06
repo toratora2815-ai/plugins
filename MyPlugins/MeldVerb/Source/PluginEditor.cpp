@@ -65,13 +65,32 @@ MeldVerbEditor::MeldVerbEditor (MeldVerbProcessor& p)
     knobById["eLp"]->slider.setTooltip ("Dulls the reflections that arrive on the opposite side (head shadow)");
     knobById["eSize"]->slider.setTooltip ("How long each reflection smears. Small = tight clicks, large = joined");
 
-    const char* tabNames[3] = { "EARLY", "PLATE", "HALL" };
-    for (int i = 0; i < 3; ++i)
+    // SHAPE: 3 つの響きの出だし・音色・広がりを並べて（短い響きと長い響きを別々に）
+    {
+        const char* pre[3] = { "e", "p", "h" };
+        const juce::Colour cols[3] = { colE, colP, colH };
+        for (int i = 0; i < 3; ++i)
+        {
+            const juce::String a (pre[i]);
+            knob (a + "Delay", "DELAY", cols[i]); knob (a + "LoCut", "LOW CUT", cols[i]);
+            knob (a + "HiCut", "HIGH CUT", cols[i]); knob (a + "Width", "WIDTH", cols[i]);
+            knobById[a + "Delay"]->slider.setTooltip ("Extra wait before this reverb starts, added to PRE-DELAY");
+            knobById[a + "LoCut"]->slider.setTooltip ("Removes lows from this reverb only (20 Hz = off)");
+            knobById[a + "HiCut"]->slider.setTooltip ("Removes highs from this reverb only (20 kHz = off)");
+            knobById[a + "Width"]->slider.setTooltip ("Stereo width of this reverb only. 0 = mono, 100 = as is, 200 = extra wide");
+            knobById[a + "LoCut"]->slider.textFromValueFunction = [] (double v) { return v <= 20.5 ? juce::String ("OFF") : juce::String (juce::roundToInt (v)) + " Hz"; };
+            knobById[a + "HiCut"]->slider.textFromValueFunction = [] (double v) { return v >= 19900 ? juce::String ("OFF") : juce::String (v / 1000.0, 1) + " kHz"; };
+            knobById[a + "LoCut"]->slider.updateText(); knobById[a + "HiCut"]->slider.updateText();
+        }
+    }
+
+    const char* tabNames[4] = { "EARLY", "PLATE", "HALL", "SHAPE" };
+    for (int i = 0; i < 4; ++i)
     {
         tabs[i].setButtonText (tabNames[i]);
         tabs[i].setClickingTogglesState (false);
         tabs[i].setColour (juce::TextButton::buttonColourId, edge);
-        tabs[i].setColour (juce::TextButton::buttonOnColourId, engineCol[i]);
+        tabs[i].setColour (juce::TextButton::buttonOnColourId, i < 3 ? engineCol[i] : text);
         tabs[i].setColour (juce::TextButton::textColourOffId, dim);
         tabs[i].setColour (juce::TextButton::textColourOnId, juce::Colours::black);
         tabs[i].onClick = [this, i] { showTab (i); };
@@ -239,7 +258,7 @@ void MeldVerbEditor::placeKnob (Knob& k, juce::Rectangle<int> r)
 void MeldVerbEditor::showTab (int t)
 {
     tab = t;
-    for (int i = 0; i < 3; ++i) tabs[i].setToggleState (i == t, juce::dontSendNotification);
+    for (int i = 0; i < 4; ++i) tabs[i].setToggleState (i == t, juce::dontSendNotification);
     auto vis = [&] (const juce::String& id, bool v)
     {
         if (auto it = knobById.find (id); it != knobById.end()) { it->second->slider.setVisible (v); it->second->label.setVisible (v); }
@@ -252,6 +271,9 @@ void MeldVerbEditor::showTab (int t)
         const juce::String a = e == 0 ? "p" : "h";
         for (auto k : { "Time", "Size", "Diff", "Attack", "Lp", "Damp", "Bal", "Cross", "Sync", "Note" }) vis (a + k, t == e + 1);
     }
+    for (auto a : { "e", "p", "h" })
+        for (auto k : { "Delay", "LoCut", "HiCut", "Width" }) vis (juce::String (a) + k, t == 3);
+    resized();
     decay.repaint();
     repaint();
 }
@@ -316,12 +338,26 @@ void MeldVerbEditor::resized()
     {
         auto a = centreArea.reduced (10);
         auto tabRow = a.removeFromTop (26);
-        const int tw = tabRow.getWidth() / 3;
-        for (int i = 0; i < 3; ++i) tabs[i].setBounds (tabRow.removeFromLeft (tw).reduced (2, 0));
+        const int tw = tabRow.getWidth() / 4;
+        for (int i = 0; i < 4; ++i) tabs[i].setBounds (tabRow.removeFromLeft (tw).reduced (2, 0));
         a.removeFromTop (8);
-        decay.setBounds (a.removeFromTop (150));
+        auto rest = a;
+        decay.setBounds (a.withHeight (tab == 3 ? 98 : 150)); a.removeFromTop (150);
         a.removeFromTop (6);
         auto row1 = a.removeFromTop (110), row2 = a;
+        // SHAPE（3 段: EARLY / PLATE / HALL。グラフは小さめ）
+        {
+            auto s = rest.withTrimmedTop (98 + 6);
+            const int rh = s.getHeight() / 3;
+            for (int i = 0; i < 3; ++i)
+            {
+                auto row = s.removeFromTop (rh);
+                shapeRow[i] = row.removeFromLeft (52);
+                const juce::String p = i == 0 ? "e" : (i == 1 ? "p" : "h");
+                const int w = row.getWidth() / 4;
+                for (auto k : { "Delay", "LoCut", "HiCut", "Width" }) placeKnob (*knobById[p + k], row.removeFromLeft (w).reduced (2, 1));
+            }
+        }
         // EARLY（1 段）
         {
             auto r1 = row1; const int w = r1.getWidth() / 5;
@@ -442,6 +478,15 @@ void MeldVerbEditor::paint (juce::Graphics& g)
     }
     sectionBox (g, leftArea, "BLEND", text);
     sectionBox (g, centreArea, {}, text);
+    if (tab == 3)
+    {
+        const char* names[3] = { "EARLY", "PLATE", "HALL" };
+        for (int i = 0; i < 3; ++i)
+        {
+            g.setColour (engineCol[i]); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+            g.drawText (names[i], shapeRow[i].withTrimmedLeft (4), juce::Justification::centredLeft);
+        }
+    }
     sectionBox (g, rightArea, "PRE-DELAY", accent);
     {
         auto a = rightArea.reduced (10);
@@ -567,7 +612,11 @@ void MeldVerbEditor::DecayView::paint (juce::Graphics& g)
     auto plot = r.reduced (8, 10).withTrimmedBottom (12);
     const float rtP = 1.32f * q.plate.timeSec, rtH = 1.25f * q.hall.timeSec;
     // 横軸: 選んでいる響きが -60 dB になるくらいまで
-    float span = ed.tab == 0 ? std::max (0.12f, (q.early.timeMs + 80.0f) / 1000.0f) : (ed.tab == 1 ? rtP : rtH) * 1.1f + q.predelayMs / 1000.0f;
+    auto startOf = [&] (int e) { return (q.predelayMs + q.voice[e].delayMs) / 1000.0f; };
+    float span = ed.tab == 0 ? std::max (0.12f, (q.early.timeMs + 80.0f) / 1000.0f + startOf (0))
+               : ed.tab == 3 ? std::max ({ (q.levelDb[1] > -69.9f ? rtP * 1.1f + startOf (1) : 0.0f), (q.levelDb[2] > -69.9f ? rtH * 1.1f + startOf (2) : 0.0f),
+                                           (q.early.timeMs + 80.0f) / 1000.0f + startOf (0) })
+               : (ed.tab == 1 ? rtP : rtH) * 1.1f + startOf (ed.tab);
     span = juce::jlimit (0.1f, 30.0f, span);
     auto xOf = [&] (float t) { return plot.getX() + plot.getWidth() * t / span; };
     auto yOf = [&] (float db) { return plot.getY() + plot.getHeight() * juce::jlimit (0.0f, 1.0f, -db / 66.0f); };
@@ -581,13 +630,12 @@ void MeldVerbEditor::DecayView::paint (juce::Graphics& g)
         g.drawText (t < 1.0f ? juce::String (juce::roundToInt (t * 1000)) + " ms" : juce::String (t, 2) + " s",
                     juce::Rectangle<float> (60, 12).withCentre ({ xOf (t), plot.getBottom() + 8 }), juce::Justification::centred);
     }
-    const float pre = q.predelayMs / 1000.0f;
     // PLATE / HALL: 立ち上がり（ATTACK）と減衰（中域の残響時間）
     for (int e = 2; e >= 1; --e)
     {
         const auto& t = e == 1 ? q.plate : q.hall;
         const float lvl = q.levelDb[e]; if (lvl <= -69.9f) continue;
-        const float rt = e == 1 ? rtP : rtH, att = t.attackMs / 1000.0f;
+        const float rt = e == 1 ? rtP : rtH, att = t.attackMs / 1000.0f, pre = startOf (e);
         juce::Path pth; bool first = true;
         for (int i = 0; i <= 160; ++i)
         {
@@ -600,7 +648,7 @@ void MeldVerbEditor::DecayView::paint (juce::Graphics& g)
         }
         if (first) continue;
         pth.lineTo (xOf (span), yOf (-66)); pth.closeSubPath();
-        const bool sel = ed.tab == e;
+        const bool sel = ed.tab == e || ed.tab == 3;
         g.setColour (engineCol[e].withAlpha (sel ? 0.35f : 0.12f)); g.fillPath (pth);
         g.setColour (engineCol[e].withAlpha (sel ? 1.0f : 0.4f)); g.strokePath (pth, juce::PathStrokeType (sel ? 1.6f : 1.0f));
     }
@@ -609,7 +657,8 @@ void MeldVerbEditor::DecayView::paint (juce::Graphics& g)
     {
         if (! ed.earlyCacheOk || ! (ed.earlyCacheKey == q.early)) { ed.earlyCache = ed.processor.earlyView(); ed.earlyCacheKey = q.early; ed.earlyCacheOk = true; }
         const auto& v = ed.earlyCache;
-        const bool sel = ed.tab == 0;
+        const bool sel = ed.tab == 0 || ed.tab == 3;
+        const float pre = startOf (0);
         for (int k = 0; k < v.n; ++k)
         {
             const float t = pre + v.ms[k] / 1000.0f; if (t > span) break;
@@ -621,7 +670,8 @@ void MeldVerbEditor::DecayView::paint (juce::Graphics& g)
     }
     g.setColour (dim); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
     juce::String info;
-    if (ed.tab == 0) info << "EARLY  " << juce::String (q.early.timeMs, 1) << " ms";
+    if (ed.tab == 3) info << "start  E " << juce::roundToInt (1000 * startOf (0)) << "  P " << juce::roundToInt (1000 * startOf (1)) << "  H " << juce::roundToInt (1000 * startOf (2)) << " ms";
+    else if (ed.tab == 0) info << "EARLY  " << juce::String (q.early.timeMs, 1) << " ms";
     else { const auto& t = ed.tab == 1 ? q.plate : q.hall; info << (ed.tab == 1 ? "PLATE  " : "HALL  ") << "decay " << juce::String ((ed.tab == 1 ? rtP : rtH), 2) << " s (mid)"; if (ed.param (ed.tab == 1 ? "pSync" : "hSync") > 0.5f) info << "  synced " << juce::String (t.timeSec, 2) << " s"; }
     g.drawText (info, r.reduced (10, 6), juce::Justification::topRight);
 }

@@ -691,6 +691,14 @@ struct Params
     float mix = 50;               // 0..100 %
     float outputDb = 0;           // -60..10
     float levelDb[3] = { -3, -3, -3 };   // EARLY / PLATE / HALL（-70 = 消す）
+    // 響きごとの「形」: 出だしの遅れ（PRE-DELAY に足す）、低音・高音カット、広がり。標準は何もしない
+    struct Voice
+    {
+        float delayMs = 0, lowCutHz = 20, highCutHz = 20000, width = 100;
+        bool operator== (const Voice& o) const { return delayMs == o.delayMs && lowCutHz == o.lowCutHz && highCutHz == o.highCutHz && width == o.width; }
+        bool operator!= (const Voice& o) const { return ! (*this == o); }
+    };
+    Voice voice[3];
     EarlyParams early;
     TankParams plate, hall;
     float modRate = 0.48f, modDepth = 25; int modType = 0;
@@ -718,7 +726,7 @@ public:
         plate.setMode (0); hall.setMode (1);
         plate.prepare (sampleRate, 1); hall.prepare (sampleRate, 2);
         smoother.prepare (sampleRate);
-        pre[0].init ((int) (1.05 * sampleRate)); pre[1].init ((int) (1.05 * sampleRate));
+        pre[0].init ((int) (1.56 * sampleRate)); pre[1].init ((int) (1.56 * sampleRate));
         set (params, true);
         reset();
     }
@@ -728,11 +736,29 @@ public:
         pre[0].clear(); pre[1].clear();
         for (auto& e : preEqF) e.reset();
         for (auto& e : revEqF) e.reset();
+        for (auto& v : vf) for (auto& b : v) b.reset();
     }
     void set (const Params& p, bool force = false)
     {
         const bool eqPre = force || p.preEq != params.preEq, eqRev = force || p.revEq != params.revEq;
+        bool voiceChanged[3];
+        for (int j = 0; j < 3; ++j) voiceChanged[j] = force || p.voice[j] != params.voice[j];
         params = p;
+        for (int j = 0; j < 3; ++j)
+        {
+            const auto& v = p.voice[j];
+            if (voiceChanged[j])
+            {
+                hpOn[j] = v.lowCutHz > 20.5f; lpOn[j] = v.highCutHz < 19900.0f;
+                for (int c = 0; c < 2; ++c)
+                {
+                    if (hpOn[j]) vf[j][c].hp (v.lowCutHz, 0.7071, sr); else vf[j][c].flat();
+                    if (lpOn[j]) vf[j][c + 2].lp (v.highCutHz, 0.7071, sr); else vf[j][c + 2].flat();
+                }
+            }
+            tgtVDelay[j] = (float) (std::clamp (v.delayMs, 0.0f, 500.0f) * 0.001 * sr);
+            tgtWidth[j] = std::clamp (v.width, 0.0f, 200.0f) / 100.0f;
+        }
         early.setParams (p.early);
         TankParams a = p.plate, b = p.hall;
         a.modRate = b.modRate = p.modRate; a.modDepth = b.modDepth = p.modDepth; a.modType = b.modType = p.modType;
@@ -744,7 +770,7 @@ public:
         tgtMix = std::clamp (p.mix / 100.0f, 0.0f, 1.0f);
         tgtOut = std::pow (10.0f, std::clamp (p.outputDb, -60.0f, 10.0f) / 20.0f);
         tgtPre = (float) (std::clamp (p.predelayMs, 0.0f, 1000.0f) * 0.001 * sr);
-        if (force) { for (int i = 0; i < 3; ++i) level[i] = tgtLevel[i]; mixV = tgtMix; outV = tgtOut; preV = tgtPre; }
+        if (force) { for (int i = 0; i < 3; ++i) { level[i] = tgtLevel[i]; vDelay[i] = tgtVDelay[i]; widthV[i] = tgtWidth[i]; } mixV = tgtMix; outV = tgtOut; preV = tgtPre; }
     }
     const Params& get() const { return params; }
     void setDuck (float gain) { tgtDuck = gain; }   // Plugin Link: 歌っている間の響きの倍率
@@ -755,7 +781,12 @@ public:
         const float k = 0.0015f;
         for (int i = 0; i < n; ++i)
         {
-            for (int j = 0; j < 3; ++j) level[j] += (tgtLevel[j] - level[j]) * k;
+            for (int j = 0; j < 3; ++j)
+            {
+                level[j] += (tgtLevel[j] - level[j]) * k;
+                vDelay[j] += (tgtVDelay[j] - vDelay[j]) * 0.0008f;
+                widthV[j] += (tgtWidth[j] - widthV[j]) * k;
+            }
             mixV += (tgtMix - mixV) * k; outV += (tgtOut - outV) * k; duckV += (tgtDuck - duckV) * k;
             preV += (tgtPre - preV) * 0.0008f;
             const float dl = L[i], dr = R[i];
@@ -768,11 +799,27 @@ public:
                 preRead -= (float) smoother.latency();   // SMOOTHING の 1 ms をプリディレイから引く
             }
             pre[0].push (xl); pre[1].push (xr);
-            if (preRead >= 0.5f) { xl = pre[0].frac (preRead); xr = pre[1].frac (preRead); }
             float wl = 0, wr = 0, a, b;
-            if (level[0] > 1e-5f || tgtLevel[0] > 0) { early.process (xl, xr, a, b); wl += level[0] * a; wr += level[0] * b; }
-            if (level[1] > 1e-5f || tgtLevel[1] > 0) { plate.process (xl, xr, a, b); wl += level[1] * a; wr += level[1] * b; }
-            if (level[2] > 1e-5f || tgtLevel[2] > 0) { hall.process (xl, xr, a, b); wl += level[2] * a; wr += level[2] * b; }
+            for (int j = 0; j < 3; ++j)
+            {
+                if (! (level[j] > 1e-5f || tgtLevel[j] > 0)) continue;
+                // その響きの入口: PRE-DELAY ＋ その響きだけの DELAY
+                const float d = preRead + vDelay[j];
+                float il = xl, ir = xr;
+                if (d >= 0.5f) { il = pre[0].frac (d); ir = pre[1].frac (d); }
+                if (j == 0) early.process (il, ir, a, b);
+                else if (j == 1) plate.process (il, ir, a, b);
+                else hall.process (il, ir, a, b);
+                // その響きだけの音色（LOW CUT / HIGH CUT、2 次）と広がり（M/S）
+                if (hpOn[j]) { a = vf[j][0].process (a); b = vf[j][1].process (b); }
+                if (lpOn[j]) { a = vf[j][2].process (a); b = vf[j][3].process (b); }
+                if (std::abs (widthV[j] - 1.0f) > 1e-4f)
+                {
+                    const float m = 0.5f * (a + b), sd = 0.5f * (a - b) * widthV[j];
+                    a = m + sd; b = m - sd;
+                }
+                wl += level[j] * a; wr += level[j] * b;
+            }
             if (dryMono) dryMono[i] = 0.5f * (dl + dr);
             if (wetMono) wetMono[i] = 0.5f * (wl + wr);    // REVERB EQ の前（UNMASK の学習用）
             wl = revEqF[0].process (wl); wr = revEqF[1].process (wr);
@@ -796,6 +843,9 @@ private:
     TriEQ preEqF[2], revEqF[2];
     Delay pre[2];
     float duckV = 1.0f, tgtDuck = 1.0f;
+    Biquad vf[3][4];                     // 響きごと: [0,1] = LOW CUT の L/R、[2,3] = HIGH CUT の L/R
+    bool hpOn[3] {}, lpOn[3] {};
+    float vDelay[3] {}, tgtVDelay[3] {}, widthV[3] { 1, 1, 1 }, tgtWidth[3] { 1, 1, 1 };
     float level[3] {}, tgtLevel[3] {}, mixV = 0.5f, tgtMix = 0.5f, outV = 1, tgtOut = 1, preV = 0, tgtPre = 0;
 };
 } // namespace meld

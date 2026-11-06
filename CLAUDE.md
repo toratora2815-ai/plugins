@@ -197,6 +197,7 @@
   SendSmoother（SMOOTHING。1 ms ごとに 4.9 ms と 2.78 s の包絡を比べ、-3.29 + 0.253 × 比 dB〔-31.9〜+1.9〕を響きへ送る音にかける）、TriEQ（PRE / REVERB EQ、シェルフの GAIN は境目での値）。
   Assist.h: LEARN（入力の飛び出た帯域 → PRE EQ のベル、低いゴロゴロ → 70 Hz ローカット）、UNMASK（ドライと響きを 1/6 oct で比べ REVERB EQ を決める。apvts.state の子 "UNMASK" に 100% の値、AMOUNT で入れ直す）。
   tools/render_meld.cpp（参考と同じパラメーター番号で書き出し、遅れも 272 サンプルそろえる）、tools/test_meld.cpp（数値テスト）
+  v1.1.0: SHAPE タブ（響きごとの DELAY〔PRE-DELAY に足す、0〜500 ms〕/ LOW CUT / HIGH CUT〔2 次〕/ WIDTH〔M/S〕、ID {e,p,h}Delay・LoCut・HiCut・Width。標準は素通しで 1.0.1 とビット単位で同じ）、プリセット「Vocal Depth」
 
 - Mod Host（ModHost）… 好きな AU エフェクトを中に読み込み（JUCE_PLUGINHOST_AU、AuList.cpp が AudioComponentFindNext で一覧、createPluginInstanceAsync）、
   MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS、ModEngine.h は JUCE なし、tools/test_mod.cpp）で中のどのつまみでも動かす。

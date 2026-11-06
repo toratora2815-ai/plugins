@@ -89,12 +89,13 @@ private:
     BlendPad pad { *this };
     DecayView decay { *this };
     EqView eqView { *this };
-    juce::TextButton tabs[3], eqTabs[2];
+    juce::TextButton tabs[4], eqTabs[2];
     int tab = 2, eqTab = 1;
     juce::ComboBox presetBox;
     juce::TextButton learnButton { "LEARN" }, unmaskButton { "UNMASK" };
     juce::Label statusLabel;
     juce::Rectangle<int> headerArea, leftArea, centreArea, rightArea, eqArea, meterArea, smoothMeterArea;
+    juce::Rectangle<int> shapeRow[3];
     float shownSmooth = 0, shownLevels[4] {};
     float dryDb[MeldVerbProcessor::specBands] {}, wetDb[MeldVerbProcessor::specBands] {};
     meld::Early::View earlyCache; meld::EarlyParams earlyCacheKey; bool earlyCacheOk = false;

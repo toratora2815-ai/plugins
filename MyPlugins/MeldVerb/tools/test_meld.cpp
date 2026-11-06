@@ -40,6 +40,7 @@ static Result run (const Params& p, double sr, double secs, int kind, bool autom
             q.preEq.on = q.revEq.on = true; q.preEq.bellGain = -30 + 45 * z (rng); q.preEq.bellQ = 0.2f + 11.8f * z (rng); q.preEq.lowShape = z (rng) > 0.5f;
             q.preEq.lowSlope = 0.2f + 11.8f * z (rng); q.revEq.highShape = z (rng) > 0.5f; q.revEq.highFreq = 20 + 19980 * z (rng); q.revEq.highSlope = 0.2f + 11.8f * z (rng);
             q.smoothOn = z (rng) > 0.3f;
+            for (auto& v : q.voice) { v.delayMs = 500 * z (rng); v.lowCutHz = 20 + 980 * z (rng); v.highCutHz = 1000 + 19000 * z (rng); v.width = 200 * z (rng); }
             e.set (q);
         }
         e.process (L.data(), R.data(), blk);
@@ -52,6 +53,27 @@ static Result run (const Params& p, double sr, double secs, int kind, bool autom
     }
     r.endDb = (float) (10.0 * std::log10 (endE / std::max (1, endN) + 1e-30));
     return r;
+}
+
+// インパルスを通した響き（L, R）を返す
+static void impulse (const Params& p, double sr, double secs, std::vector<float>& L, std::vector<float>& R)
+{
+    Engine e; e.prepare (sr); e.set (p, true); e.reset();
+    const int n = (int) (secs * sr);
+    L.assign ((size_t) n, 0.0f); R.assign ((size_t) n, 0.0f); L[0] = 1; R[0] = 1;
+    for (int pos = 0; pos < n; pos += 256) e.process (L.data() + pos, R.data() + pos, std::min (256, n - pos));
+}
+static int onset (const std::vector<float>& x, float thr)
+{
+    for (size_t i = 0; i < x.size(); ++i) if (std::abs (x[i]) > thr) return (int) i;
+    return -1;
+}
+// f0 Hz 付近（1 オクターブ）の響きの大きさ dB（2 次のバンドパスを通した RMS）
+static double bandDb (const std::vector<float>& x, double f0, double sr)
+{
+    Biquad h, l; h.hp (f0 / 1.414, 0.707, sr); l.lp (f0 * 1.414, 0.707, sr);
+    double e = 0; for (float v : x) { float y = l.process (h.process (v)); e += y * y; }
+    return 10 * std::log10 (e + 1e-30);
 }
 
 int main()
@@ -124,6 +146,46 @@ int main()
         std::snprintf (b, sizeof b, "unmask: low %.1f dB, bell %.0f Hz %.1f dB, high %.1f dB", m.lowGain * 2, m.bellFreq, m.bellGain, m.highGain * 2);
         check (m.found && m.lowGain < -1, b);
     }
+    // SHAPE: 響きごとの DELAY / LOW CUT / HIGH CUT / WIDTH
+    {
+        const double sr = 48000;
+        Params b = defaultParams(); b.mix = 100; b.levelDb[0] = -70; b.levelDb[1] = -70; b.levelDb[2] = 0; b.predelayMs = 10;
+        std::vector<float> L0, R0, L1, R1;
+        impulse (b, sr, 3.0, L0, R0);
+        Params d = b; d.voice[2].delayMs = 100;
+        impulse (d, sr, 3.0, L1, R1);
+        const int o0 = onset (L0, 1e-3f), o1 = onset (L1, 1e-3f);
+        std::printf ("      hall onset %d -> %d samples (want +4800)\n", o0, o1);
+        check (o0 > 0 && std::abs ((o1 - o0) - 4800) <= 2, "HALL DELAY 100 ms moves only the hall start by 100 ms");
+        Params lc = b; lc.voice[2].lowCutHz = 600;
+        impulse (lc, sr, 3.0, L1, R1);
+        const double dLow = bandDb (L1, 100, sr) - bandDb (L0, 100, sr), dMid = bandDb (L1, 3000, sr) - bandDb (L0, 3000, sr);
+        std::printf ("      low cut 600: 100 Hz %.1f dB, 3 kHz %.1f dB\n", dLow, dMid);
+        check (dLow < -15 && std::abs (dMid) < 1.0, "HALL LOW CUT removes lows, keeps mids");
+        Params hc = b; hc.voice[2].highCutHz = 2000;
+        impulse (hc, sr, 3.0, L1, R1);
+        const double dHi = bandDb (L1, 10000, sr) - bandDb (L0, 10000, sr), dLo2 = bandDb (L1, 300, sr) - bandDb (L0, 300, sr);
+        std::printf ("      high cut 2k: 10 kHz %.1f dB, 300 Hz %.1f dB\n", dHi, dLo2);
+        check (dHi < -15 && std::abs (dLo2) < 1.0, "HALL HIGH CUT removes highs, keeps lows");
+        Params w = b; w.voice[2].width = 0;
+        impulse (w, sr, 2.0, L1, R1);
+        double diff = 0; for (size_t i = 0; i < L1.size(); ++i) diff = std::max (diff, (double) std::abs (L1[i] - R1[i]));
+        check (diff < 1e-6, "HALL WIDTH 0 = mono");
+        Params w2 = b; w2.voice[2].width = 200;
+        impulse (w2, sr, 2.0, L1, R1);
+        auto sideRatio = [] (const std::vector<float>& l, const std::vector<float>& r)
+        { double m = 0, s2 = 0; for (size_t i = 0; i < l.size(); ++i) { double a = 0.5 * (l[i] + r[i]), c = 0.5 * (l[i] - r[i]); m += a * a; s2 += c * c; } return 10 * std::log10 (s2 / m); };
+        std::printf ("      side/mid %.1f dB -> %.1f dB at WIDTH 200\n", sideRatio (L0, R0), sideRatio (L1, R1));
+        check (std::abs ((sideRatio (L1, R1) - sideRatio (L0, R0)) - 6.02) < 0.2, "HALL WIDTH 200 = side +6 dB");
+        // ほかの響きは変わらない: PLATE だけ鳴らして HALL の SHAPE を変えても同じ
+        Params pl = b; pl.levelDb[1] = 0; pl.levelDb[2] = -70;
+        impulse (pl, sr, 1.5, L0, R0);
+        pl.voice[2] = { 200, 500, 3000, 0 };
+        impulse (pl, sr, 1.5, L1, R1);
+        double dd = 0; for (size_t i = 0; i < L0.size(); ++i) dd = std::max (dd, (double) std::abs (L0[i] - L1[i]));
+        check (dd == 0, "HALL SHAPE does not touch PLATE");
+    }
     std::printf (fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
+
     return fails ? 1 : 0;
 }

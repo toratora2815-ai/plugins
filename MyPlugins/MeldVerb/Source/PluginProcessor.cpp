@@ -84,6 +84,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout MeldVerbProcessor::createLay
         add (a + "Cross", n + " Crossover", skewed (20, 4000, 600, 1), t.cross, "Hz");
     }
 
+    // 響きごとの形（短い響きと長い響きを別々に）: 出だしの遅れ・低音カット・高音カット・広がり
+    for (auto [a, n] : { std::pair<const char*, const char*> { "e", "Early" }, { "p", "Plate" }, { "h", "Hall" } })
+    {
+        const juce::String id (a), nm (n);
+        add (id + "Delay", nm + " Delay", skewed (0, 500, 60, 0.1f), 0, "ms");
+        add (id + "LoCut", nm + " Low Cut", skewed (20, 1000, 150, 1), 20, "Hz");
+        add (id + "HiCut", nm + " High Cut", skewed (1000, 20000, 6000, 1), 20000, "Hz");
+        add (id + "Width", nm + " Width", NRange (0, 200, 0.1f), 100, "%");
+    }
+
     add ("modRate", "Mod Rate", skewed (0.25f, 4, 1, 0.01f), 0.48f, "Hz");
     add ("modDepth", "Mod Depth", NRange (0, 100, 0.1f), 25, "%");
     addC ("modType", "Mod Type", { "Random", "Pitch" }, 0);
@@ -161,6 +171,8 @@ const juce::StringArray& MeldVerbProcessor::paramOrder()
         a.addArray ({ "modRate", "modDepth", "modType", "predelay", "pdSync", "pdNote" });
         for (int rev = 0; rev < 2; ++rev) for (int k = 0; k < 12; ++k) a.add (eqId (rev, k));
         a.addArray ({ "smoothOn", "smoothAmt" });
+        for (auto t : { "e", "p", "h" })
+            for (auto k : { "Delay", "LoCut", "HiCut", "Width" }) a.add (juce::String (t) + k);
         return a;
     }();
     return ids;
@@ -195,6 +207,7 @@ meld::Params MeldVerbProcessor::readParams() const
     };
     eq (q.preEq); eq (q.revEq);
     q.smoothOn = v() > 0.5f; q.smoothAmount = v();
+    for (auto& vc : q.voice) { vc.delayMs = v(); vc.lowCutHz = v(); vc.highCutHz = v(); vc.width = v(); }
     return q;
 }
 
@@ -393,7 +406,7 @@ double MeldVerbProcessor::eqMagDb (bool reverb, double f) const
 //==============================================================================
 juce::StringArray MeldVerbProcessor::presetNames()
 {
-    return { "Default", "Vocal Plate", "Snare Plate", "Drum Room", "Big Hall", "Piano Hall", "Ambient Wash", "Short Slap", "Wide Early", "Dark Cathedral" };
+    return { "Default", "Vocal Plate", "Snare Plate", "Drum Room", "Big Hall", "Piano Hall", "Ambient Wash", "Short Slap", "Wide Early", "Dark Cathedral", "Vocal Depth" };
 }
 
 void MeldVerbProcessor::applyPreset (int index)
@@ -423,6 +436,10 @@ void MeldVerbProcessor::applyPreset (int index)
         case 8: set ({ { "lvlE", 0 }, { "lvlP", -18 }, { "lvlH", -12 }, { "eTime", 180 }, { "eSize", 20 }, { "eAngle", 85 }, { "eLp", 6000 }, { "hTime", 1.8f }, { "mix", 30 } }); break;
         case 9: set ({ { "lvlE", -14 }, { "lvlP", -70 }, { "lvlH", 0 }, { "hTime", 7 }, { "hSize", 40 }, { "hAttack", 120 }, { "hLp", 2200 }, { "hDamp", 2 }, { "hBal", 0.35f },
                        { "hCross", 900 }, { "predelay", 45 }, { "mix", 40 } }); break;
+        // 短い響きは近くて明るく、長い響きは遅れて暗く広く（言葉ははっきり、後ろに奥行き）
+        case 10: set ({ { "lvlE", -14 }, { "lvlP", -4 }, { "lvlH", -2 }, { "pTime", 0.9f }, { "pLoCut", 250 }, { "pWidth", 80 },
+                        { "hTime", 3.2f }, { "hSize", 20 }, { "hDelay", 80 }, { "hLoCut", 300 }, { "hHiCut", 6000 }, { "hWidth", 140 },
+                        { "predelay", 15 }, { "mix", 25 }, { "smoothOn", 1 } }); break;
         default: break;
     }
 }
