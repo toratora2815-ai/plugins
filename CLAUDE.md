@@ -32,7 +32,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`, `Pchd`, `Blsc`, `Rfrc`, `Hzsp`, `Vltm`, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`, `Flps`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`, `Pchd`, `Blsc`, `Rfrc`, `Hzsp`, `Vltm`, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`, `Flps`, `Mldv`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -181,6 +181,13 @@
   soft/hard・DEPTH・DETAIL の量 → 帯ごとの ATTACK/RELEASE（低/高の TILT 倍率）→ LINK・MAX CUT → 最小位相 FIR（LINEAR PHASE は直線位相）をホップごとに作り FFT でたたみこみ・クロスフェード。
   遅延 2304（LINEAR PHASE 3456、LOW LATENCY 0＝直接たたみこみ）。帯域カーブ 8 本（ID b1〜b8 の used/on/shape/freq/q/gain/slope/focus）、STEREO L/R・M/S、SC、A/B、プリセット 8 個。
   合わせ込みの数値は Tuning（tools/hf_cli.cpp が測定用の CLI）
+
+- Meld Verb（MeldVerb）… EARLY / PLATE / HALL の 3 つを三角形の BLEND パッドで混ぜるリバーブ。市販の同じ型のリバーブを AU で鳴らして測り、合わせ込んだオリジナル。
+  エンジンは MeldEngine.h（JUCE なし）: Early（12 個の跳ね返りを TIME の中に並べ、SIZE＝にじみの長さのオールパス、ANGLE＝時間で大きく／小さく＋左右の割合、残りの小さな 4 本 FDN）、
+  Tank（16 本 FDN。中域の残響時間 = rtMul × TIME〔PLATE 1.32 / HALL 1.25〕、空気の吸収と BALANCE は「1 回あたり一定」の損失、LOWPASS は残響時間の上限〔SIZE で伸びる〕）、
+  SendSmoother（SMOOTHING。1 ms ごとに 4.9 ms と 2.78 s の包絡を比べ、-3.29 + 0.253 × 比 dB〔-31.9〜+1.9〕を響きへ送る音にかける）、TriEQ（PRE / REVERB EQ、シェルフの GAIN は境目での値）。
+  Assist.h: LEARN（入力の飛び出た帯域 → PRE EQ のベル、低いゴロゴロ → 70 Hz ローカット）、UNMASK（ドライと響きを 1/6 oct で比べ REVERB EQ を決める。apvts.state の子 "UNMASK" に 100% の値、AMOUNT で入れ直す）。
+  tools/render_meld.cpp（参考と同じパラメーター番号で書き出し、遅れも 272 サンプルそろえる）、tools/test_meld.cpp（数値テスト）
 
 - Plugin Link（MyPlugins/Shared/PluginLink.h・PluginLinkJuce.h）… 自作プラグイン同士の連携。
   ~/Library/Application Support/MyPlugins/PluginLink-v2.bin を mmap した共有メモリの掲示板（64 席・数値 24 個、atomic だけで読み書き、3 秒で不在、10 秒で席を回収）。
