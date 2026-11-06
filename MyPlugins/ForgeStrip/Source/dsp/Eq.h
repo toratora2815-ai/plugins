@@ -88,20 +88,20 @@ struct EqBandFilter
                 else                          st[0].highShelf (f * 0.191f, qs, gt, sr);
                 break;
             }
-            case LowpassRes:  st[0].lowpass (f, q, sr); break;
-            case HighpassRes: st[0].highpass (f, q, sr); break;
+            case LowpassRes:  st[0].lowpassMatched (f, q, sr); break;
+            case HighpassRes: st[0].highpassMatched (f, q, sr); break;
             case LowpassFlat:
             case HighpassFlat:
             {
                 const int order = flatOrder (q);
                 const bool lp = shape == LowpassFlat;
-                if (order == 1) { if (lp) st[0].lowpass1 (f, sr); else st[0].highpass1 (f, sr); break; }
+                if (order == 1) { if (lp) st[0].lowpass1Matched (f, sr); else st[0].highpass1Matched (f, sr); break; }
                 const int n = order / 2;
                 for (int i = 0; i < n; ++i)
                 {
                     // バターワースの各段の Q
                     const double qq = 1.0 / (2.0 * std::cos (kPi * (2.0 * i + 1.0) / (2.0 * order)));
-                    if (lp) st[i].lowpass (f, qq, sr); else st[i].highpass (f, qq, sr);
+                    if (lp) st[i].lowpassMatched (f, qq, sr); else st[i].highpassMatched (f, qq, sr);
                 }
                 stages = n;
                 break;
@@ -127,12 +127,13 @@ struct EqSettings
     static constexpr int numBands = 12;
     EqBandSettings band[numBands];
     float mix = 1.0f;   // 0..1
+    bool softSat = false;   // EQ の前で軽く飽和（測定: y = x - 0.24 x|x| + 0.036 x²、+0.16 dB）
 };
 
 class EqModule
 {
 public:
-    void prepare (double s) { sr = s; for (auto& b : bands) { b.f.reset(); b.det.reset(); b.env = -120; b.cur = 1e9f; } dirty = true; }
+    void prepare (double s) { sr = s; dcBlock.highpass1 (5.0, s); for (auto& b : bands) { b.f.reset(); b.det.reset(); b.env = -120; b.cur = 1e9f; } dirty = true; }
     void reset() { for (auto& b : bands) { b.f.reset(); b.det.reset(); b.env = -120; } }
 
     void set (const EqSettings& s) { cfg = s; }
@@ -142,6 +143,19 @@ public:
 
     void process (float* L, float* R, int n)
     {
+        if (cfg.softSat)
+        {
+            auto sat = [] (float x)
+            {
+                const float c = clampv (x, -2.0f, 2.0f);
+                return 1.0186f * (c - 0.24f * c * std::abs (c) + 0.036f * c * c);
+            };
+            for (int i = 0; i < n; ++i)
+            {
+                L[i] = dcBlock.process (sat (L[i]), 0);
+                R[i] = dcBlock.process (sat (R[i]), 1);
+            }
+        }
         for (int b = 0; b < EqSettings::numBands; ++b)
         {
             const auto& c = cfg.band[b];
@@ -158,7 +172,7 @@ public:
                 else if (c.shape >= HighShelfAnalog && c.shape <= HighShelfVintage) st.det.highpass (fq, 0.7071, sr);
                 else st.det.bandpass (c.freq, std::max (0.3f, c.q), sr);
             }
-            const float att = coefMs (5.0f, sr), rel = coefMs (80.0f, sr);
+            const float att = coefMs (13.0f, sr), rel = coefMs (32.0f, sr);   // 測定
             for (int i0 = 0; i0 < n; i0 += 32)
             {
                 const int len = std::min (32, n - i0);
@@ -175,8 +189,11 @@ public:
                     const float lvl = gainToDb (pk + 1e-9f);
                     const float a = lvl > st.env ? std::pow (att, (float) len) : std::pow (rel, (float) len);
                     st.env = lvl + a * (st.env - lvl);
-                    const float over = c.up ? (c.threshold - st.env) : (st.env - c.threshold);
-                    g = c.gain * clampv (over / 12.0f, 0.0f, 1.0f);
+                    // 測定: しきい値で 0、0 dBFS で全量の直線。Down = 大きいほど下がる向き、Up = 大きいほど上がる向き
+                    const float f = c.threshold < -0.1f ? clampv ((st.env - c.threshold) / -c.threshold, 0.0f, 1.0f) : 0.0f;
+                    const bool louderLower = ! c.up;
+                    if (c.gain < 0) g = louderLower ? c.gain * f : c.gain * (1.0f - f);
+                    else            g = louderLower ? c.gain * (1.0f - f) : c.gain * f;
                 }
                 if (std::abs (g - st.cur) > 0.01f || st.shape != c.shape || st.freq != c.freq || st.q != c.q)
                 {
@@ -217,6 +234,7 @@ private:
         float detF = -1, detQ = -1; int detShape = -1;
     };
     EqSettings cfg;
+    Biquad dcBlock;
     std::array<BandState, EqSettings::numBands> bands;
     double sr = 48000;
     bool dirty = true;

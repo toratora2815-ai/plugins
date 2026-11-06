@@ -83,9 +83,9 @@ public:
     {
         sr = s;
         eq.prepare (s); comp[0].prepare (s); comp[1].prepare (s); exciter.prepare (s); transient.prepare (s);
-        gate.prepare (s); density.prepare (s); clipper.prepare (s); phase.prepare (s); sculptor.prepare (s); unmask.prepare (s);
+        gate.prepare (s); density.prepare (s); clipper.prepare (s); phase.prepare (s); sculptor.prepare (s); sculptor.prepareExtra (s); unmask.prepare (s);
         limiter.prepare (s);
-        const int maxLat = std::max (sculptor.latency(), density.latency()) + 8;
+        const int maxLat = std::max ({ sculptor.latency(), density.latency(), phase.latency() }) + 8;
         for (int m = 0; m < numModules; ++m) for (int c = 0; c < 2; ++c) dryDelay[m][c].prepare (maxLat);
         for (int c = 0; c < 2; ++c) { chDelay[c].prepare ((int) (0.1 * s) + 4); scRing[c].assign ((size_t) (maxLat * 3 + maxBlock * 2), 0.0f); }
         scW = 0;
@@ -117,6 +117,7 @@ public:
             case ModDensity: return density.latency();
             case ModExciter: return exciter.latency();
             case ModClipper: return clipper.latency();
+            case ModPhase: return phase.latency();
             case ModSculptor: return sculptor.latency();
             case ModUnmask: return unmask.latency();
             default: return 0;
@@ -200,7 +201,7 @@ private:
             }
             switch (m)
             {
-                case ModSculptor:  sculptor.process (L, R, n, nullptr, nullptr); break;
+                case ModSculptor:  sculptor.process (L, R, n, nullptr, nullptr); sculptor.postProcess (L, R, n); break;
                 case ModEq:        eq.process (L, R, n); break;
                 case ModComp1:     comp[0].process (L, R, n, a, b); break;
                 case ModComp2:     comp[1].process (L, R, n, a, b); break;
@@ -234,7 +235,7 @@ private:
     {
         switch (m)
         {
-            case ModSculptor: sculptor.reset(); break; case ModEq: eq.reset(); break; case ModComp1: comp[0].reset(); break;
+            case ModSculptor: sculptor.reset(); sculptor.resetExtra(); break; case ModEq: eq.reset(); break; case ModComp1: comp[0].reset(); break;
             case ModComp2: comp[1].reset(); break; case ModExciter: exciter.reset(); break; case ModTransient: transient.reset(); break;
             case ModGate: gate.reset(); break; case ModDensity: density.reset(); break; case ModClipper: clipper.reset(); break;
             case ModPhase: phase.reset(); break; case ModUnmask: unmask.reset(); break; default: break;

@@ -67,6 +67,44 @@ struct Biquad
         return (b0 + b1 * z1c + b2 * z2c) / (1.0 + a1 * z1c + a2 * z2c);
     }
     void lowpass (double fc, double q, double sr) { fromAnalog (0, 0, 1, 1, 1.0 / q, 1, fc, sr); }
+    // アナログの形に合わせた（高域がつぶれない）2 次ローパス・ハイパス（Vicanek の方法）
+    void matchedPoles (double w0, double q)
+    {
+        const double zeta = 1.0 / (2.0 * q);
+        const double e = std::exp (-zeta * w0);
+        a1 = zeta <= 1.0 ? -2.0 * e * std::cos (std::sqrt (1.0 - zeta * zeta) * w0) : -2.0 * e * std::cosh (std::sqrt (zeta * zeta - 1.0) * w0);
+        a2 = e * e;
+    }
+    void lowpassMatched (double fc, double q, double sr)
+    {
+        const double w0 = 2.0 * kPi * std::min (fc, sr * 0.49) / sr;
+        matchedPoles (w0, q);
+        const double A0 = (1 + a1 + a2) * (1 + a1 + a2), A1 = (1 - a1 + a2) * (1 - a1 + a2), A2 = -4 * a2;
+        const double s2 = std::sin (w0 / 2) * std::sin (w0 / 2), p0 = 1 - s2, p1 = s2, p2 = 4 * p0 * p1;
+        const double R1 = (A0 * p0 + A1 * p1 + A2 * p2) * q * q;
+        const double B0 = A0, B1 = std::max (0.0, (R1 - B0 * p0) / p1);
+        b0 = 0.5 * (std::sqrt (B0) + std::sqrt (B1)); b1 = std::sqrt (B0) - b0; b2 = 0;
+    }
+    void highpassMatched (double fc, double q, double sr)
+    {
+        const double w0 = 2.0 * kPi * std::min (fc, sr * 0.49) / sr;
+        matchedPoles (w0, q);
+        const double A0 = (1 + a1 + a2) * (1 + a1 + a2), A1 = (1 - a1 + a2) * (1 - a1 + a2), A2 = -4 * a2;
+        const double s2 = std::sin (w0 / 2) * std::sin (w0 / 2), p0 = 1 - s2, p1 = s2, p2 = 4 * p0 * p1;
+        b0 = q * std::sqrt (A0 * p0 + A1 * p1 + A2 * p2) / (4 * p1); b1 = -2 * b0; b2 = b0;
+    }
+    // 1 次（極は e^{-w0}、ナイキストでの大きさをアナログに合わせる）
+    void lowpass1Matched (double fc, double sr)
+    {
+        const double w0 = 2.0 * kPi * fc / sr, p = std::exp (-w0), r = (sr * 0.5) / fc, gN = 1.0 / std::sqrt (1 + r * r);
+        const double sum = 1 - p, diff = gN * (1 + p);
+        b0 = 0.5 * (sum + diff); b1 = 0.5 * (sum - diff); b2 = 0; a1 = -p; a2 = 0;
+    }
+    void highpass1Matched (double fc, double sr)
+    {
+        const double w0 = 2.0 * kPi * fc / sr, p = std::exp (-w0), r = (sr * 0.5) / fc, gN = r / std::sqrt (1 + r * r);
+        b0 = gN * (1 + p) / 2; b1 = -b0; b2 = 0; a1 = -p; a2 = 0;
+    }
     void highpass (double fc, double q, double sr) { fromAnalog (1, 0, 0, 1, 1.0 / q, 1, fc, sr); }
     void lowpass1 (double fc, double sr) { fromAnalog1 (0, 1, 1, 1, fc, sr); }
     void highpass1 (double fc, double sr) { fromAnalog1 (1, 0, 1, 1, fc, sr); }

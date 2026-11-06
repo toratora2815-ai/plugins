@@ -39,6 +39,8 @@ ForgeStripProcessor::ForgeStripProcessor()
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
     for (int i = 0; i < fs::numModules; ++i) order[i] = i;
+    token = (float) (1 + juce::Random::getSystemRandom().nextInt (8000000));
+    startTimerHz (30);
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
             params[r->getParameterID().toStdString()] = apvts.getRawParameterValue (r->getParameterID());
@@ -75,6 +77,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout ForgeStripProcessor::createL
     addC ("lim_mode", "Limiter Mode", { "Soft", "Smart", "Hard", "Zero Latency" }, 1);
     addF ("lim_ceiling", "Limiter Ceiling", { -20.0f, 0.0f, 0.01f }, -0.3f, db);
     addC ("lim_style", "Limiter Style", { "Clear", "Thick", "Smooth" }, 1);
+    v.push_back (plink::makeGroupParameter (1));
+    addB ("eq_softsat", "EQ Soft Saturation", false);
 
     for (int m = 0; m < fs::numModules; ++m)
     {
@@ -113,7 +117,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ForgeStripProcessor::createL
         addC (fsid::J (fsid::id (m, "detect")), nm + " Detection", { "Peak", "RMS", "True Peak" }, 0);
         addB (fsid::J (fsid::id (m, "autorel")), nm + " Auto Release", false);
         addB (fsid::J (fsid::id (m, "autogain")), nm + " Auto Gain", true);
-        addB (fsid::J (fsid::id (m, "vintage")), nm + " Vintage", m == fs::ModComp2);
+        addC (fsid::J (fsid::id (m, "cmode")), nm + " Mode", { "Modern", "Vintage", "Punch" }, m == fs::ModComp2 ? 1 : 0);
         addF (fsid::J (fsid::id (m, "gain")), nm + " Global Gain", { -30.0f, 30.0f, 0.01f }, 0.0f, db);
         addF (fsid::J (fsid::id (m, "hpf")), nm + " SC Highpass", logR (20.0f, 20000.0f), 20.0f, hz);
         addF (fsid::J (fsid::id (m, "lpf")), nm + " SC Lowpass", logR (20.0f, 20000.0f), 20000.0f, hz);
@@ -129,6 +133,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout ForgeStripProcessor::createL
             addF (fsid::J (fsid::bandId (m, b, "knee")), n + "Knee", { 0.0f, 50.0f, 0.1f }, 0.0f, one);
             addF (fsid::J (fsid::bandId (m, b, "gain")), n + "Gain", { -30.0f, 30.0f, 0.01f }, 0.0f, db);
             addF (fsid::J (fsid::bandId (m, b, "mix")), n + "Mix", { 0.0f, 100.0f, 0.1f }, 100.0f, pct);
+            addF (fsid::J (fsid::bandId (m, b, "pamt")), n + "Punch Amount", { 10.0f, 300.0f, 0.1f }, 100.0f, pct);
+            addF (fsid::J (fsid::bandId (m, b, "patt")), n + "Punch Attack", logR (1.0f, 500.0f), 1.0f, ms);
+            addF (fsid::J (fsid::bandId (m, b, "psus")), n + "Punch Sustain", logR (1.0f, 1000.0f), 150.0f, ms);
+            addF (fsid::J (fsid::bandId (m, b, "pgain")), n + "Punch Gain", { -30.0f, 30.0f, 0.01f }, 0.0f, db);
         }
     }
 
@@ -212,7 +220,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ForgeStripProcessor::createL
     // Sculptor
     {
         juce::StringArray t; for (int i = 0; i < fs::kNumToneTargets; ++i) t.add (fs::toneTargetName (i));
-        t.add ("None");
+        t.add ("Add Punch"); t.add ("Add Polish"); t.add ("None");
         const int m = fs::ModSculptor;
         addC (fsid::J (fsid::id (m, "target")), "Sculptor Target", t, 22);
         addF (fsid::J (fsid::id (m, "amount")), "Sculptor Amount", { 0.0f, 100.0f, 0.1f }, 0.0f, pct);
@@ -276,13 +284,15 @@ fs::StripSettings ForgeStripProcessor::readSettings() const
         e.gain = p (fsid::eqId (b, "gain")); e.q = p (fsid::eqId (b, "q")); e.dynamic = p (fsid::eqId (b, "dyn")) > 0.5f;
         e.up = p (fsid::eqId (b, "dir")) > 0.5f; e.threshold = p (fsid::eqId (b, "thr"));
     }
+    s.eq.softSat = p ("eq_softsat") > 0.5f;
     for (int k = 0; k < 2; ++k)
     {
         const int m = k == 0 ? fs::ModComp1 : fs::ModComp2;
         auto& c = s.comp[k];
         bandsOf (m, c.bands, c.xover1, c.xover2);
         c.detect = (int) p (fsid::id (m, "detect")); c.autoRelease = p (fsid::id (m, "autorel")) > 0.5f;
-        c.autoGain = p (fsid::id (m, "autogain")) > 0.5f; c.vintage = p (fsid::id (m, "vintage")) > 0.5f;
+        c.autoGain = p (fsid::id (m, "autogain")) > 0.5f;
+        { const int cm = (int) p (fsid::id (m, "cmode")); c.vintage = cm == 1; c.punch = cm == 2; }
         c.globalGain = p (fsid::id (m, "gain")); c.scHpf = p (fsid::id (m, "hpf")); c.scLpf = p (fsid::id (m, "lpf"));
         c.scExternal = p (fsid::id (m, "ext")) > 0.5f;
         for (int b = 0; b < 3; ++b)
@@ -291,6 +301,8 @@ fs::StripSettings ForgeStripProcessor::readSettings() const
             bb.bypass = p (fsid::bandId (m, b, "byp")) > 0.5f; bb.threshold = p (fsid::bandId (m, b, "thr")); bb.ratio = p (fsid::bandId (m, b, "ratio"));
             bb.attack = p (fsid::bandId (m, b, "att")); bb.release = p (fsid::bandId (m, b, "rel")); bb.knee = p (fsid::bandId (m, b, "knee"));
             bb.gain = p (fsid::bandId (m, b, "gain")); bb.mix = p (fsid::bandId (m, b, "mix")) * 0.01f;
+            bb.punchAmount = p (fsid::bandId (m, b, "pamt")); bb.punchAttack = p (fsid::bandId (m, b, "patt"));
+            bb.punchSustain = p (fsid::bandId (m, b, "psus")); bb.punchGain = p (fsid::bandId (m, b, "pgain"));
         }
     }
     {
@@ -381,6 +393,7 @@ void ForgeStripProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     eng.set (s);
     scBuf.setSize (2, juce::jmax (1, samplesPerBlock));
     monoBuf.setSize (1, juce::jmax (1, samplesPerBlock));
+    meterLp.lowpass (200.0, 0.7071, sampleRate); meterHp.highpass (4000.0, 0.7071, sampleRate); meterLp.reset(); meterHp.reset();
     const int lat = eng.latencyFor (s);
     wantLatency = lat; reportedLatency = lat;
     setLatencySamples (lat);
@@ -428,11 +441,57 @@ void ForgeStripProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
     float pin = 0; for (int i = 0; i < n; ++i) pin = juce::jmax (pin, std::abs (L[i]), std::abs (R[i]));
     eng.process (L, R, n, scL, scR);
-    float pout = 0; for (int i = 0; i < n; ++i) pout = juce::jmax (pout, std::abs (L[i]), std::abs (R[i]));
+    float pout = 0, pl = 0, ph = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        pout = juce::jmax (pout, std::abs (L[i]), std::abs (R[i]));
+        const float mid = 0.5f * (L[i] + R[i]);
+        pl = juce::jmax (pl, std::abs (meterLp.process (mid, 0)));
+        ph = juce::jmax (ph, std::abs (meterHp.process (mid, 0)));
+    }
+    bandLevel[0] = juce::jmax (fs::gainToDb (pl), bandLevel[0].load() - 1.5f);
+    bandLevel[2] = juce::jmax (fs::gainToDb (ph), bandLevel[2].load() - 1.5f);
+    bandLevel[1] = juce::jmax (fs::gainToDb (pout), bandLevel[1].load() - 1.5f);
     inLevel = juce::jmax (fs::gainToDb (pin), inLevel.load() - 1.5f);
     outLevel = juce::jmax (fs::gainToDb (pout), outLevel.load() - 1.5f);
 
     for (int c = 2; c < buffer.getNumChannels(); ++c) buffer.clear (c, 0, n);
+}
+
+// Plugin Link: 自分の様子を出し、Forge Mixer の指示を自分のつまみに反映する（メッセージスレッド）
+void ForgeStripProcessor::setParam (const char* id, float v)
+{
+    if (auto* prm = apvts.getParameter (id))
+    {
+        const float nv = prm->convertTo0to1 (v);
+        if (std::abs (nv - prm->getValue()) > 1.0e-4f) { prm->beginChangeGesture(); prm->setValueNotifyingHost (nv); prm->endChangeGesture(); }
+    }
+}
+
+void ForgeStripProcessor::timerCallback()
+{
+    auto& ep = link.ep();
+    if (! link.on()) { mixerSeen = false; return; }
+    plink::Peer mx;
+    if (ep.find (fslink::kindMixer, mx) && mx.valuesAgeMs < 700)
+    {
+        mixerSeen = true;
+        const int cnt = juce::jlimit (0, fslink::mixer::maxCommands, (int) mx.v[fslink::mixer::count]);
+        for (int i = 0; i < cnt; ++i)
+        {
+            const float* c = mx.v + i * fslink::mixer::stride;
+            if (std::abs (c[0] - token) > 0.5f) continue;
+            setParam ("outGain", c[1]); setParam ("pan", c[2]); setParam ("width", c[3]);
+        }
+    }
+    else mixerSeen = ep.find (fslink::kindMixer, mx);
+    using namespace fslink::strip;
+    ep.publish (fslink::strip::token, token);
+    ep.publish (gainDb, p ("outGain")); ep.publish (pan, p ("pan")); ep.publish (width, p ("width"));
+    ep.publish (levelDb, outLevel.load());
+    ep.publish (lowDb, bandLevel[0].load()); ep.publish (midDb, bandLevel[1].load()); ep.publish (highDb, bandLevel[2].load());
+    ep.publish (mute, p ("bypass"));
+    ep.stamp();
 }
 
 void ForgeStripProcessor::handleAsyncUpdate()

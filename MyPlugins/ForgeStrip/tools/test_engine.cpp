@@ -57,6 +57,8 @@ int main()
         st.density.bands = 3; for (auto& b : st.density.band) { b.range = 20; b.threshold = -10; b.speed = 1; }
         st.clipper.bands = 3; for (auto& b : st.clipper.band) { b.threshold = -30; b.boost = 20; }
         st.gate.band[0].open = -50; st.phase.rotation = 90; st.phase.delayMs = 5;
+        st.comp[1].punch = true; for (auto& b : st.comp[1].band) { b.punchAmount = 300; b.punchSustain = 5; b.punchAttack = 1; }
+        st.comp[0].autoRelease = true; st.eq.softSat = true; st.eq.band[3] = { true, fs::Bell, 3000, -12, 2, true, true, -30 };
         st.sculptor.amount = 100; st.sculptor.target = 16; st.unmask.amount = 100; st.unmask.sensitivity = 100;
         st.global.width = 100; st.global.pan = 0.3f;
         fs::Strip s; s.prepare (sr, 512); s.set (st);
@@ -100,6 +102,29 @@ int main()
         }
         std::printf ("   crossover sum worst %.3f dB\n", worst);
         CHECK (worst < 0.05, "3-band crossover sums flat");
+    }
+    // 6. Add Punch / Polish、Vintage でも NaN なし
+    for (int tgt : { 23, 24 })
+    {
+        fs::StripSettings st; for (auto& o : st.on) o = false; st.on[fs::ModSculptor] = true; st.on[fs::ModComp1] = true;
+        st.sculptor.target = tgt; st.sculptor.amount = 100; st.comp[0].vintage = true; st.comp[0].band[0].threshold = -40;
+        fs::Strip s; s.prepare (sr, 512); s.set (st);
+        std::vector<float> L (sr * 2), R (sr * 2);
+        for (size_t i = 0; i < L.size(); ++i) { const float e = (i % 12000) < 800 ? 0.8f : 0.01f; L[i] = e * nd (rng); R[i] = L[i]; }
+        run (s, L, R);
+        bool ok = true; for (auto v : L) if (! std::isfinite (v) || std::abs (v) > 10.0f) ok = false;
+        CHECK (ok, tgt == 23 ? "Add Punch stays finite" : "Add Polish stays finite");
+    }
+    // 7. 位相 90° は振幅がそのまま（1 kHz）
+    {
+        fs::StripSettings st; for (auto& o : st.on) o = false; st.on[fs::ModPhase] = true; st.phase.rotation = 90;
+        fs::Strip s; s.prepare (sr, 512); s.set (st);
+        std::vector<float> L (sr), R (sr);
+        for (int i = 0; i < (int) sr; ++i) { L[(size_t) i] = 0.5f * (float) std::sin (2 * 3.14159265 * 1000 * i / sr); R[(size_t) i] = L[(size_t) i]; }
+        run (s, L, R);
+        float pk = 0; for (int i = 30000; i < 40000; ++i) pk = std::max (pk, std::abs (L[(size_t) i]));
+        std::printf ("   phase 90 peak %.3f (latency %d)\n", pk, s.latencyFor (st));
+        CHECK (std::abs (pk - 0.5f) < 0.01f, "phase rotation keeps level");
     }
     std::printf (fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;

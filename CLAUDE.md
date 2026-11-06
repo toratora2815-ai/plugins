@@ -32,7 +32,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`, `Pchd`, `Blsc`, `Rfrc`, `Hzsp`, `Vltm`, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`, `Pchd`, `Blsc`, `Rfrc`, `Hzsp`, `Vltm`, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -252,6 +252,11 @@
 - Forge Strip（ForgeStrip）… 11 モジュールのチャンネルストリップ。この Mac の定番ストリップ（AU 単体モジュール版）を AVAudioUnit で直接動かして測り、振る舞いを合わせたオリジナル（Source/dsp、JUCE なし、tools/fs_cli.cpp・test_engine.cpp）。
   並び替えできるチェーン（apvts.state の "order"）＋最後にリミッター。SCULPTOR（23 楽器の目標カーブ ToneTargets.h、パワーを保って寄せる、STFT 1024）/ EQ 12 帯域 13 形 / COMP×2（検出 = 3.5 ms の最大、直線の倍率で τ = ATT/2・REL/2、戻りは 1/倍率で τ = min(ATT,REL)、ニー幅 = KNEE×1.5）/
   EXCITER（XY の 4 角の歪み、4 倍 FIR OS）/ TRANSIENT（3 ms 先読み、tsTune）/ GATE（最低 20 ms 開く）/ DENSITY（34.6 ms 先読み）/ CLIPPER / PHASE（IIR の 90° 対）/ UNMASK（サイドチェーン、帯域の効きやすさは測定の表）。各モジュール最大 3 帯域（LR4）
+  v1.1.0: コンプ MODE（cmode = Modern / Vintage〔VintageTable.h の 2 次元表、vintTune の 2 段の動き〕/ Punch〔PunchCore、しきい値なし、山にいる間 α(E−B)、下がり始めたら α×16.5/SUSTAIN dB/ms〕）、
+  自動ゲイン（2 段、最大 20 dB）、自動リリース（長く下げると最大 2 倍）、EQ の Soft Sat（x − 0.24x|x| + 0.036x²）とダイナミック（しきい値→0 dBFS の直線）、
+  SCULPTOR の Add Punch / Add Polish（PunchPolish）、PHASE は直線位相 FIR（遅れ 2401）、LP/HP はマッチド設計。Plugin Link（独自の種類 200、ForgeLink.h）で Forge Mixer から OUTPUT/PAN/WIDTH を動かす
+- Forge Mixer（ForgeMixer）… Forge Strip 用のミキサー（音は素通し）。同じ LINK の Strip を点で並べ（左右 = パン、上下 = 音量、大きさ = 幅）、ドラッグの指示を種類 201 で出す（最大 5 つ、放して 0.6 秒）。
+  Strip は 30 Hz のタイマーで自分の token の指示をつまみに入れる。ForgeStrip/Source/ForgeLink.h を読む
 
 ## Claude からの提案（余った利用枠の活用）
 - Claude が自分で「次に作るもの・直すもの」を3つ提案し、本人が「GO」を出したら作る仕組み。指示書は `ideas/PROPOSAL_PROMPT.md`

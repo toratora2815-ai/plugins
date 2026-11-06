@@ -61,6 +61,9 @@ int main (int argc, char** argv)
         keys[p + ".autorel"] = [&c] (float v) { c.autoRelease = v > 0.5f; };
         keys[p + ".vintage"] = [&c] (float v) { c.vintage = v > 0.5f; };
         keys[p + ".detect"] = [&c] (float v) { c.detect = (int) v; };
+        keys[p + ".punch"] = [&c] (float v) { c.punch = v > 0.5f; };
+        keys[p + ".pamt"] = [&c] (float v) { c.band[0].punchAmount = v; }; keys[p + ".patt"] = [&c] (float v) { c.band[0].punchAttack = v; };
+        keys[p + ".psus"] = [&c] (float v) { c.band[0].punchSustain = v; }; keys[p + ".pgain"] = [&c] (float v) { c.band[0].punchGain = v; };
         for (int b = 0; b < 3; ++b)
         {
             auto& bb = c.band[b]; std::string q = b == 0 ? p + "." : p + ".b" + std::to_string (b + 1) + ".";
@@ -104,6 +107,19 @@ int main (int argc, char** argv)
     auto& ut = fs::unmaskTune::t();
     keys["T.um.sensOffset"] = [&ut] (float v) { ut.sensOffset = v; }; keys["T.um.sensPerPct"] = [&ut] (float v) { ut.sensPerPct = v; };
     keys["T.um.slope"] = [&ut] (float v) { ut.slope = v; };
+    auto& vt = fs::vintTune::t();
+    keys["T.v.ka"] = [&vt] (float v) { vt.ka = v; }; keys["T.v.kr"] = [&vt] (float v) { vt.kr = v; };
+    keys["T.v.kh"] = [&vt] (float v) { vt.kh = v; }; keys["T.v.w"] = [&vt] (float v) { vt.w = v; }; keys["T.v.ts"] = [&vt] (float v) { vt.ts = v; };
+    keys["T.ar.lo"] = [] (float v) { fs::autoRelTune::lo() = v; }; keys["T.ar.tau"] = [] (float v) { fs::autoRelTune::tau() = v; };
+    auto& agt = fs::autoGainTune::t();
+    keys["T.ag.up1"] = [&agt] (float v) { agt.up1 = v; }; keys["T.ag.dn1"] = [&agt] (float v) { agt.dn1 = v; };
+    keys["T.ag.up2"] = [&agt] (float v) { agt.up2 = v; }; keys["T.ag.dn2"] = [&agt] (float v) { agt.dn2 = v; };
+    auto& pt = fs::punchTune::t();
+    keys["T.p.ku"] = [&pt] (float v) { pt.ku = v; }; keys["T.p.kd"] = [&pt] (float v) { pt.kd = v; }; keys["T.p.ke"] = [&pt] (float v) { pt.ke = v; }; keys["T.p.kr"] = [&pt] (float v) { pt.kr = v; }; keys["T.p.ga"] = [&pt] (float v) { pt.gAtk = v; }; keys["T.p.kh"] = [&pt] (float v) { pt.kh = v; };
+    auto& ppt = fs::ppTune::t();
+    keys["T.pp.ref"] = [&ppt] (float v) { ppt.refMs = v; }; keys["T.pp.mid"] = [&ppt] (float v) { ppt.midMs = v; };
+    keys["T.pp.ku"] = [&ppt] (float v) { ppt.ku = v; }; keys["T.pp.kd"] = [&ppt] (float v) { ppt.kd = v; }; keys["T.pp.kt"] = [&ppt] (float v) { ppt.kt = v; };
+    keys["T.pp.up"] = [&ppt] (float v) { ppt.upMs = v; }; keys["T.pp.pol"] = [&ppt] (float v) { ppt.polish = v; };
     auto& ph = s.phase;
     keys["ph.rot"] = [&ph] (float v) { ph.rotation = v; }; keys["ph.delay"] = [&ph] (float v) { ph.delayMs = v; };
     for (int b = 0; b < 12; ++b)
@@ -112,6 +128,9 @@ int main (int argc, char** argv)
         keys[p + "on"] = [&e] (float v) { e.on = v > 0.5f; }; keys[p + "shape"] = [&e] (float v) { e.shape = (int) v; };
         keys[p + "freq"] = [&e] (float v) { e.freq = v; }; keys[p + "gain"] = [&e] (float v) { e.gain = v; }; keys[p + "q"] = [&e] (float v) { e.q = v; };
     }
+    keys["eq.softsat"] = [&s] (float v) { s.eq.softSat = v > 0.5f; };
+    for (int b = 0; b < 12; ++b) { auto& e = s.eq.band[b]; std::string p = "eq.b" + std::to_string (b + 1) + ".";
+        keys[p + "dyn"] = [&e] (float v) { e.dynamic = v > 0.5f; }; keys[p + "up"] = [&e] (float v) { e.up = v > 0.5f; }; keys[p + "thr"] = [&e] (float v) { e.threshold = v; }; }
     keys["lim.on"] = [&s] (float v) { s.limiterOn = v > 0.5f; }; keys["lim.ceiling"] = [&s] (float v) { s.limiter.ceiling = v; };
 
     for (int a = 3; a < argc; ++a)

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
-project(ForgeStrip VERSION 1.0.0)
+project(ForgeStrip VERSION 1.1.0)
 
 option(COPY_AFTER_BUILD "Copy plugin to system folder after build" ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -29,6 +29,9 @@ juce_add_plugin(ForgeStrip
     COPY_PLUGIN_AFTER_BUILD ${COPY_AFTER_BUILD})
 
 juce_generate_juce_header(ForgeStrip)
+
+# 共通部品（Plugin Link）
+target_include_directories(ForgeStrip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../Shared)
 
 target_sources(ForgeStrip PRIVATE
     Source/PluginProcessor.cpp

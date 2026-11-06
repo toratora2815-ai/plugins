@@ -6,6 +6,7 @@
 //   - 比が 1 より小さいと、しきい値より下を持ち上げる（上向きのコンプ）
 #pragma once
 #include "Common.h"
+#include "VintageTable.h"
 
 namespace fs
 {
@@ -63,6 +64,44 @@ struct CompBandSettings
 {
     bool bypass = false;
     float threshold = 0, ratio = 4, attack = 10, release = 50, knee = 0, gain = 0, mix = 1.0f;
+    float punchAmount = 100, punchAttack = 1, punchSustain = 150, punchGain = 0;   // PUNCH モード用
+};
+
+// PUNCH モード（測定）: しきい値・比は使わず、音量の変化を強めたり弱めたりする（α = (AMOUNT-100)/400）
+//   山（ピーク保持 H）にいる間: 量 = α×(E − B)（+6 dB で頭打ち）。B は E へ dB でゆっくり近づく基準（時定数 ku×SUSTAIN）
+//   山から下がり始めたら: 量は時間に比例して α×kr/SUSTAIN dB/ms ずつ減る（-34 dB まで、音量の下がり方とは無関係）
+//   E は PUNCH ATTACK の時定数で上がる（長いと鳴り始めが遅れ、逆に下がる）
+namespace punchTune { struct T { float ku = 5.8f, kd = 40.0f, kr = 16.5f, kh = 0.5f, ke = 0.3f, gAtk = 0.2f, maxUp = 6.0f, maxDown = 34.0f; }; inline T& t() { static T v; return v; } }
+
+struct PunchCore
+{
+    double sr = 48000; float E = -120, B = -100, H = -120, G = 0, lastDb = 0; SlidingMax pk;
+    void prepare (double s) { sr = s; pk.prepare ((int) std::round (0.0035 * s)); reset(); }
+    void reset() { pk.reset(); E = -120; B = -100; H = -120; G = 0; lastDb = 0; }
+    inline float process (float det, const CompBandSettings& b)
+    {
+        const auto& t = punchTune::t();
+        const float x = gainToDb (pk.push (det) + 1e-9f);
+        E = x;
+        const float ms = 1000.0f / (float) sr, sus = std::max (1.0f, b.punchSustain);
+        B = std::max (-100.0f, E + coefMs ((E > B ? t.ku : t.kd) * sus, sr) * (B - E));
+        H = std::max (E, H - t.kh / sus * ms);
+        const float alpha = (b.punchAmount - 100.0f) / 400.0f;
+        if (E >= H - 0.5f)
+        {
+            float tg = alpha * (E - B);
+            tg = alpha > 0 ? std::min (t.maxUp, tg) : std::max (alpha * 25.8f, tg);   // 測定: 上 +6 dB、AMOUNT < 100 は差 25.8 dB まで
+            // 量が上がるときは PUNCH ATTACK の時定数、下がるときは速く
+            const float c = tg > G ? coefMs (std::max (0.05f, b.punchAttack * t.ke), sr) : coefMs (t.gAtk, sr);
+            G = tg + c * (G - tg);
+        }
+        else G -= alpha * t.kr / sus * ms;
+        if (alpha > 0) G = clampv (G, -std::min (t.maxDown, alpha * 68.0f), t.maxUp);
+        else G = clampv (G, alpha * 25.8f, -alpha * 54.0f);
+        if (x < -100.0f) G = 0.0f;
+        lastDb = G + b.punchGain;
+        return dbToGain (lastDb);
+    }
 };
 
 struct CompSettings
@@ -74,7 +113,21 @@ struct CompSettings
     float globalGain = 0;    // dB
     float scHpf = 40, scHpfQ = 0.707f, scLpf = 18000, scLpfQ = 0.707f;
     bool scExternal = false; // 外部サイドチェーンで検出
+    bool punch = false;      // PUNCH モード
 };
+
+// 自動リリース: 長く下げ続けると最大 2 倍（測定）、短い山だけなら lo 倍
+namespace autoRelTune { inline float& lo() { static float v = 1.0f; return v; } inline float& tau() { static float v = 600.0f; return v; } }
+
+// 自動ゲインのならし（2 段、ms）
+namespace autoGainTune { struct T { float up1 = 100, dn1 = 400, up2 = 5, dn2 = 700; }; inline T& t() { static T v; return v; } }
+
+// Vintage の時間の動き（測定に合わせた値。tools の当てはめで決めた）
+namespace vintTune
+{
+    struct T { float ka = 0.3f, kr = 1.0f, kh = 1.4f, w = 0.15f, ts = 1500.0f; };
+    inline T& t() { static T v; return v; }
+}
 
 // 1 帯域ぶんの量の計算（コンプ）
 struct CompCore
@@ -90,9 +143,9 @@ struct CompCore
     {
         sr = s; peak.prepare ((int) std::round (0.0035 * sr));
         rmsBuf.assign ((size_t) std::max (1, (int) std::round (0.010 * sr)), 0.0f); rmsAcc = 0; rmsPos = 0;
-        g = 1.0f; u2 = 1.0f; makeA = makeB = 0; relFast = 1.0f;
+        g = 1.0f; u2 = 1.0f; slowDb = 0; makeA = makeB = 0; relFast = 1.0f;
     }
-    void reset() { peak.reset(); std::fill (rmsBuf.begin(), rmsBuf.end(), 0.0f); rmsAcc = 0; g = 1.0f; u2 = 1.0f; makeA = makeB = 0; relFast = 1.0f; }
+    void reset() { peak.reset(); std::fill (rmsBuf.begin(), rmsBuf.end(), 0.0f); rmsAcc = 0; g = 1.0f; u2 = 1.0f; slowDb = 0; makeA = makeB = 0; relFast = 1.0f; }
 
     // 静的なカーブ: 入力 x dB → 下げる量 dB（負なら持ち上げ）
     static float curve (float x, const CompBandSettings& b, bool vintage)
@@ -105,9 +158,20 @@ struct CompCore
             float lo = T - W * 0.5f, hi = T + W * 0.5f;
             if (vintage)
             {
-                // Vintage: しきい値の 0.8 倍ぶん下から始まる広いニー（測定に合わせた近似）
-                const float w = std::max (6.0f, 0.8f * std::abs (T)) + W * 0.5f;
-                lo = T - w; hi = T + w;
+                // Vintage: 測った表（しきい値 × 入力）を補間。ニーは効かない（測定）
+                const auto& tb = vintageTable();
+                float ti = (clampv (T, -80.0f, 0.0f) + 80.0f) / 5.0f;
+                const float shift = T < -80.0f ? (-80.0f - T) : 0.0f;   // もっと低いしきい値は平行移動
+                const int t0 = std::min ((int) ti, kVintT - 2); const float tf = ti - (float) t0;
+                auto look = [&] (int row, float xx)
+                {
+                    if (xx >= 0.0f) return tb[row][50] + xx;
+                    if (xx <= -100.0f) return tb[row][0];
+                    const float fi = (xx + 100.0f) * 0.5f; const int i = std::min ((int) fi, 49); const float f = fi - (float) i;
+                    return tb[row][i] * (1.0f - f) + tb[row][i + 1] * f;
+                };
+                const float xx = x + shift;
+                return s * (look (t0, xx) * (1.0f - tf) + look (t0 + 1, xx) * tf);
             }
             if (x <= lo) return 0.0f;
             if (x >= hi) return s * (x - T);
@@ -140,6 +204,28 @@ struct CompCore
         else lvl = peak.push (det);
         const float x = gainToDb (lvl + 1e-12f);
         const float gr = curve (x, b, c.vintage);
+        float gOut;
+        if (c.vintage)
+        {
+            // Vintage: 速い段（アタックは直線の倍率、リリースは dB）＋待ち（1/倍率の段）＋数秒の遅い段
+            const auto& vt = vintTune::t();
+            const float fastT = gr * (1.0f - vt.w), slowT = gr * vt.w;
+            const float tF = dbToGain (-fastT);
+            if (tF < g) g = tF + coefMs (b.attack * vt.ka, sr) * (g - tF);
+            else
+            {
+                float dbF = -gainToDb (g);
+                dbF = fastT + coefMs (b.release * vt.kr, sr) * (dbF - fastT);
+                g = dbToGain (-dbF);
+            }
+            const float u1 = 1.0f / std::max (g, 1.0e-9f);
+            if (u1 >= u2) u2 = u1;
+            else u2 = u1 + coefMs (std::min (b.attack, b.release) * vt.kh, sr) * (u2 - u1);
+            slowDb = slowT + coefMs (vt.ts, sr) * (slowDb - slowT);
+            gOut = dbToGain (-slowDb) / u2;
+        }
+        else
+        {
         const float target = dbToGain (-gr);
         const float aC = coefMs (b.attack * 0.5f, sr);
         float rMs = b.release * 0.5f;
@@ -147,8 +233,8 @@ struct CompCore
         {
             // 自動リリース: 短い山のあとは速く、長く下げ続けたあとは遅く戻す
             const float over = clampv (gr / 12.0f, 0.0f, 1.0f);
-            relFast += (over - relFast) * (1.0f - coefMs (300.0f, sr));
-            rMs *= 0.35f + 1.3f * relFast;
+            relFast += (over - relFast) * (1.0f - coefMs (autoRelTune::tau(), sr));
+            rMs *= autoRelTune::lo() + (2.0f - autoRelTune::lo()) * relFast;
         }
         const float rC = coefMs (rMs, sr);
         const float k = target < g ? aC : rC;
@@ -161,21 +247,23 @@ struct CompCore
             else { const float c2 = coefMs (std::min (b.attack, b.release), sr); u2 = u1 + c2 * (u2 - u1); }
         }
         else u2 = 1.0f / std::max (g, 1.0e-9f);
-        const float gOut = 1.0f / u2;
+        gOut = 1.0f / u2;
+        }
         lastGr = -gainToDb (gOut);
         if (c.autoGain)
         {
             // 自動ゲイン: 下げている量の平均を、上がるときは速く、下がるときはゆっくり戻す（測定に合わせた 2 段）
-            const float grDb = lastGr;
-            const float k1 = grDb > makeA ? coefMs (60.0f, sr) : coefMs (300.0f, sr);
+            const float grDb = std::min (lastGr, 20.1f);   // 測定: 持ち上げは約 20 dB まで
+            const auto& at = autoGainTune::t();
+            const float k1 = grDb > makeA ? coefMs (at.up1, sr) : coefMs (at.dn1, sr);
             makeA = grDb + k1 * (makeA - grDb);
-            const float k2 = makeA > makeB ? coefMs (80.0f, sr) : coefMs (350.0f, sr);
+            const float k2 = makeA > makeB ? coefMs (at.up2, sr) : coefMs (at.dn2, sr);
             makeB = makeA + k2 * (makeB - makeA);
         }
         return gOut;
     }
     float makeupDb() const { return makeB; }
-    float u2 = 1.0f;
+    float u2 = 1.0f, slowDb = 0.0f;
 };
 
 class CompModule
@@ -184,10 +272,10 @@ public:
     void prepare (double s)
     {
         sr = s; split.prepare (s);
-        for (int b = 0; b < 3; ++b) { core[b].prepare (s); detf[b].reset(); }
+        for (int b = 0; b < 3; ++b) { core[b].prepare (s); punch[b].prepare (s); detf[b].reset(); }
         bandSplitDet.prepare (s);
     }
-    void reset() { split.reset(); bandSplitDet.reset(); for (int b = 0; b < 3; ++b) { core[b].reset(); detf[b].reset(); } }
+    void reset() { split.reset(); bandSplitDet.reset(); for (int b = 0; b < 3; ++b) { core[b].reset(); punch[b].reset(); detf[b].reset(); } }
     void set (const CompSettings& s) { cfg = s; split.set (s.bands, s.xover1, s.xover2); bandSplitDet.set (s.bands, s.xover1, s.xover2);
         for (int b = 0; b < 3; ++b) detf[b].set (s.scHpf, s.scHpfQ, s.scLpf, s.scLpfQ, sr); }
 
@@ -205,6 +293,18 @@ public:
             const float* dl = ext ? bandSplitDet.buf[b][0] : l;
             const float* dr = ext ? bandSplitDet.buf[b][1] : r;
             if (bs.bypass) { core[b].lastGr = 0; continue; }
+            if (cfg.punch)
+            {
+                for (int i = 0; i < n; ++i)
+                {
+                    const float d = std::max (std::abs (detf[b].process (dl[i], 0)), std::abs (detf[b].process (dr[i], 1)));
+                    const float g = punch[b].process (d, bs);
+                    const float gg = bs.mix * g + (1.0f - bs.mix);
+                    l[i] *= gg; r[i] *= gg;
+                }
+                core[b].lastGr = -punch[b].lastDb;
+                continue;
+            }
             const float mk = dbToGain (bs.gain);
             for (int i = 0; i < n; ++i)
             {
@@ -227,6 +327,7 @@ private:
     CompSettings cfg;
     BandSplit split, bandSplitDet;
     CompCore core[3];
+    PunchCore punch[3];
     DetectFilter detf[3];
     double sr = 48000;
 };

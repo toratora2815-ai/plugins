@@ -1,6 +1,8 @@
 #pragma once
 #include <JuceHeader.h>
 #include "dsp/Strip.h"
+#include "ForgeLink.h"
+#include "PresetBar.h"
 #include <unordered_map>
 #include <string>
 
@@ -27,7 +29,7 @@ namespace fsid
     }
 }
 
-class ForgeStripProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
+class ForgeStripProcessor : public juce::AudioProcessor, private juce::AsyncUpdater, private juce::Timer
 {
 public:
     ForgeStripProcessor();
@@ -59,6 +61,7 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
     juce::AudioProcessorValueTreeState apvts;
+    myp::Presets myPresets { *this, apvts, "ForgeStrip" };
 
     // 並び順（メッセージスレッドで変える）
     void getOrder (int* o) const;
@@ -70,10 +73,21 @@ public:
 
     // 入出力のメーター（dB）
     std::atomic<float> inLevel { -100.0f }, outLevel { -100.0f };
+    std::atomic<float> bandLevel[3] { { -100.0f }, { -100.0f }, { -100.0f } };
+
+    // Plugin Link（Forge Mixer から音量・パン・幅を動かせる）
+    plink::Link link { fslink::kindStrip, apvts };
+    void updateTrackProperties (const TrackProperties& p) override { if (p.name.has_value()) link.setTrackName (*p.name); }
+    bool mixerConnected() const { return mixerSeen.load(); }
 
 private:
     fs::StripSettings readSettings() const;
     void handleAsyncUpdate() override;
+    void timerCallback() override;
+    void setParam (const char* id, float v);
+    float token = 1.0f;
+    std::atomic<bool> mixerSeen { false };
+    fs::Biquad meterLp, meterHp;
     float p (const std::string& id) const;
     std::unordered_map<std::string, std::atomic<float>*> params;
 

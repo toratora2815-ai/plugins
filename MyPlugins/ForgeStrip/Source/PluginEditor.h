@@ -88,7 +88,7 @@ private:
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> eqC;
     juce::Label* meter[3] {};
     juce::Rectangle<int> bandCols[3];
-    int shownBands = -1;
+    int shownBands = -1, shownMode = -1;
     juce::Rectangle<int> eqBandArea;
 };
 
@@ -108,6 +108,8 @@ private:
     ChainBar chain { processor };
     std::unique_ptr<ModulePage> page;
     juce::Label status;
+    plink::LinkBar linkBar { processor.apvts, juce::Colour (0xffffb454), juce::Colour (0xff1d1d22), juce::Colour (0xffe8e4dc) };
+    myp::PresetBar presetBar { processor.myPresets, juce::Colour (0xffffb454), juce::Colour (0xff1d1d22), juce::Colour (0xffe8e4dc) };
     int current = 1;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ForgeStripEditor)
 };

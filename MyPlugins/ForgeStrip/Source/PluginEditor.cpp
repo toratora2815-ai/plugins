@@ -443,6 +443,7 @@ void ModulePage::build()
     {
         case fs::ModEq:
         {
+            toggle ("eq_softsat", "SOFT SAT", head.removeFromLeft (100).reduced (4, 4));
             eqGraph = std::make_unique<EqGraph> (proc);
             eqGraph->setBounds (area.removeFromTop (300));
             addAndMakeVisible (*eqGraph);
@@ -460,13 +461,18 @@ void ModulePage::build()
             auto t = g.removeFromLeft (130);
             toggle (fsid::J (fsid::id (mod, "autogain")), "AUTO GAIN", t.removeFromTop (30).reduced (2));
             toggle (fsid::J (fsid::id (mod, "autorel")), "AUTO REL", t.removeFromTop (30).reduced (2));
-            toggle (fsid::J (fsid::id (mod, "vintage")), "VINTAGE", t.removeFromTop (30).reduced (2));
+            combo (fsid::J (fsid::id (mod, "cmode")), g.removeFromLeft (120).withSizeKeepingCentre (110, 44), "MODE");
             knob (fsid::J (fsid::id (mod, "gain")), "GAIN", g.removeFromLeft (84));
             knob (fsid::J (fsid::id (mod, "hpf")), "SC HPF", g.removeFromLeft (84));
             knob (fsid::J (fsid::id (mod, "lpf")), "SC LPF", g.removeFromLeft (84));
             toggle (fsid::J (fsid::id (mod, "ext")), "EXT SC", g.removeFromLeft (100).withSizeKeepingCentre (90, 28));
-            buildBands (KV { { "thr", "THRESH" }, { "ratio", "RATIO" }, { "att", "ATTACK" }, { "rel", "RELEASE" }, { "knee", "KNEE" }, { "gain", "GAIN" }, { "mix", "MIX" } },
-                        KV { { "byp", "BYPASS" } }, KV {}, area);
+            shownMode = (int) proc.apvts.getRawParameterValue (fsid::J (fsid::id (mod, "cmode")))->load();
+            if (shownMode == 2)   // PUNCH: しきい値・比は使わない
+                buildBands (KV { { "pamt", "AMOUNT" }, { "patt", "ATTACK" }, { "psus", "SUSTAIN" }, { "pgain", "GAIN" }, { "mix", "MIX" } },
+                            KV { { "byp", "BYPASS" } }, KV {}, area);
+            else
+                buildBands (KV { { "thr", "THRESH" }, { "ratio", "RATIO" }, { "att", "ATTACK" }, { "rel", "RELEASE" }, { "knee", "KNEE" }, { "gain", "GAIN" }, { "mix", "MIX" } },
+                            KV { { "byp", "BYPASS" } }, KV {}, area);
             break;
         }
         case fs::ModExciter:
@@ -645,6 +651,11 @@ void ModulePage::timerCallback()
         const int nb = (int) proc.apvts.getRawParameterValue (fsid::J (fsid::id (mod, "bands")))->load() + 1;
         if (nb != shownBands) { build(); repaint(); return; }
     }
+    if (mod == fs::ModComp1 || mod == fs::ModComp2)
+    {
+        const int cm = (int) proc.apvts.getRawParameterValue (fsid::J (fsid::id (mod, "cmode")))->load();
+        if (cm != shownMode) { build(); repaint(); return; }
+    }
     const auto& st = proc.strip();
     for (int b = 0; b < 3; ++b)
     {
@@ -671,10 +682,18 @@ ForgeStripEditor::ForgeStripEditor (ForgeStripProcessor& p) : AudioProcessorEdit
     setLookAndFeel (&look);
     addAndMakeVisible (chain);
     chain.onSelect = [this] (int m) { showPage (m); };
+    addAndMakeVisible (linkBar);
+    addAndMakeVisible (presetBar);
+    linkBar.status = [this] (bool& lit)
+    {
+        lit = processor.mixerConnected();
+        if (! processor.link.on()) return juce::String::fromUTF8 ("LINK を 1〜4 にすると、同じ番号の Forge Mixer から音量・パン・幅を動かせます");
+        return lit ? juce::String::fromUTF8 ("Forge Mixer とつながっています") : juce::String::fromUTF8 ("Forge Mixer を待っています（同じ LINK 番号で）");
+    };
     status.setFont (juce::FontOptions (12.0f));
     status.setColour (juce::Label::textColourId, col::dim);
     addAndMakeVisible (status);
-    setSize (1060, 590);
+    setSize (1060, 620 + myp::PresetBar::height);
     showPage (fs::ModEq);
     startTimerHz (10);
 }
@@ -717,7 +736,10 @@ void ForgeStripEditor::resized()
 {
     chain.setBounds (12, 42, getWidth() - 24, 40);
     if (page != nullptr) page->setBounds (12, 90, getWidth() - 24, 470);
-    status.setBounds (14, getHeight() - 26, getWidth() - 28, 20);
+    auto r = getLocalBounds();
+    presetBar.setBounds (r.removeFromBottom (myp::PresetBar::height));
+    linkBar.setBounds (r.removeFromBottom (plink::LinkBar::height));
+    status.setBounds (14, r.getBottom() - 26, getWidth() - 28, 20);
 }
 
 void ForgeStripEditor::timerCallback()

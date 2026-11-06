@@ -179,17 +179,55 @@ private:
 // ---------------------------------------------------------------------
 struct SculptorSettings
 {
-    int target = 22;          // 0..22 = 楽器、23 = なし
+    int target = 22;          // 0..22 = 楽器、23 = Add Punch、24 = Add Polish、25 = なし
     float amount = 0;         // 0..100
     float tone = 0;           // -50..50（目標を傾ける）
     float speed = 50;         // 0..100
     float lowHz = 20, highHz = 20000;   // 効かせる範囲
 };
 
+// SCULPTOR の「Add Punch」「Add Polish」（測定: 音色ではなく音量の動き）
+//   静かになった所を長い平均との差で持ち上げ（ku）、鳴り始めを短い平均との差で持ち上げる（kt）。Polish は Punch の 1.8 倍
+namespace ppTune { struct T { float refMs = 800, midMs = 20, ku = 0.2f, kd = 0.02f, kt = 0.0f, upMs = 50, downMs = 5, maxUp = 8, polish = 1.8f; }; inline T& t() { static T v; return v; } }
+
+struct PunchPolish
+{
+    double sr = 48000; float ref = -120, mid = -120, g = 0; SlidingMax pk;
+    void prepare (double s) { sr = s; pk.prepare ((int) std::round (0.0035 * s)); reset(); }
+    void reset() { pk.reset(); ref = mid = -120; g = 0; }
+    void process (float* L, float* R, int n, bool polish, float amount)
+    {
+        const auto& t = ppTune::t();
+        const float k = (polish ? t.polish : 1.0f) * amount;
+        const float cR = coefMs (t.refMs, sr), cM = coefMs (t.midMs, sr), cU = coefMs (t.upMs, sr), cD = coefMs (t.downMs, sr);
+        for (int i = 0; i < n; ++i)
+        {
+            const float x = gainToDb (pk.push (std::max (std::abs (L[i]), std::abs (R[i]))) + 1e-9f);
+            if (x < -90.0f) { L[i] *= dbToGain (g); R[i] *= dbToGain (g); continue; }
+            if (ref < -110.0f) ref = mid = x;
+            ref = x + cR * (ref - x);
+            mid = x > mid ? x : x + cM * (mid - x);
+            float target = t.ku * std::max (0.0f, ref - mid) - t.kd * std::max (0.0f, mid - ref) + t.kt * std::max (0.0f, x - ref);
+            target = clampv (target * k, -6.0f, t.maxUp);
+            g = target + (target > g ? cU : cD) * (g - target);
+            const float gg = dbToGain (g);
+            L[i] *= gg; R[i] *= gg;
+        }
+    }
+};
+
 class SculptorModule : public SpectralBase
 {
 public:
     void set (const SculptorSettings& s) { cfg = s; }
+    // Add Punch / Add Polish のときだけ、STFT のあとで音量の動きを足す
+    void postProcess (float* L, float* R, int n)
+    {
+        if (cfg.target == kNumToneTargets || cfg.target == kNumToneTargets + 1)
+            pp.process (L, R, n, cfg.target == kNumToneTargets + 1, cfg.amount / 100.0f);
+    }
+    void prepareExtra (double s) { pp.prepare (s); }
+    void resetExtra() { pp.reset(); }
 protected:
     void onPrepare() override { smooth.assign (kToneBands, -200.0f); gSm.assign (kToneBands, 0.0f); }
     void onReset() override { std::fill (smooth.begin(), smooth.end(), -200.0f); std::fill (gSm.begin(), gSm.end(), 0.0f); }
@@ -240,6 +278,7 @@ protected:
     }
 private:
     SculptorSettings cfg;
+    PunchPolish pp;
     std::vector<float> smooth, gSm;
 };
 

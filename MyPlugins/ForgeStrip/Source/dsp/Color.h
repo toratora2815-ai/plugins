@@ -1,6 +1,7 @@
 // Forge Strip: エキサイター・クリッパー・トランジェント・位相・リミッター
 #pragma once
 #include "Dynamics.h"
+#include "Spectral.h"
 
 namespace fs
 {
@@ -289,50 +290,84 @@ private:
 };
 
 // ---------------------------------------------------------------------
-// 位相: 全帯域で同じ角度だけ位相を回す（90° ずれた 2 本の全域通過）＋遅らせる
+// 位相: 全帯域で同じ角度だけ位相を回す＋遅らせる。
+// 基準と同じく直線位相（遅れ 50 ms）: 出力 = cos θ × 元の音（遅らせたもの）+ sin θ × ヒルベルト変換（FIR、FFT でたたみこみ）
 struct PhaseSettings { float rotation = 0, delayMs = 0; };
 
 class PhaseModule
 {
 public:
-    void prepare (double s) { sr = s; for (int c = 0; c < 2; ++c) dly[c].prepare ((int) (0.08 * s) + 4); reset(); }
-    void reset() { std::memset (sA, 0, sizeof (sA)); std::memset (sB, 0, sizeof (sB)); std::memset (prevB, 0, sizeof (prevB)); for (auto& d : dly) d.reset(); }
+    void prepare (double s)
+    {
+        sr = s;
+        L = (int) std::round (0.05 * s) + 1;   // 基準の実際の遅れ（申告は 2400 だが実際は 2401 @48k）
+        H = 512; while (H * 4 > L) H /= 2;
+        D = L - H;
+        N = 1; while (N < H + 2 * D + 1) N <<= 1;
+        fft.prepare (N);
+        // ヒルベルト変換の FIR（中心 D、ブラックマン窓）を周波数領域に
+        std::vector<std::complex<float>> k ((size_t) N, { 0.0f, 0.0f });
+        for (int i = 0; i <= 2 * D; ++i)
+        {
+            const int m = i - D;
+            if (m % 2 == 0) continue;
+            const double w = 0.42 - 0.5 * std::cos (2 * kPi * i / (2 * D)) + 0.08 * std::cos (4 * kPi * i / (2 * D));
+            k[(size_t) i] = { (float) (2.0 / (kPi * m) * w), 0.0f };
+        }
+        fft.run (k.data(), false);
+        kern = k;
+        for (int c = 0; c < 2; ++c)
+        {
+            hist[c].assign ((size_t) N, 0.0f); outQ[c].assign ((size_t) H, 0.0f);
+            dry[c].prepare (L + 2); wetDelay[c].prepare ((int) (0.08 * s) + 4);
+        }
+        work.resize ((size_t) N);
+        reset();
+    }
+    void reset()
+    {
+        for (int c = 0; c < 2; ++c) { std::fill (hist[c].begin(), hist[c].end(), 0.0f); std::fill (outQ[c].begin(), outQ[c].end(), 0.0f); dry[c].reset(); wetDelay[c].reset(); }
+        hpos = 0; fill = 0;
+    }
+    int latency() const { return L; }
     void set (const PhaseSettings& c) { cfg = c; }
-    void process (float* L, float* R, int n)
+    void process (float* Lb, float* Rb, int n)
     {
         const float th = cfg.rotation * (float) kPi / 180.0f, cs = std::cos (th), sn = std::sin (th);
         const int d = (int) std::round (cfg.delayMs * 0.001 * sr);
-        float* ch[2] = { L, R };
-        for (int c = 0; c < 2; ++c)
-            for (int i = 0; i < n; ++i)
+        float* ch[2] = { Lb, Rb };
+        for (int i = 0; i < n; ++i)
+        {
+            float x[2] = { Lb[i], Rb[i] };
+            for (int c = 0; c < 2; ++c) hist[c][(size_t) hpos] = x[c];
+            hpos = (hpos + 1) % N;
+            for (int c = 0; c < 2; ++c)
             {
-                const float x = ch[c][i];
-                const float a = chain (x, c, coA, sA[c]);
-                const float bRaw = chain (x, c, coB, sB[c]);
-                const float b = prevB[c]; prevB[c] = bRaw;   // 1 サンプル遅らせた方が 90° ずれる
-                float y = cs * a + sn * b;
-                ch[c][i] = d > 0 ? dly[c].process (y, d) : y;
+                const float dr = dry[c].process (x[c], L);
+                float y = cs * dr + sn * outQ[c][(size_t) fill];
+                ch[c][i] = d > 0 ? wetDelay[c].process (y, d) : y;
             }
+            if (++fill >= H) { fill = 0; block(); }
+        }
     }
 private:
-    // 2 次（z^-2）の全域通過 4 段: y = a²(x + y[n-2]) - x[n-2]
-    static constexpr float coA[4] = { 0.6923878f, 0.9360654322959f, 0.9882295226860f, 0.9987488452737f };
-    static constexpr float coB[4] = { 0.4021921162426f, 0.8561710882420f, 0.9722909545651f, 0.9952884791278f };
-    static inline float chain (float x, int, const float* co, float (&s)[4][4])
+    void block()
     {
-        for (int k = 0; k < 4; ++k)
+        for (int c = 0; c < 2; ++c)
         {
-            const float a2 = co[k] * co[k];
-            const float y = a2 * (x + s[k][2]) - s[k][0];
-            s[k][0] = s[k][1]; s[k][1] = x;     // x[n-2], x[n-1]
-            s[k][2] = s[k][3]; s[k][3] = y;     // y[n-2], y[n-1]
-            x = y;
+            for (int i = 0; i < N; ++i) work[(size_t) i] = { hist[c][(size_t) ((hpos + i) % N)], 0.0f };
+            fft.run (work.data(), false);
+            for (int k = 0; k < N; ++k) work[(size_t) k] *= kern[(size_t) k];
+            fft.run (work.data(), true);
+            // 最後の H 個が正しい（重ね捨て）
+            for (int j = 0; j < H; ++j) outQ[c][(size_t) j] = work[(size_t) (N - H + j)].real();
         }
-        return x;
     }
     PhaseSettings cfg; double sr = 48000;
-    float sA[2][4][4] {}, sB[2][4][4] {}, prevB[2] {};
-    Delay dly[2];
+    int L = 2400, H = 512, D = 1889, N = 8192, hpos = 0, fill = 0;
+    FFT fft; std::vector<std::complex<float>> kern, work;
+    std::vector<float> hist[2], outQ[2];
+    Delay dry[2], wetDelay[2];
 };
 
 // ---------------------------------------------------------------------
