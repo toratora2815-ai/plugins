@@ -1,0 +1,41 @@
+# Echo Drift — 作業メモ（Claude 用）
+
+本人向けの説明は README.md。ここは中身の仕組み・ID・版ごとの変更の記録です。版を上げたら、ここに 1 行足す。
+
+Echo Drift（EchoDrift、PLUGIN_CODE Ecdr、Plugin Link Kind 15）… テープ・BBD・ラジオ・コーラス系 31 スタイルのディレイ。
+この Mac の市販の定番ディレイ（aufx "EB  " SToy、PACE 保護）を測って合わせ込んだオリジナル。スタイルの並びは参考と同じ番号（名前は別）。
+
+## 参考の測り方（build/EchoFit）
+- AVAudioUnit を in-process（options: []）で開く。parameterTree は空なので v2 API（AudioUnitSetParameter）で入れる。
+  値は「選択肢は番号そのまま、それ以外は 0..1 の正規化」。**つまみを入れたあと RunLoop.main を回さないとスタイルが切り替わらず無音になる**（host.swift の SPIN）
+- 時間のつまみ: ms = 0.100279 × (e^(11.9149 x) − 1)。表示より約 3.2 ms 早く返る（遅れ報告 32 サンプルを含めた位置）
+- FEEDBACK 0..1.25 は直線（1.0 で低域のループ利得 0 dB）。MIX は等パワー。LOW CUT は出口、HIGH CUT はループの中
+- 左右は別々のループ（片側に入れても反対側に出ない）。奇数回目と偶数回目でずれが交互（Digital: 左 −4 / +6 ms、右 +4 / −6 ms 相当）
+- GROOVE = 奇数回目を T × g ずらす、FEEL = 全部を 1 拍 × f ずらす（±0.25）
+- Ping-Pong: (L+R) が −3 dB、左 = ECHO 1、右 = ECHO 1 + ECHO 2、1 周で FEEDBACK 1 回。Dual: 左 ECHO 1・右 ECHO 2
+- Rhythm: タップ k×RHYTHM（k = 1..REPEATS−1）、パターン全体が 2 拍ごとに FEEDBACK でくり返す。音量は √(2/Σg²)（g = DECAY を直線 dB で割り振り）
+- FEEDBACK 125% の天井は約 +6 dBFS（テープ系は歪みで 0 dBFS 付近）
+- ノイズ（ヒス）は出していない
+
+## エンジン（Source/EchoEngine.h、JUCE なし）
+- 左右別ループ。線 A → P → 線 B → P → 線 A（× FEEDBACK）。出口は A（奇数回目）と B（偶数回目）の途中から読む → ループ長を変えずに交互のずれ
+- P = 4 倍 OS（FIR ハーフバンド 95 + 19 点。遅れ 50.5 サンプルは読み出し位置から引く）の歪み〔ピークのコンプ（2 ms / 150 ms、6 dB ニー）→ (f(x+b)−f(b))/f'(b)、f = x/(1+|x|^k)^(1/k)〕
+  → にじみ（オールパス 4 段、整数の遅れ）→ ループのフィルター → HIGH CUT（1 次 LP、24000·e^(−1.22v) Hz）→ 天井（1.5 から tanh で 2.0 まで）
+- SATURATION はスタイルごとに 0/6/12/18/24 dB での「入れる dB・戻す dB」の表（間は直線）。直線の式では合わなかった（12→24 dB で急に変わる）
+- 出口 = 色のフィルター（1 回目のエコー ÷ ループ 1 回分）→ LOW CUT（1 次 HP 2 段、表 v = 0/0.1/0.25/0.5/0.75/1）
+- 読み出しは 32 点の窓付き sinc（Kaiser β 9、512 位相）。最小の遅れ 17 サンプル
+- 揺れ（ModGen）: 音程（セント）= 正弦 ＋ 四角（＝読み出しは三角に動く。半周期・ばらつき・角のなまり、右は同じ / 逆 / 別々）＋ ランダムなフラッター。
+  位置のずれ = ∫(1 − 2^(c/1200))（30 秒で 0 に戻る漏れ）。0 を中心に動くように、四角は最初を半分の長さ、正弦は位相 0.25 から
+- 時間はなめらかに追う（0.12 s。テープのように音程が動く）
+
+## スタイル表（Source/Profiles.h、自動生成）
+build/EchoFit で: m1/m3（周波数特性・ループ）→ fit1.py（RBJ の直列に当てはめ）、m6/m6b（歪み）→ fitsat2.py、m5（揺れ。手で表にした値は gen.py の MOD）、
+fitdiff.py（にじみ）、calib2.py（ずれと音量を 100 Hz〜8 kHz のエネルギーで合わせ込み）→ gen.py が Profiles.h を書く。
+比較: cmp1.py（時刻・帯域ごと）、cmpsat.py（歪み）、cmpmod.py（揺れ）。結果: 10 kHz までほぼ ±1〜2 dB、歪みの音量 ±2 dB、揺れの深さ ±10%。
+
+## ツール
+- tools/render_echo.cpp … 参考と同じパラメーター番号で WAV を通す（WOBBLE=0 の環境変数で揺れなし）
+- tools/test_echo.cpp … 数値テスト（時刻・音量・FEEDBACK・MIX・125% で発振しない・無音・Ping-Pong・44.1/96 kHz・揺れ・処理の重さ）
+
+## 版
+- 1.0.0（2026-11-06）: 最初の版。31 スタイル、4 モード、テンポ同期、PRIME、WOBBLE、内蔵プリセット 12、Plugin Link（Fader Pilot → VOCAL DUCK）
