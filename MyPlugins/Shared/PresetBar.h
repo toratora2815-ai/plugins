@@ -6,7 +6,7 @@
 //   エディター:    myp::PresetBar presetBar { processor.myPresets, accent, panel, text };
 //                  addAndMakeVisible (presetBar);  presetBar.setBounds (area.removeFromBottom (myp::PresetBar::height));
 //
-// プリセット: ~/Library/Audio/Presets/MyPlugins/<名前>/<プリセット名>.mypreset（XML、パラメーターの値だけ）
+// プリセット: ~/Library/Audio/Presets/MyPlugins/<製品名>/<プリセット名>.mypreset（XML、パラメーターの値だけ。Logic の .aupreset と同じフォルダ）
 //   パラメーター以外（Balance Scope の参照カーブ、LEARN の結果など）と LINK の番号は変えない
 // 取り消し: 画面でつまみを触った（マウスを押して離した・ホイール・キー入力）前後の値の差を 1 手として覚える。
 //   オートメーションの再生による変化は覚えない。プロセッサーが持つので、画面を閉じても残る（100 手まで）
@@ -20,10 +20,11 @@ namespace myp
         Presets (juce::AudioProcessor& p, juce::AudioProcessorValueTreeState& s, const juce::String& pluginFolderName)
             : proc (p), state (s), folderName (pluginFolderName) {}
 
+        // Logic が .aupreset を置くのと同じフォルダ（製品名。例 "Hush Field"）に入れる
         juce::File folder() const
         {
             return juce::File::getSpecialLocation (juce::File::userHomeDirectory)
-                       .getChildFile ("Library/Audio/Presets/MyPlugins").getChildFile (folderName);
+                       .getChildFile ("Library/Audio/Presets/MyPlugins").getChildFile (proc.getName());
         }
 
         juce::Array<juce::File> list() const

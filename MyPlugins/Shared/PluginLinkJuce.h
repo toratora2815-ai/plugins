@@ -232,7 +232,7 @@ namespace plink
     };
 
     // Fader Pilot が「声が鳴っている」と送っている間、リバーブなどを amountDb 下げる（ブロックごとに呼ぶ）。
-    // 下げるのは約 80 ms、戻すのは約 600 ms。戻り値 = 掛ける倍率
+    // 下げるのは約 80 ms、戻すのは約 300 ms（時定数）。戻り値 = 掛ける倍率
     class VocalDuck
     {
     public:
@@ -245,7 +245,7 @@ namespace plink
                 if (link.ep().find (kindFaderPilot, p) && p.valuesAgeMs < 1500) { found = true; active = p.v[fp::active] > 0.5f; }
             }
             const float target = active ? -amountDb : 0.0f;
-            const float tau = target < curDb ? 0.08f : 0.6f;
+            const float tau = target < curDb ? 0.08f : 0.3f;
             curDb += (target - curDb) * (1.0f - std::exp (-(float) numSamples / (float) (tau * sampleRate + 1.0)));
             if (std::abs (curDb) < 0.01f && target == 0.0f) curDb = 0.0f;
             shownDb = curDb; pilotFound = found;
