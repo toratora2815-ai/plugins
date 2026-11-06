@@ -1,6 +1,6 @@
 #pragma once
-// 録った声（1 本の音）から、メロディー／ドラムの MIDI・キー・テンポを出す。JUCE なし（単体テスト可）。
-//  - 声 → MIDI は Hum Keys と同じエンジン（VoiceEngine.h）を、録り終えた音に後からまとめてかける
+// 録った声（1 本の音）から、メロディーの MIDI・キー・テンポを出す。JUCE なし（単体テスト可）。
+//  - 声 → MIDI は VoiceEngine.h（もとは Hum Keys のエンジン。今は Idea Catcher のもの）を、録り終えた音に後からまとめてかける
 //  - 1 回目は音階なしで音程を集めてキーを当て、2 回目はそのキーの音階に合わせてノートにする
 //  - テンポは、音の出だしの並びの自己相関（何秒おきに出だしがそろうか）＋ 105 BPM あたりを少しひいき
 #include "VoiceEngine.h"
@@ -15,16 +15,17 @@ namespace idea
 struct Note
 {
     double s = 0, e = 0;   // 秒
-    int n = 60, vel = 100, ch = 0;   // ch は 0 始まり（ドラムは 9）
+    int n = 60, vel = 100, ch = 0;   // ch は 0 始まり
 };
 
-enum Kind { kMelody = 0, kDrums = 1, kBoth = 2 };
+enum Kind { kMelody = 0, kDrums = 1, kBoth = 2 };   // 1.4.0 から口ドラムはなし（前の info.json を読むためだけに残す）
 
 struct Result
 {
     bool heard = false;        // 声が入っていたか
     double seconds = 0, peakDb = -100;
-    std::vector<Note> melody, drums;
+    std::vector<Note> melody;
+    int rawNotes = 0;          // 掃除する前の音の数（確認用）
     hum::KeyGuess key;
     double bpm = 100;
     float tempoConf = 0;       // 0..1（0.3 未満はあてずっぽう）
@@ -35,8 +36,8 @@ struct Result
     int gridStep = 0;
 };
 
-// 録音 1 本 = 1 レイヤー（重ね録りで増える）
-struct Layer { Result r; int kind = kMelody; };
+// 録音 1 本 = 1 レイヤー（重ね録りで増える）。edited = 手直し済み（info.json の "notes" に音を保存）
+struct Layer { Result r; int kind = kMelody; bool edited = false; };
 
 struct AnalyseOptions
 {
@@ -44,32 +45,6 @@ struct AnalyseOptions
     double fixedBpm = 0;        // > 0 ならテンポを調べずにこれ（カウントイン・タップ・重ね録り）
     bool fixedKey = false;      // 重ね録りで、前のメロディーのキーに合わせる
     int key = 0; bool minor = false;
-};
-
-// 口ドラムの聞き分け（Hum Keys で LEARN した癖をそのまま使う。最初は Hum Keys と同じ値）
-struct DrumVoice
-{
-    static constexpr int ND = hum::Params::numDrums, NF = hum::Params::numFeat;
-    int notes[ND];
-    float proto[ND][NF], sus[ND];
-    bool has[ND];
-    DrumVoice()
-    {
-        hum::Params d;
-        for (int c = 0; c < ND; ++c)
-        {
-            notes[c] = d.drumNote[c].load(); sus[c] = d.protoSus[c].load(); has[c] = d.has[c].load();
-            for (int k = 0; k < NF; ++k) proto[c][k] = d.proto[c][k].load();
-        }
-    }
-    void applyTo (hum::Params& p) const
-    {
-        for (int c = 0; c < ND; ++c)
-        {
-            p.drumNote[c] = notes[c]; p.protoSus[c] = sus[c]; p.has[c] = has[c];
-            for (int k = 0; k < NF; ++k) p.proto[c][k] = proto[c][k];
-        }
-    }
 };
 
 //==============================================================================
@@ -141,7 +116,6 @@ namespace detail
                     ++st->above;
                     if (f.pitch > 0) { ++st->voiced; st->pitches.push_back (f.pitch); }
                 }
-            hum::Hit h; while (e.hits.pop (h)) {}
         };
         const int B = 512;
         for (size_t i = 0; i < x.size(); i += B)
@@ -252,8 +226,98 @@ inline TapGrid tapGrid (std::vector<double> taps)
 }
 
 //==============================================================================
+// 鼻歌の音の掃除（録り終えてからなので、前後を見て決められる）
+//  1. 同じ高さのかけら：すき間 40 ms 未満ならつなぐ（すき間 0 ＝わざと言い直した音はつながない）
+//  2. しゃくり・すべり：前後より短く、音階で 1 つ隣の音に触れている音は、その音に吸収
+//  3. 短すぎる音（60 ms と 32 分音符の長いほう未満）：触れている音にまとめる。どこにも触れていなければ消す
+//  4. 小さすぎる、ぽつんとした音（前後に音がなく、150 ms 未満で、ほかより 25 以上弱い）を消す
+//  5. 単音なので、重なりは後ろの音の頭で切る
+inline int scaleSteps (int a, int b, int key, bool minor)
+{
+    if (a == b) return 0;
+    const int lo = std::min (a, b), hi = std::max (a, b);
+    const int sc = minor ? hum::scMinor : hum::scMajor;
+    int n = 0;
+    for (int k = lo + 1; k <= hi; ++k) if (hum::inScale (k, key, sc)) ++n;
+    return std::max (1, n);
+}
+
+inline void cleanMelody (std::vector<Note>& v, double bpm, int key, bool minor)
+{
+    if (v.empty()) return;
+    std::sort (v.begin(), v.end(), [] (const Note& a, const Note& b) { return a.s < b.s; });
+    const double minLen = std::max (0.060, 60.0 / std::max (30.0, bpm) / 8.0);
+    const double touch = 0.050;   // これより近ければ「触れている」
+    auto dur = [] (const Note& n) { return n.e - n.s; };
+    for (int pass = 0; pass < 6; ++pass)
+    {
+        bool changed = false;
+        // 1. 同じ高さのかけら
+        for (size_t i = 0; i + 1 < v.size(); ++i)
+        {
+            const double gap = v[i + 1].s - v[i].e;
+            if (v[i + 1].n == v[i].n && gap > 0.001 && gap < 0.040)
+            {
+                v[i].e = std::max (v[i].e, v[i + 1].e);
+                v[i].vel = std::max (v[i].vel, v[i + 1].vel);
+                v.erase (v.begin() + (long) i + 1);
+                changed = true; --i;
+            }
+        }
+        // 2・3. 短い音を隣にまとめる
+        for (size_t i = 0; i < v.size(); ++i)
+        {
+            const double d = dur (v[i]);
+            const bool hasPrev = i > 0 && v[i].s - v[i - 1].e < touch;
+            const bool hasNext = i + 1 < v.size() && v[i + 1].s - v[i].e < touch;
+            const double dp = hasPrev ? dur (v[i - 1]) : 0, dn = hasNext ? dur (v[i + 1]) : 0;
+            const bool shorter = (! hasPrev || d < dp) && (! hasNext || d < dn) && (hasPrev || hasNext);
+            const bool nearPrev = hasPrev && scaleSteps (v[i].n, v[i - 1].n, key, minor) <= 1;
+            const bool nearNext = hasNext && scaleSteps (v[i].n, v[i + 1].n, key, minor) <= 1;
+            // しゃくり：前後どちらよりもはっきり短い（6 割未満）。速い 16 分の音階（同じくらいの長さが続く）は吸収しない
+            const bool clearlyShorter = (! hasPrev || d < 0.6 * dp) && (! hasNext || d < 0.6 * dn);
+            const bool scoop = shorter && clearlyShorter && d < std::max (2.0 * minLen, 0.14) && (nearPrev || nearNext);
+            if (! scoop && d >= minLen) continue;
+            if (! hasPrev && ! hasNext) { v.erase (v.begin() + (long) i); --i; changed = true; continue; }   // ぽつんと短い
+            // どちらへ吸収するか：音階で近いほう → 長いほう。しゃくりは次の音（行き先）を優先
+            bool toNext;
+            if (nearNext != nearPrev) toNext = nearNext;
+            else if (hasNext && hasPrev) toNext = dn >= dp;
+            else toNext = hasNext;
+            if (toNext) { v[i + 1].s = v[i].s; v[i + 1].vel = std::max (v[i + 1].vel, v[i].vel); }
+            else v[i - 1].e = std::max (v[i - 1].e, v[i].e);
+            v.erase (v.begin() + (long) i);
+            // 前後が同じ高さなら（一瞬のオクターブ飛びで割れた 1 音）、つなぎ直す
+            if (i > 0 && i < v.size() && v[i - 1].n == v[i].n && v[i].s - v[i - 1].e < touch)
+            {
+                v[i - 1].e = std::max (v[i - 1].e, v[i].e);
+                v[i - 1].vel = std::max (v[i - 1].vel, v[i].vel);
+                v.erase (v.begin() + (long) i);
+            }
+            --i; changed = true;
+        }
+        if (! changed) break;
+    }
+    // 4. 小さすぎる、ぽつんとした音
+    if (v.size() >= 3)
+    {
+        std::vector<int> vs; for (auto& n : v) vs.push_back (n.vel);
+        std::nth_element (vs.begin(), vs.begin() + (long) vs.size() / 2, vs.end());
+        const int med = vs[vs.size() / 2];
+        for (size_t i = 0; i < v.size(); ++i)
+        {
+            const bool alone = (i == 0 || v[i].s - v[i - 1].e > 0.15) && (i + 1 == v.size() || v[i + 1].s - v[i].e > 0.15);
+            if (alone && dur (v[i]) < 0.15 && v[i].vel < med - 25) { v.erase (v.begin() + (long) i); --i; }
+        }
+    }
+    // 5. 重なりを切る
+    for (size_t i = 0; i + 1 < v.size(); ++i)
+        if (v[i].e > v[i + 1].s) v[i].e = std::max (v[i].s + 0.01, v[i + 1].s);
+}
+
+//==============================================================================
 // x = モノラルの録音。fallbackBpm = 出だしが少なくてテンポが分からないときの値
-inline Result analyse (std::vector<float> x, double fs, const DrumVoice& dv, const AnalyseOptions& ao = {})
+inline Result analyse (std::vector<float> x, double fs, const AnalyseOptions& ao = {})
 {
     const double fallbackBpm = ao.fallbackBpm;
     Result r;
@@ -282,38 +346,39 @@ inline Result analyse (std::vector<float> x, double fs, const DrumVoice& dv, con
     e->p.mode = 0; e->p.key = r.key.key; e->p.scale = r.key.minor ? hum::scMinor : hum::scMajor;
     e->p.octave = r.key.octave; e->p.glueMs = 40.0f;
     r.melody = detail::run (*e, x, fs, nullptr);
+    r.rawNotes = (int) r.melody.size();
+    r.kind = kMelody;
 
-    // ドラム
-    e = std::make_unique<hum::Engine>();
-    e->p.mode = 1;
-    dv.applyTo (e->p);
-    e->p.channel = 10;
-    r.drums = detail::run (*e, x, fs, nullptr);
-
-    // 鼻歌か口ドラムか
-    if (r.voicedRatio >= 0.5f || r.drums.size() < 3) r.kind = kMelody;
-    else if (r.voicedRatio < 0.3f || r.melody.size() < 3) r.kind = kDrums;
-    else r.kind = kBoth;
-
-    std::vector<std::pair<double, double>> on;
-    if (r.kind != kDrums) for (auto& n : r.melody) on.push_back ({ n.s, n.vel / 127.0 });
-    if (r.kind != kMelody) for (auto& n : r.drums) on.push_back ({ n.s, n.vel / 127.0 });
-    if (ao.fixedBpm > 0) { r.bpm = ao.fixedBpm; r.tempoConf = 1.0f; return r; }
-    const auto t = findTempo (on, fallbackBpm);
-    r.bpm = t.bpm; r.tempoConf = t.conf;
+    if (ao.fixedBpm > 0) { r.bpm = ao.fixedBpm; r.tempoConf = 1.0f; }
+    else
+    {
+        std::vector<std::pair<double, double>> on;
+        for (auto& n : r.melody) on.push_back ({ n.s, n.vel / 127.0 });
+        const auto t = findTempo (on, fallbackBpm);
+        r.bpm = t.bpm; r.tempoConf = t.conf;
+    }
+    cleanMelody (r.melody, r.bpm, r.key.key, r.key.minor);
     return r;
 }
 
 //==============================================================================
-// MIDI ファイル（SMF タイプ 1）を作る。最初の音が 1 小節目の頭に来る
+// MIDI ファイル（SMF タイプ 1）を作る。最初の音がある小節の頭がファイルの頭（弱起があれば 1 小節前から）
 struct MidiOptions
 {
     int key = 0; bool minor = false;
     double bpm = 100;       // 鼻歌のテンポ（秒 → 拍に直すのに使う）
     double outBpm = 0;      // 曲のテンポ（MIDI に書く）。0 = 鼻歌と同じ。拍の位置はそのままで、速さだけ変わる
-    int quantize = 0;
-    double tempoOut() const { return outBpm > 0 ? outBpm : bpm; }   // 0 = しない, 1 = 16 分, 2 = 8 分
+    int quantize = 0;       // 0 = しない, 1 = 1/4, 2 = 1/8, 3 = 1/16, 4 = 1/8 3 連
+    float strength = 0.75f; // どれだけ拍に寄せるか（1 = ぴったり）
+    double tempoOut() const { return outBpm > 0 ? outBpm : bpm; }
+    double grid() const { return quantize == 1 ? 1.0 : quantize == 2 ? 0.5 : quantize == 3 ? 0.25 : quantize == 4 ? 1.0 / 3.0 : 0.0; }
 };
+
+inline const char* quantizeName (int q)
+{
+    static const char* n[] = { "なし", "1/4", "1/8", "1/16", "1/8 3連" };
+    return n[std::clamp (q, 0, 4)];
+}
 
 inline const char* keyName (int k)
 {
@@ -327,18 +392,12 @@ inline int keySharps (int key, bool minor)
     return sfMajor[(((minor ? key + 3 : key) % 12) + 12) % 12];
 }
 
-inline std::vector<Note> includedNotes (const Result& r, int kind)
-{
-    std::vector<Note> v;
-    if (kind != kDrums) v.insert (v.end(), r.melody.begin(), r.melody.end());
-    if (kind != kMelody) v.insert (v.end(), r.drums.begin(), r.drums.end());
-    return v;
-}
+inline std::vector<Note> includedNotes (const Result& r, int) { return r.melody; }
 
 // 1 小節目の頭（秒）。テンポを変えたときに小節線だけ動くよう、拍・小節単位のずらしはここで
 inline double effectiveGrid (const Layer& L, double bpm)
 {
-    const auto v = includedNotes (L.r, L.kind);
+    const auto& v = L.r.melody;
     double first = 1e9;
     for (auto& n : v) first = std::min (first, n.s);
     if (v.empty()) first = std::max (0.0, L.r.gridT0);
@@ -349,28 +408,52 @@ inline double effectiveGrid (const Layer& L, double bpm)
     return L.r.gridT0 + std::floor ((first - L.r.gridT0) / P + 0.25 / L.r.gridStep) * P;
 }
 
-// 秒 → 拍（1 小節目の頭 = 0 拍）。量子化もここで
-struct Placed { double b0, b1; int n, vel, ch; };
+// 鼻歌の強弱はばらつきが大きいので、80〜110 に縮める（聞きやすく）
+inline int calmVelocity (int v) { return 80 + (int) std::lround ((std::clamp (v, 1, 127) - 1) * 30.0 / 126.0); }
+
+// 秒 → 拍（1 小節目の頭 = 0 拍）。クオンタイズもここで。src = r.melody の何番目か
+struct Placed { double b0, b1; int n, vel, ch; size_t src = 0; };
 inline std::vector<Placed> place (const Layer& L, const MidiOptions& o)
 {
-    auto v = includedNotes (L.r, L.kind);
+    const auto& v = L.r.melody;
     std::vector<Placed> out;
     if (v.empty()) return out;
     const double t0 = effectiveGrid (L, o.bpm);
-    const double grid = o.quantize == 1 ? 0.25 : o.quantize == 2 ? 0.5 : 0.0;
-    for (auto& n : v)
+    const double g = o.grid();
+    for (size_t i = 0; i < v.size(); ++i)
     {
+        const auto& n = v[i];
         double b0 = (n.s - t0) * o.bpm / 60.0, b1 = (n.e - t0) * o.bpm / 60.0;
-        if (grid > 0)
+        if (g > 0)
         {
-            const double q = std::round (b0 / grid) * grid;
-            const double len = std::max (grid * 0.5, b1 - b0);
-            b0 = q; b1 = q + (n.ch == 9 ? len : std::max (grid, std::round (len / grid) * grid));
+            // 出だしだけ拍に寄せて、長さはそのまま
+            const double q = std::round (b0 / g) * g;
+            const double sh = (q - b0) * std::clamp ((double) o.strength, 0.0, 1.0);
+            b0 += sh; b1 += sh;
         }
-        if (b0 < 0) { b1 = std::max (b1, 0.05); b0 = 0; }   // 頭より前に少しはみ出た音
-        out.push_back ({ b0, b1, n.n, n.vel, n.ch });
+        out.push_back ({ b0, std::max (b1, b0 + 0.05), n.n, calmVelocity (n.vel), n.ch, i });
+    }
+    std::stable_sort (out.begin(), out.end(), [] (const Placed& a, const Placed& b) { return a.b0 < b.b0; });
+    // 単音：同じマスに 2 つ入ったら長いほうを残し、重なりは次の音の頭で切る
+    for (size_t i = 0; i + 1 < out.size(); ++i)
+    {
+        if (std::abs (out[i + 1].b0 - out[i].b0) < 1e-6)
+        {
+            const bool keepFirst = out[i].b1 - out[i].b0 >= out[i + 1].b1 - out[i + 1].b0;
+            out.erase (out.begin() + (long) (keepFirst ? i + 1 : i));
+            --i; continue;
+        }
+        if (out[i].b1 > out[i + 1].b0) out[i].b1 = std::max (out[i].b0 + 0.02, out[i + 1].b0);
     }
     return out;
+}
+
+// 弱起（1 拍目より前に歌った音）があるとき、ファイルを何拍前から始めるか（0 か 1 小節＝4 拍）
+inline double pickupBeats (const std::vector<Layer>& layers, const MidiOptions& o)
+{
+    double first = 0;
+    for (auto& L : layers) for (auto& p : place (L, o)) first = std::min (first, p.b0);
+    return first < -0.2 ? 4.0 : 0.0;
 }
 
 inline std::vector<uint8_t> buildMidiFile (const std::vector<Layer>& layers, const MidiOptions& o)
@@ -404,17 +487,16 @@ inline std::vector<uint8_t> buildMidiFile (const std::vector<Layer>& layers, con
         return b;
     };
 
-    // レイヤーごとに Melody / Drums のトラック（重ねたものは "Melody 2" など）
+    // レイヤーごとに Melody のトラック（重ねたものは "Melody 2" など）
     struct Trk { std::string name; std::vector<Placed> notes; };
     std::vector<Trk> trks;
-    int nMel = 0, nDrm = 0;
+    int nMel = 0;
+    const double pick = pickupBeats (layers, o);
     for (auto& L : layers)
     {
-        const auto ps = place (L, o);
-        std::vector<Placed> mel, drm;
-        for (auto& p : ps) (p.ch == 9 ? drm : mel).push_back (p);
-        if (! mel.empty()) { ++nMel; trks.push_back ({ nMel == 1 ? "Melody" : "Melody " + std::to_string (nMel), mel }); }
-        if (! drm.empty()) { ++nDrm; trks.push_back ({ nDrm == 1 ? "Drums" : "Drums " + std::to_string (nDrm), drm }); }
+        auto ps = place (L, o);
+        for (auto& p : ps) { p.b0 += pick; p.b1 += pick; }
+        if (! ps.empty()) { ++nMel; trks.push_back ({ nMel == 1 ? "Melody" : "Melody " + std::to_string (nMel), ps }); }
     }
     const int nTracks = 1 + (int) trks.size();
 
@@ -423,11 +505,13 @@ inline std::vector<uint8_t> buildMidiFile (const std::vector<Layer>& layers, con
     // 0 番トラック: テンポ・拍子・キー（＋キーの名前のマーカー。Logic のマーカーにも出る）
     const uint32_t us = (uint32_t) std::lround (60000000.0 / std::clamp (o.tempoOut(), 20.0, 400.0));
     const std::string keyText = std::string ("Key ") + keyName (o.key) + (o.minor ? "m" : "");
-    track ({ { 0, 0, meta (3, "Idea Catcher") },
+    std::vector<Ev> head { { 0, 0, meta (3, "Idea Catcher") },
              { 0, 1, { 0xFF, 0x51, 0x03, (uint8_t) (us >> 16), (uint8_t) (us >> 8), (uint8_t) us } },
              { 0, 2, { 0xFF, 0x58, 0x04, 4, 2, 24, 8 } },
              { 0, 3, { 0xFF, 0x59, 0x02, (uint8_t) (int8_t) keySharps (o.key, o.minor), (uint8_t) (o.minor ? 1 : 0) } },
-             { 0, 4, meta (6, keyText) } });
+             { 0, 4, meta (6, keyText) } };
+    if (pick > 0) head.push_back ({ (uint32_t) std::lround (pick * ppq), 5, meta (6, "Bar 1") });   // 弱起：ここが本当の 1 小節目
+    track (std::move (head));
 
     for (auto& t : trks)
     {

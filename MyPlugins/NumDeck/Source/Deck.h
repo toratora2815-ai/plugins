@@ -376,7 +376,6 @@ namespace numdeck
                 KeyTap::quitAllApps (keep);
             }
             else if (remote == "!fullHalf") KeyTap::toggleFullScreenOrSplit();
-            else if (remote.startsWith ("hk:")) KeyTap::sendRemote ("humkeys", remote.substring (3).toStdString());
             else if (remote.startsWith ("ic:")) KeyTap::sendRemote ("ideacatcher", remote.substring (3).toStdString());
             else if (remote.startsWith ("as:")) KeyTap::sendRemote ("aside", remote.substring (3).toStdString());
             else KeyTap::sendRemote ("referencemonitor", remote.toStdString());
@@ -533,7 +532,7 @@ namespace numdeck
             const bool isSlot = (pad >= Pad0 && pad <= Pad9) || pad == PadDot;
             if (! isPageKey && ! isSlot) return false;
 
-            // Reference Monitor / Hum Keys を前に出している間も、Logic と同じに扱う
+            // Reference Monitor / Idea Catcher を前に出している間も、Logic と同じに扱う
             if (logicOnlyActive() && ! KeyTap::isLogicFrontmost() && ! KeyTap::isRefMonitorFrontmost())
             {
                 if (down && ! repeat && onIgnored) onIgnored();

@@ -73,7 +73,7 @@
 ### 迷ったときの早見
 - リバーブ: Lumen Rooms = 細かく作り込む部屋・ホール、長い響き / Elder Verb = 昔のデジタル機材の色付き / Meld Verb = ボーカルやミックスで自動で引っ込む実用リバーブ
 - 聴き比べ: Reference Monitor = 他人の曲と / Mix Time Machine = 自分の前のバウンスと（マスタリング段階で使う） / Balance Scope = トラックに挿す測定器・Plugin Link の配り役
-- 鼻歌: Idea Catcher = 思いつきを捕まえる（本命） / Hum Keys = Logic の前でその場で MIDI に（機能は足さない。本人がまだ使っていないので、試してから Idea Catcher にまとめるか決める）
+- 鼻歌: Idea Catcher だけ（録ってから解析 → きれいな MIDI → Logic へドラッグ）。口ドラムは本人が「いらない」ので作らない
 - 参照曲まわりの新機能は Reference Monitor にだけ足す（Balance Scope の REF と二重にしない）。Mod Host は「中のプラグインのつまみを動かす」役。帯域・歪み・自動ゲインはこれ以上足さない（Forge Strip の仕事）
 
 ### プラグイン（AU）
@@ -100,11 +100,11 @@
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作
 - Mix Time Machine（MixTimeMachine）1.0.0 … バウンス履歴と聴き比べ。~/Music/Logic（と Bounces フォルダ）を見張って新しいバウンスを自動で取り込み、
   FLAC でコピー保存（~/Music/Mix Time Machine）。A/B を音量合わせ・頭のずれ自動合わせで切替、5回のブラインドテスト、何が変わったか（音量・PLR・広がり・音色差）
-- Num Deck（NumDeck）1.23.0 … テンキーに Logic などの操作を割り当てる（3×3 タイル画面、Logic Pro / 業務モード、マクロ、2 画面）。
+- Num Deck（NumDeck）1.24.0 … テンキーに Logic などの操作を割り当てる（3×3 タイル画面、Logic Pro / 業務モード、マクロ、2 画面）。
   仕事のリンク（URL）は公開リポジトリに書かず、本人の設定ファイル（~/Library/Application Support/Num Deck）にだけ入れる。今の本人の設定は Home = ON/OFF、Clear = モード切替
-- Idea Catcher（IdeaCatcher）1.3.1 … 思いつきの鼻歌・口ドラムを録って、キー・テンポ入りの MIDI にするメニューバー常駐アプリ。録音キー ⌃⌥I、さかのぼり録音、ノイズ除去、重ね録り。
-  口ドラムの学習データは今は Hum Keys の設定（dproto / dhas / dsus）を読んでいる。VoiceEngine.h / KeyFinder.h は Hum Keys の写し（Hum Keys を直したらここにも写す）
-- Hum Keys（HumKeys）1.4.0 … 鼻歌・口ドラムをその場で仮想 MIDI「Hum Keys」で Logic へ。MELODY / DRUMS / AUTO、Logic 同期、LOOP、EDIT、試し聴き
+- Idea Catcher（IdeaCatcher）1.4.0 … 思いつきの鼻歌を録って、キー・テンポ入りの MIDI にするメニューバー常駐アプリ。録音キー ⌃⌥I、さかのぼり録音、ノイズ除去、重ね録り。
+  録ってから解析（遅れなし）→ 余分な音の掃除 → クオンタイズ（細かさ・強さ）→ 手直しの画面 → ピアノロールをつかんで Logic へドラッグ。Logic は開かない・操作しない。
+  口ドラムはなし（2026-11-06 本人「いらない」）。VoiceEngine.h / KeyFinder.h はもう Idea Catcher のもの
 - Sound Sketch（SoundSketch）1.0.0 … 口マネで手元のサンプルを探す。SketchEngine.h（JUCE なし）で 1 音 48 個の特徴（音量の形・重心の動き・平らさ・帯域・長さ・立ち上がり・重心の傾き）、
   声の重心は voiceToLibrary（log2 Hz を 1.46 倍 − 5.37）で広げてから比べる。Library.h が裏でフォルダを読み ~/Library/Application Support/Sound Sketch/index.bin に保存。
   最初は ~/Splice/sounds（ダウンロード済みだけ。Splice の全カタログは API がないので探さない）。クリックで試聴・ドラッグで Logic・ダブルクリックで「これに似た音」。tools/test_engine.cpp
@@ -116,6 +116,7 @@
 
 ### やめたもの（作り直さない。ソースは git の履歴にだけ残る）
 - Velvet Tamer（Vltm）… 2026-11-06。ややこしいので Hush Field に一本化
+- Hum Keys … 2026-11-06。その場で MIDI にする遅れ（低い声で 30〜90 ms）が仕組み上縮められず「疲れる」。クオンタイズ・手直しは Idea Catcher に移した
 - Hit Sculptor（Htsc）・Flipside（Flps）… 2026-11-06。本人の意図は「サンプル編集」だったので Sample Sculptor にまとめた
 - Third Time … 2026-11-06。「うっとうしい」
 - Nebula Reverb（Nbrv）… 2026-11-06。Lumen Rooms と被るので

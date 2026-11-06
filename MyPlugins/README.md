@@ -27,8 +27,7 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 |---|---|---|
 | Reference Monitor | ReferenceMonitor | 自分のミックスと他人の曲（参照曲）を聴き比べる |
 | Mix Time Machine | MixTimeMachine | 自分の前のバウンスと聴き比べる（バウンス履歴） |
-| Hum Keys | HumKeys | 鼻歌・口ドラムをその場で MIDI にして Logic へ |
-| Idea Catcher | IdeaCatcher | 思いつきの鼻歌を録って、キーとテンポ入りの MIDI に（メニューバー常駐） |
+| Idea Catcher | IdeaCatcher | 思いつきの鼻歌を録って、キーとテンポ入りの MIDI に。できた MIDI は Logic へドラッグ（メニューバー常駐） |
 | Sound Sketch | SoundSketch | 口マネで手元のサンプルを探す |
 | Num Deck | NumDeck | テンキーに Logic などの操作を割り当てる |
 | Aside | Aside | ひとりごとをリマインダー・カレンダーに入れる秘書 |
@@ -45,8 +44,7 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
   - Mix Time Machine … 自分の前のバウンスと
   - Balance Scope … トラックに挿す測定器。Plugin Link でほかのプラグインに数値を配る
 - **鼻歌**
-  - Idea Catcher … 思いついた瞬間を捕まえる（あとで Logic で開く）
-  - Hum Keys … Logic の前で、その場で MIDI を打ち込む
+  - Idea Catcher … 思いついた瞬間を捕まえて、きれいな MIDI に（クオンタイズ・手直し → Logic へドラッグ）
 
 ## Plugin Link とプリセット（プラグイン共通）
 - 画面のいちばん下の **LINK**（OFF / 1〜4）を同じ番号にしたプラグイン同士が、裏で情報をやりとりします（例: Balance Scope → Hush Field、Fader Pilot → リバーブ、Gain Stage → Wool Fuzz / Porch Drive）

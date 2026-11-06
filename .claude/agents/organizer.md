@@ -20,7 +20,7 @@ tools: Read, Grep, Glob, Bash
 ## 調べること
 1. `/Users/torsas/plugins/CLAUDE.md` の「作ったもの」（細かい中身は各フォルダの NOTES.md）と、`MyPlugins/` の中の実際のフォルダ
 2. `git log --since="3 months ago" --stat -- MyPlugins/<名前>` で、最近触っているもの・放置されているもの
-3. 被り: 同じ目的のもの（リバーブが Lumen Rooms / Elder Verb / Meld Verb、聴き比べが Reference Monitor / Mix Time Machine / Balance Scope、鼻歌が Idea Catcher / Hum Keys など）。
+3. 被り: 同じ目的のもの（リバーブが Lumen Rooms / Elder Verb / Meld Verb、聴き比べが Reference Monitor / Mix Time Machine / Balance Scope、鼻歌は Idea Catcher だけ（Hum Keys は 2026-11-06 にまとめて消した）など）。
    本当に役割が分かれているか、本人が迷わないか
 4. ややこしさ: つまみ・ページ・モードが増えすぎたもの（README とパラメーター数で見る）
 5. 抜け: よく使いそうなのにまだないもの、Plugin Link でつなぐと便利なのにつないでいない組み合わせ

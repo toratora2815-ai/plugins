@@ -30,6 +30,8 @@ public:
             if (parts.size() > 1 && c.loadForSnapshot (juce::File (parts[1].unquoted())))
             {
                 shot ("idea_1.png");
+                c.command ("edit");
+                shot ("idea_2.png");
                 std::cout << "midi: " << c.midiFile().getFullPathName() << std::endl;
             }
             quit();

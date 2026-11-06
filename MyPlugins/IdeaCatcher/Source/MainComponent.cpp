@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include <set>
 #include "MacSupport.h"
 #include "NoiseReduce.h"
 
@@ -32,27 +33,7 @@ void styleToggle (juce::ToggleButton& t)
 
 juce::String u8 (const char* s) { return juce::String::fromUTF8 (s); }
 
-const char* kindName (int k) { return k == idea::kDrums ? "ドラム" : k == idea::kBoth ? "メロディー＋ドラム" : "メロディー"; }
 
-// Hum Keys で覚えさせた口ドラムの癖があれば、それを使う（Hum Keys 1.2.0 の設定の形）
-idea::DrumVoice humKeysDrumVoice()
-{
-    idea::DrumVoice d;
-    juce::PropertiesFile::Options o;
-    o.applicationName = "Hum Keys"; o.folderName = "Hum Keys"; o.filenameSuffix = ".settings";
-    juce::PropertiesFile hk (o);
-    for (int i = 0; i < idea::DrumVoice::ND; ++i)
-    {
-        const auto c = juce::String (i);
-        d.notes[i] = hk.getIntValue ("drumNote" + c, d.notes[i]);
-        if (! hk.containsKey ("dhas" + c)) continue;
-        d.has[i] = hk.getBoolValue ("dhas" + c);
-        d.sus[i] = (float) hk.getDoubleValue ("dsus" + c, d.sus[i]);
-        for (int k = 0; k < idea::DrumVoice::NF; ++k)
-            d.proto[i][k] = (float) hk.getDoubleValue ("dproto" + c + "_" + juce::String (k), d.proto[i][k]);
-    }
-    return d;
-}
 
 bool readWav (const juce::File& f, std::vector<float>& out, double& fs)
 {
@@ -83,6 +64,13 @@ bool writeWav (const juce::File& f, const std::vector<float>& x, double fs)
 }
 
 // サンプリング周波数を合わせる（重ね録りの再生用。素朴な直線補間）
+// Logic と同じ呼び方（真ん中の C = C3 = 60）
+juce::String noteName (int n)
+{
+    static const char* nm[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    return juce::String (nm[((n % 12) + 12) % 12]) + juce::String (n / 12 - 2);
+}
+
 std::vector<float> resample (const std::vector<float>& x, double from, double to)
 {
     if (std::abs (from - to) < 1.0 || x.empty()) return x;
@@ -131,6 +119,332 @@ void Hud::paint (juce::Graphics& g)
 }
 
 //==============================================================================
+//==============================================================================
+// 手直しの画面。音をクリックで選ぶ（shift で足す）→ 上下にドラッグ／↑↓ で高さ、delete で消す、J で 2 音をつなぐ、⌘Z で 1 つ戻す。
+// ▶ で MIDI・声・両方を聴き比べ
+class EditPanel : public juce::Component, private juce::Timer
+{
+public:
+    explicit EditPanel (MainComponent& o) : owner (o)
+    {
+        const char* labels[] = { "▶ MIDI", "▶ 声", "▶ 両方", "↑", "↓", "消す", "つなぐ", "1 つ戻す", "最初の状態", "閉じる" };
+        const char* tips[] = { "できた MIDI を鳴らす（スペース）", "録った声を鳴らす", "声と MIDI を一緒に鳴らして聴き比べる",
+                               "半音上げる（↑ キー、shift で 1 オクターブ）。選んでいなければ全部", "半音下げる（↓ キー、shift で 1 オクターブ）。選んでいなければ全部",
+                               "選んだ音を消す（delete）", "選んだ音を 1 つの音にまとめる（J）。割れた音を直すとき",
+                               "1 つ前に戻す（⌘Z）", "手直しを全部やめて、録ったままに戻す", "閉じる（esc）。直した内容は MIDI に残ります" };
+        for (int i = 0; i < numButtons; ++i)
+        {
+            auto& b = buttons[(size_t) i];
+            b.setButtonText (u8 (labels[i]));
+            b.setTooltip (u8 (tips[i]));
+            b.setWantsKeyboardFocus (false);
+            styleButton (b, i == 9);
+            b.onClick = [this, i] { press (i); };
+            addAndMakeVisible (b);
+        }
+        setWantsKeyboardFocus (true);
+        startTimerHz (30);
+    }
+
+    void clearSelection() { selected.clear(); repaint(); }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (panel);
+        g.fillRoundedRectangle (getLocalBounds().toFloat(), 12.0f);
+        g.setColour (textC);
+        g.setFont (juce::FontOptions (16.0f, juce::Font::bold));
+        g.drawText (u8 ("手直し"), 14, 8, 120, 24, juce::Justification::centredLeft);
+        g.setColour (dim);
+        g.setFont (juce::FontOptions (11.0f));
+        g.drawFittedText (u8 ("クリックで選ぶ（shift で足す）・上下にドラッグで高さ・delete で消す・J でつなぐ・⌘Z で戻す"),
+                          juce::Rectangle<int> (80, 8, getWidth() - 94, 26), juce::Justification::centredLeft, 2);
+
+        auto ra = roll.toFloat();
+        g.setColour (panel2);
+        g.fillRoundedRectangle (ra, 6.0f);
+        layout();
+        if (items.empty())
+        {
+            g.setColour (dim);
+            g.drawText (u8 ("音がありません"), roll, juce::Justification::centred);
+            return;
+        }
+        // 行（音名）と小節線
+        for (int n = loNote; n <= hiNote; ++n)
+        {
+            const float y = yOf (n);
+            const bool white = hum::inScale (n, 0, hum::scMajor);
+            if (! white) { g.setColour (bg.withAlpha (0.35f)); g.fillRect (ra.getX() + labelW, y, ra.getWidth() - labelW, rowH); }
+            if (n % 12 == 0 || rowH >= 11.0f)
+            {
+                g.setColour (n % 12 == 0 ? textC.withAlpha (0.8f) : dim.withAlpha (0.7f));
+                g.setFont (juce::FontOptions (juce::jmin (10.0f, rowH)));
+                g.drawText (noteName (n), (int) ra.getX() + 3, (int) y, labelW - 4, (int) rowH, juce::Justification::centredLeft);
+            }
+        }
+        g.saveState();
+        g.reduceClipRegion (roll.withTrimmedLeft (labelW));
+        for (int b = 0; b <= (int) lenBeats; ++b)
+        {
+            g.setColour (b % 4 == 0 ? line.brighter (0.3f) : line.withAlpha (0.5f));
+            g.fillRect (xOf (b), ra.getY(), b % 4 == 0 ? 1.5f : 1.0f, ra.getHeight());
+            if (b % 4 == 0)
+            {
+                g.setColour (dim);
+                g.setFont (juce::FontOptions (10.0f));
+                g.drawText (juce::String (b / 4 + 1), (int) xOf (b) + 3, (int) ra.getY() + 1, 24, 12, juce::Justification::left);
+            }
+        }
+        const juce::Colour melCol[] = { amber, violet, green, red };
+        for (auto& it : items)
+        {
+            auto r = rectOf (it);
+            const bool sel = selected.count ({ it.layer, it.p.src }) > 0;
+            g.setColour (melCol[it.layer % 4].withAlpha (sel ? 1.0f : 0.8f));
+            g.fillRoundedRectangle (r, 2.0f);
+            if (sel) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r.expanded (1.0f), 2.5f, 1.5f); }
+        }
+        if (owner.player.isPlaying())
+        {
+            const float x = xOf (owner.player.seconds() * owner.options().bpm / 60.0);
+            g.setColour (cyan);
+            g.fillRect (x, ra.getY(), 1.5f, ra.getHeight());
+        }
+        g.restoreState();
+        if (lenBeats > viewLen + 1e-6)
+        {
+            // 横の位置（下のバー）
+            const float bw = (float) (roll.getWidth() - labelW), x0 = (float) roll.getX() + labelW;
+            g.setColour (line);
+            g.fillRoundedRectangle (x0, ra.getBottom() - 4, bw, 3, 1.5f);
+            g.setColour (amber.withAlpha (0.8f));
+            g.fillRoundedRectangle (x0 + bw * (float) (viewStart / lenBeats), ra.getBottom() - 4, bw * (float) (viewLen / lenBeats), 3, 1.5f);
+            g.setColour (dim);
+            g.setFont (juce::FontOptions (10.0f));
+            g.drawText (u8 ("ホイールで横へ"), roll.withTrimmedBottom (6).removeFromBottom (12).reduced (6, 0), juce::Justification::right);
+        }
+    }
+
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
+    {
+        const float d = std::abs (w.deltaX) > std::abs (w.deltaY) ? -w.deltaX : -w.deltaY;
+        viewStart = juce::jlimit (0.0, std::max (0.0, lenBeats - viewLen), viewStart + d * 8.0);
+        repaint();
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (10);
+        r.removeFromTop (30);
+        auto b2 = r.removeFromBottom (28);
+        r.removeFromBottom (6);
+        auto b1 = r.removeFromBottom (28);
+        r.removeFromBottom (8);
+        roll = r;
+        auto put = [] (juce::Rectangle<int>& row, juce::Component& c, int w, int gap) { c.setBounds (row.removeFromLeft (w)); row.removeFromLeft (gap); };
+        put (b1, buttons[0], 76, 4); put (b1, buttons[1], 60, 4); put (b1, buttons[2], 70, 14);
+        put (b1, buttons[3], 40, 4); put (b1, buttons[4], 40, 4);
+        put (b2, buttons[5], 60, 4); put (b2, buttons[6], 70, 14); put (b2, buttons[7], 84, 4); put (b2, buttons[8], 90, 4);
+        buttons[9].setBounds (b2);
+    }
+
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        const bool cmd = k.getModifiers().isCommandDown(), shift = k.getModifiers().isShiftDown();
+        if (k == juce::KeyPress::escapeKey) { owner.closeEditor(); return true; }
+        if (k == juce::KeyPress::upKey)   { transpose (shift ? 12 : 1); return true; }
+        if (k == juce::KeyPress::downKey) { transpose (shift ? -12 : -1); return true; }
+        if (k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey) { removeSelected(); return true; }
+        if (k == juce::KeyPress::spaceKey) { press (0); return true; }
+        if (! cmd && (k.getKeyCode() == 'J' || k.getKeyCode() == 'j')) { joinSelected(); return true; }
+        if (cmd && (k.getKeyCode() == 'Z' || k.getKeyCode() == 'z')) { press (7); return true; }
+        if (cmd && (k.getKeyCode() == 'A' || k.getKeyCode() == 'a'))
+        {
+            selected.clear();
+            for (auto& it : items) selected.insert ({ it.layer, it.p.src });
+            repaint(); return true;
+        }
+        return false;
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        grabKeyboardFocus();
+        dragging = false; moved = 0;
+        const auto* hit = itemAt (e.position);
+        if (hit == nullptr) { if (! e.mods.isShiftDown()) selected.clear(); repaint(); return; }
+        const Key key { hit->layer, hit->p.src };
+        if (e.mods.isShiftDown()) { if (selected.count (key)) selected.erase (key); else selected.insert (key); }
+        else if (! selected.count (key)) { selected.clear(); selected.insert (key); }
+        dragging = true; startY = e.position.y;
+        repaint();
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! dragging || rowH <= 0) return;
+        const int rows = (int) std::lround ((startY - e.position.y) / rowH);
+        if (rows == moved) return;
+        if (moved == 0) owner.beginEdit();
+        shift (rows - moved);
+        moved = rows;
+        owner.editDone();
+    }
+    void mouseUp (const juce::MouseEvent&) override { dragging = false; }
+
+private:
+    using Key = std::pair<int, size_t>;   // (レイヤー, r.melody の何番目)
+    struct Item { idea::Placed p; int layer; };
+    static constexpr int numButtons = 10, labelW = 30;
+    MainComponent& owner;
+    std::array<juce::TextButton, numButtons> buttons;
+    juce::Rectangle<int> roll;
+    std::vector<Item> items;
+    std::set<Key> selected;
+    int loNote = 48, hiNote = 72, moved = 0;
+    float rowH = 8, startY = 0;
+    double lenBeats = 8, viewStart = 0, viewLen = 16;   // 一度に見せるのは 4 小節
+    bool dragging = false;
+
+    void timerCallback() override
+    {
+        if (owner.player.isPlaying())
+        {
+            // 再生している所が見えるように
+            const double b = owner.player.seconds() * owner.options().bpm / 60.0;
+            if (b < viewStart || b > viewStart + viewLen * 0.9)
+                viewStart = juce::jlimit (0.0, std::max (0.0, lenBeats - viewLen), std::floor (b / 4.0) * 4.0);
+            repaint();
+        }
+        else if (isMouseButtonDown()) repaint();
+    }
+
+    void layout()
+    {
+        items.clear();
+        auto& Ls = owner.layers();
+        const double pick = idea::pickupBeats (Ls, owner.options());
+        int lo = 127, hi = 0;
+        lenBeats = 4;
+        for (size_t i = 0; i < Ls.size(); ++i)
+            for (auto p : idea::place (Ls[i], owner.options()))
+            {
+                p.b0 += pick; p.b1 += pick;
+                items.push_back ({ p, (int) i });
+                lo = std::min (lo, p.n); hi = std::max (hi, p.n);
+                lenBeats = std::max (lenBeats, p.b1);
+            }
+        lenBeats = std::ceil (lenBeats / 4.0) * 4.0;
+        viewLen = std::min (16.0, lenBeats);
+        viewStart = juce::jlimit (0.0, std::max (0.0, lenBeats - viewLen), viewStart);
+        if (hi < lo) { lo = 60; hi = 72; }
+        lo -= 2; hi += 2;
+        while (hi - lo < 14) { --lo; ++hi; }
+        loNote = juce::jlimit (0, 127, lo); hiNote = juce::jlimit (0, 127, hi);
+        rowH = (float) roll.getHeight() / (float) (hiNote - loNote + 1);
+        // 消した音を選んだままにしない
+        for (auto it = selected.begin(); it != selected.end();)
+            it = (it->first < (int) Ls.size() && it->second < Ls[(size_t) it->first].r.melody.size()) ? std::next (it) : selected.erase (it);
+    }
+    float xOf (double beat) const
+    {
+        const float x0 = (float) roll.getX() + labelW, w = (float) roll.getWidth() - labelW - 4;
+        return x0 + (float) ((beat - viewStart) / std::max (1.0, viewLen)) * w;
+    }
+    float yOf (int n) const { return (float) roll.getY() + (float) (hiNote - n) * rowH; }
+    juce::Rectangle<float> rectOf (const Item& it) const
+    {
+        const float x0 = xOf (it.p.b0), x1 = xOf (it.p.b1);
+        return { x0, yOf (it.p.n) + 1, juce::jmax (3.0f, x1 - x0 - 1), juce::jmax (2.0f, rowH - 2) };
+    }
+    const Item* itemAt (juce::Point<float> p)
+    {
+        layout();
+        for (int i = (int) items.size() - 1; i >= 0; --i)
+            if (p.x > (float) roll.getX() + labelW && rectOf (items[(size_t) i]).expanded (2, 2).contains (p)) return &items[(size_t) i];
+        return nullptr;
+    }
+
+    // 選んだ音（なければ全部）を半音ずつ
+    void shift (int d)
+    {
+        auto& Ls = owner.layers();
+        for (size_t l = 0; l < Ls.size(); ++l)
+        {
+            auto& mel = Ls[l].r.melody;
+            bool any = false;
+            for (size_t i = 0; i < mel.size(); ++i)
+                if (selected.empty() || selected.count ({ (int) l, i })) { mel[i].n = juce::jlimit (0, 127, mel[i].n + d); any = true; }
+            if (any) Ls[l].edited = true;
+        }
+    }
+    void transpose (int d)
+    {
+        if (owner.layers().empty()) return;
+        owner.beginEdit(); shift (d); owner.editDone(); repaint();
+    }
+    void removeSelected()
+    {
+        if (selected.empty()) return;
+        owner.beginEdit();
+        auto& Ls = owner.layers();
+        for (auto it = selected.rbegin(); it != selected.rend(); ++it)
+        {
+            auto& mel = Ls[(size_t) it->first].r.melody;
+            if (it->second < mel.size()) { mel.erase (mel.begin() + (long) it->second); Ls[(size_t) it->first].edited = true; }
+        }
+        selected.clear();
+        owner.editDone(); repaint();
+    }
+    // 同じレイヤーで選んだ音を 1 つに（いちばん長い音の高さ、最初から最後まで）
+    void joinSelected()
+    {
+        if (selected.size() < 2) return;
+        const int layer = selected.begin()->first;
+        std::vector<size_t> idx;
+        for (auto& k : selected) if (k.first == layer) idx.push_back (k.second);
+        if (idx.size() < 2) return;
+        owner.beginEdit();
+        auto& L = owner.layers()[(size_t) layer];
+        auto& mel = L.r.melody;
+        idea::Note m = mel[idx[0]];
+        double longest = 0;
+        for (auto i : idx)
+        {
+            const auto& n = mel[i];
+            if (n.e - n.s > longest) { longest = n.e - n.s; m.n = n.n; }
+            m.s = std::min (m.s, n.s); m.e = std::max (m.e, n.e); m.vel = std::max (m.vel, n.vel);
+        }
+        std::sort (idx.rbegin(), idx.rend());
+        for (auto i : idx) mel.erase (mel.begin() + (long) i);
+        mel.push_back (m);
+        std::sort (mel.begin(), mel.end(), [] (auto& a, auto& b) { return a.s < b.s; });
+        L.edited = true;
+        selected.clear();
+        owner.editDone(); repaint();
+    }
+    void press (int i)
+    {
+        switch (i)
+        {
+            case 0: case 1: case 2:
+                if (owner.player.isPlaying()) owner.player.stop();
+                else owner.preview (i != 1, i != 0);
+                break;
+            case 3: transpose (1); break;
+            case 4: transpose (-1); break;
+            case 5: removeSelected(); break;
+            case 6: joinSelected(); break;
+            case 7: if (owner.undoEdit()) selected.clear(); break;
+            case 8: selected.clear(); owner.revertEdits(); break;
+            case 9: owner.closeEditor(); return;
+            default: break;
+        }
+        grabKeyboardFocus();
+        repaint();
+    }
+};
+
 juce::File MainComponent::ideasRoot()
 {
     return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Idea Catcher");
@@ -144,22 +458,23 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
     po.filenameSuffix = ".settings";
     props = std::make_unique<juce::PropertiesFile> (po);
 
-    for (auto* b : { &kindBtn, &keyDownBtn, &keyUpBtn, &modeBtn, &bpmMinus, &bpmPlus, &bpmHalf, &bpmDouble, &humMinus, &humPlus, &tempoReset,
-                     &quantBtn, &dubBtn, &logicBtn, &hotkeyBtn, &inputBtn, &countBtn, &moreBtn, &tapBtn })
+    for (auto* b : { &editBtn, &keyDownBtn, &keyUpBtn, &modeBtn, &bpmMinus, &bpmPlus, &bpmHalf, &bpmDouble, &humMinus, &humPlus, &tempoReset,
+                     &quantBtn, &dubBtn, &hotkeyBtn, &inputBtn, &countBtn, &moreBtn, &tapBtn })
     {
         styleButton (*b);
         addAndMakeVisible (*b);
     }
     styleButton (finderBtn, true);
     addAndMakeVisible (finderBtn);
-    for (auto* t : { &autoOpenBtn, &autoStopBtn, &loginBtn, &prerollBtn })
+    for (auto* t : { &autoStopBtn, &loginBtn, &prerollBtn })
     {
         styleToggle (*t);
         addAndMakeVisible (*t);
     }
 
-    logicBtn.setButtonText ("Logic"); inputBtn.setButtonText (u8 ("入力…"));
-    autoOpenBtn.setButtonText (u8 ("止めたら Logic で開く")); autoStopBtn.setButtonText (u8 ("黙って 4 秒で止める"));
+    editBtn.setButtonText (u8 ("手直し")); inputBtn.setButtonText (u8 ("入力…"));
+    editBtn.setTooltip (u8 ("いらない音を消す・高さを直す・2 音をつなぐ。声と MIDI を聴き比べられます"));
+    autoStopBtn.setButtonText (u8 ("黙って 4 秒で止める"));
     loginBtn.setButtonText (u8 ("ログイン時に起動"));
     prerollBtn.setButtonText (u8 ("さかのぼり録音（直前 30 秒も残す）"));
     keyDownBtn.setButtonText (u8 ("◀")); keyUpBtn.setButtonText (u8 ("▶"));
@@ -208,15 +523,8 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
         else refreshButtons();
     };
     addAndMakeVisible (tempoLabel);
-    kindBtn.onClick    = [this]
-    {
-        if (! cur.valid || cur.layers.empty()) return;
-        auto& L = cur.layers.back();
-        L.kind = (L.kind + 1) % 3;
-        editOptions ([] (auto&) {});
-    };
-    quantBtn.onClick   = [this] { editOptions ([] (auto& o) { o.quantize = (o.quantize + 1) % 3; }); };
-    logicBtn.onClick   = [this] { openLastInLogic(); };
+    editBtn.onClick    = [this] { if (editor != nullptr) closeEditor(); else openEditor(); };
+    quantBtn.onClick   = [this] { showQuantMenu(); };
     dubBtn.onClick     = [this] { showDubMenu(); };
     tapBtn.onClick     = [this] { tap(); };
     finderBtn.onClick  = [this] { revealMidi(); };
@@ -237,15 +545,8 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
         });
     };
 
-    if (! props->containsKey ("v13"))   // 1.3.0: Logic は自動で開かない（MIDI を作るだけ）が標準に
-    {
-        props->setValue ("autoOpen", false);
-        props->setValue ("v13", true);
-    }
-    autoOpenBtn.setToggleState (props->getBoolValue ("autoOpen", false), juce::dontSendNotification);
     autoStopBtn.setToggleState (props->getBoolValue ("autoStop", true), juce::dontSendNotification);
     prerollBtn.setToggleState (props->getBoolValue ("preroll", false), juce::dontSendNotification);
-    autoOpenBtn.onClick = [this] { props->setValue ("autoOpen", autoOpenBtn.getToggleState()); };
     autoStopBtn.onClick = [this] { props->setValue ("autoStop", autoStopBtn.getToggleState()); };
     prerollBtn.onClick  = [this] { setPreroll (prerollBtn.getToggleState()); };
     loginBtn.setToggleState (live && mac::launchAtLogin(), juce::dontSendNotification);
@@ -279,7 +580,6 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
             else if (f.isDirectory()) { loadIdea (f); showMe (true); }
         });
         refreshMenu();
-        if (! mac::logicInstalled()) message = u8 ("Logic Pro が見つかりません（MIDI はふつうのアプリで開きます）");
         devices.addAudioCallback (this);
         if (prerollBtn.getToggleState()) setPreroll (true);
         startTimerHz (30);
@@ -290,6 +590,8 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
 MainComponent::~MainComponent()
 {
     stopTimer();
+    editor = nullptr;
+    player.stop();
     recording = false;
     devices.removeAudioCallback (this);
     devices.closeAudioDevice();
@@ -326,7 +628,7 @@ void MainComponent::refreshMenu()
     if (! busy && cur.valid) items.push_back ({ "このアイデアに重ねて録る", 5 });
     items.push_back ({ "画面を出す", 2 });
     if (cur.valid) items.push_back ({ "できた MIDI を Finder で表示", 8 });
-    if (cur.valid) items.push_back ({ "このアイデアを Logic で開く", 3 });
+    if (cur.valid) items.push_back ({ "できた MIDI を出す（Logic へドラッグ）", 3 });
     items.push_back ({ "保存フォルダを開く", 4 });
     items.push_back ({ "", 0 });
     items.push_back ({ "Idea Catcher を終了", 9 });
@@ -336,7 +638,7 @@ void MainComponent::refreshMenu()
         {
             case 1: toggleRecord(); break;
             case 2: showMe (true); break;
-            case 3: openLastInLogic(); break;
+            case 3: showMe (true); break;
             case 4: ideasRoot().createDirectory(); ideasRoot().revealToUser(); break;
             case 5: command ("overdub"); break;
             case 6: command ("catch"); break;
@@ -355,8 +657,9 @@ void MainComponent::command (const juce::String& c)
     else if (c == "start") { if (idle) startRecording (Normal); }
     else if (c == "stop") { if (state == Recording) stopRecording(); }
     else if (c == "show") showMe (true);
-    else if (c == "open") openLastInLogic();
+    else if (c == "open") showMe (true);   // 1.4.0 から Logic は開かない。画面を出して、MIDI をドラッグしてもらう
     else if (c == "tap") tap();
+    else if (c == "edit") { if (editor != nullptr) closeEditor(); else { showMe (true); openEditor(); } }
     else if (c == "catch") { if (idle) startRecording (Catch); }
     else if (c == "overdub")
     {
@@ -374,6 +677,7 @@ void MainComponent::showMe (bool focus)
 void MainComponent::setState (State s)
 {
     state = s;
+    if (s != Done) closeEditor();
     if (live) mac::setStatusIcon (s == Recording || s == Starting ? 1 : s == Analysing ? 2 : 0);
     refreshMenu();
     refreshButtons();
@@ -789,13 +1093,12 @@ void MainComponent::stopRecording()
         gridStep = 1;
     }
 
-    const auto dv = humKeysDrumVoice();
     const double fs = recFs;
     const int noise = props->getIntValue ("noise", 1);
-    juce::Thread::launch ([sp = juce::Component::SafePointer<MainComponent> (this), samples = std::move (samples), fs, dv, ao, gridT0, gridStep, m, noise]() mutable
+    juce::Thread::launch ([sp = juce::Component::SafePointer<MainComponent> (this), samples = std::move (samples), fs, ao, gridT0, gridStep, m, noise]() mutable
     {
         nr::reduce (samples, fs, noise);   // 保存する声にもかかる
-        auto r = idea::analyse (samples, fs, dv, ao);
+        auto r = idea::analyse (samples, fs, ao);
         r.gridT0 = gridT0; r.gridStep = gridStep;
         juce::MessageManager::callAsync ([sp, r = std::move (r), samples = std::move (samples), fs, m]() mutable
         {
@@ -806,7 +1109,7 @@ void MainComponent::stopRecording()
 
 void MainComponent::finishAnalysis (idea::Result r, std::vector<float> samples, double fs, Mode m)
 {
-    if (! r.heard || (r.melody.empty() && r.drums.empty()))
+    if (! r.heard || r.melody.empty())
     {
         setState (cur.valid ? Done : Idle);
         report (u8 ("音にできるものがありませんでした。もう少し大きく、はっきりめに"), true);
@@ -821,10 +1124,8 @@ void MainComponent::finishAnalysis (idea::Result r, std::vector<float> samples, 
         const auto wav = next.folder.getChildFile (layerFileName ((int) next.layers.size()));
         writeWav (wav, samples, fs);
         next.wavs.add (wav);
-        const bool hadMelody = hasMelodyLayer();
         next.snapKey.push_back (r.key.key); next.snapMinor.push_back (r.key.minor ? 1 : 0);
-        if (! hadMelody && r.kind != idea::kDrums) { next.o.key = r.key.key; next.o.minor = r.key.minor; }
-        next.layers.push_back ({ r, r.kind });
+        next.layers.push_back ({ r, idea::kMelody });
     }
     else
     {
@@ -835,9 +1136,13 @@ void MainComponent::finishAnalysis (idea::Result r, std::vector<float> samples, 
         writeWav (wav, samples, fs);
         next.wavs.add (wav);
         next.o.key = r.key.key; next.o.minor = r.key.minor; next.o.bpm = r.bpm;
-        next.o.quantize = props->getIntValue ("quantize", 0);
+        // クオンタイズ：テンポが分かっている録音（カウントイン・タップ）だけ最初から入れる。
+        // 自動で調べたテンポは外れていることがあるので、最初は「なし」（外れたテンポでそろえると全部ずれる）
+        const bool tempoKnown = r.gridT0 >= 0 && r.gridStep != 0;
+        next.o.quantize = tempoKnown ? props->getIntValue ("quantKnown", 3) : 0;
+        next.o.strength = (float) props->getDoubleValue ("strength", 0.75);
         next.snapKey.push_back (r.key.key); next.snapMinor.push_back (r.key.minor ? 1 : 0);
-        next.layers.push_back ({ r, r.kind });
+        next.layers.push_back ({ r, idea::kMelody });
     }
     next.valid = true;
     applyIdea (std::move (next));
@@ -845,19 +1150,13 @@ void MainComponent::finishAnalysis (idea::Result r, std::vector<float> samples, 
     message.clear();
 
     const auto& L = cur.layers.back();
-    const auto summary = (cur.layers.back().kind != idea::kDrums || hasMelodyLayer() ? shortKey (cur.o.key, cur.o.minor) + u8 (" · ") : juce::String())
+    const auto summary = shortKey (cur.o.key, cur.o.minor) + u8 (" · ")
                        + juce::String ((int) std::lround (cur.o.tempoOut())) + u8 (" BPM · ")
                        + juce::String ((int) idea::includedNotes (L.r, L.kind).size()) + u8 (" 音")
                        + (cur.layers.size() > 1 ? u8 (" · 重ね ") + juce::String ((int) cur.layers.size()) : juce::String());
-    if (autoOpenBtn.getToggleState() && cur.mid.existsAsFile())
-    {
-        flashHud (u8 ("できました  ") + summary, u8 ("Logic で開いています…"), green);
-        openLastInLogic();
-    }
-    else
     {
         const auto where = cur.copy.existsAsFile() ? (props->getIntValue ("copyTo", 1) == 2 ? u8 ("デスクトップ") : u8 ("ダウンロード")) : u8 ("ミュージック → Idea Catcher");
-        flashHud (u8 ("MIDI ができました  ") + summary, where + u8 (" に保存。テンポは画面で変えられます"), green, 5.0);
+        flashHud (u8 ("MIDI ができました  ") + summary, u8 ("画面から Logic へドラッグ（") + where + u8 (" にも保存）"), green, 5.0);
         if (live && ! (juce::Process::isForegroundProcess() && isWindowVisible && isWindowVisible()))
             mac::notify ("Idea Catcher", (u8 ("MIDI ができました: ") + summary + u8 ("。") + where + u8 (" に保存しました（クリックで Finder に表示）")).toStdString(),
                          cur.folder.getFullPathName().toStdString());
@@ -866,7 +1165,9 @@ void MainComponent::finishAnalysis (idea::Result r, std::vector<float> samples, 
 
 void MainComponent::applyIdea (Idea next)
 {
+    const bool sameIdea = cur.valid && next.folder == cur.folder;
     cur = std::move (next);
+    if (! sameIdea) undoStack.clear();
     writeMidi();
     saveInfo();
     refreshRecent();
@@ -875,7 +1176,7 @@ void MainComponent::applyIdea (Idea next)
 
 bool MainComponent::hasMelodyLayer() const
 {
-    for (auto& L : cur.layers) if (L.kind != idea::kDrums && ! L.r.melody.empty()) return true;
+    for (auto& L : cur.layers) if (! L.r.melody.empty()) return true;
     return false;
 }
 
@@ -890,12 +1191,12 @@ void MainComponent::removeLastLayer()
     applyIdea (std::move (next));
 }
 
-void MainComponent::loadIdea (const juce::File& folder)
+void MainComponent::loadIdea (const juce::File& folder, bool ignoreEdits)
 {
     if (state == Recording || state == Starting || state == Analysing) return;
     const auto saved = juce::JSON::parse (folder.getChildFile ("info.json"));
     auto* obj = saved.getDynamicObject();
-    struct Job { juce::File wav; int kind; double gridT0; int gridStep; int snapKey; bool snapMinor; };
+    struct Job { juce::File wav; int kind; double gridT0; int gridStep; int snapKey; bool snapMinor; std::vector<idea::Note> notes; bool edited; };
     std::vector<Job> jobs;
     const int key = obj != nullptr ? (int) obj->getProperty ("key") : 0;
     const bool minor = obj != nullptr && (bool) obj->getProperty ("minor");
@@ -903,13 +1204,25 @@ void MainComponent::loadIdea (const juce::File& folder)
     {
         for (auto& v : *obj->getProperty ("layers").getArray())
             if (auto* l = v.getDynamicObject())
-                jobs.push_back ({ folder.getChildFile (l->getProperty ("file").toString()), (int) l->getProperty ("kind"),
-                                  (double) l->getProperty ("gridT0"), (int) l->getProperty ("gridStep"),
-                                  l->hasProperty ("snapKey") ? (int) l->getProperty ("snapKey") : key,
-                                  l->hasProperty ("snapMinor") ? (bool) l->getProperty ("snapMinor") : minor });
+            {
+                Job j { folder.getChildFile (l->getProperty ("file").toString()), (int) l->getProperty ("kind"),
+                        (double) l->getProperty ("gridT0"), (int) l->getProperty ("gridStep"),
+                        l->hasProperty ("snapKey") ? (int) l->getProperty ("snapKey") : key,
+                        l->hasProperty ("snapMinor") ? (bool) l->getProperty ("snapMinor") : minor, {}, false };
+                if (j.kind == idea::kDrums) continue;   // 1.4.0 から口ドラムはなし
+                // 手直しした音（[秒, 秒, ノート, 強さ] の並び）
+                if (! ignoreEdits && l->getProperty ("notes").isArray())
+                {
+                    j.edited = true;
+                    for (auto& nv : *l->getProperty ("notes").getArray())
+                        if (nv.isArray() && nv.size() >= 4)
+                            j.notes.push_back ({ (double) nv[0], (double) nv[1], (int) nv[2], (int) nv[3], 0 });
+                }
+                jobs.push_back (std::move (j));
+            }
     }
     else   // 1.0.0 の形
-        jobs.push_back ({ folder.getChildFile ("Voice.wav"), obj != nullptr ? (int) obj->getProperty ("kind") : -1, -1.0, 0, key, minor });
+        jobs.push_back ({ folder.getChildFile ("Voice.wav"), obj != nullptr ? (int) obj->getProperty ("kind") : -1, -1.0, 0, key, minor, {}, false });
     if (jobs.empty() || ! jobs[0].wav.existsAsFile())
     {
         report (u8 ("このアイデアの録音が読めませんでした"), false);
@@ -925,12 +1238,14 @@ void MainComponent::loadIdea (const juce::File& folder)
         base.copy = juce::File (obj->getProperty ("copy").toString());
         base.keepCopy = base.copy.existsAsFile();   // 動かしたり消したりしたものは、もう作り直さない
     }
-    base.o.quantize = obj != nullptr ? (int) obj->getProperty ("quantize") : 0;
+    // クオンタイズ（1.3 までの "quantize" は 1 = 1/16、2 = 1/8）
+    if (obj != nullptr && obj->hasProperty ("quant2")) base.o.quantize = juce::jlimit (0, 4, (int) obj->getProperty ("quant2"));
+    else { const int q = obj != nullptr ? (int) obj->getProperty ("quantize") : 0; base.o.quantize = q == 1 ? 3 : q == 2 ? 2 : 0; }
+    base.o.strength = obj != nullptr && obj->hasProperty ("strength") ? (float) (double) obj->getProperty ("strength") : 1.0f;
     const bool hasSaved = obj != nullptr;
 
     setState (Analysing);
-    const auto dv = humKeysDrumVoice();
-    juce::Thread::launch ([sp = juce::Component::SafePointer<MainComponent> (this), jobs, dv, base, hasSaved]() mutable
+    juce::Thread::launch ([sp = juce::Component::SafePointer<MainComponent> (this), jobs, base, hasSaved]() mutable
     {
         for (auto& j : jobs)
         {
@@ -938,10 +1253,11 @@ void MainComponent::loadIdea (const juce::File& folder)
             if (! readWav (j.wav, x, fs)) continue;
             idea::AnalyseOptions ao;
             if (hasSaved) { ao.fixedBpm = base.o.bpm; ao.fixedKey = true; ao.key = j.snapKey; ao.minor = j.snapMinor; }
-            auto r = idea::analyse (std::move (x), fs, dv, ao);
+            auto r = idea::analyse (std::move (x), fs, ao);
             r.gridT0 = j.gridT0; r.gridStep = j.gridStep;
+            if (j.edited) r.melody = j.notes;
             if (! hasSaved && base.layers.empty()) { base.o.key = r.key.key; base.o.minor = r.key.minor; base.o.bpm = r.bpm; }
-            base.layers.push_back ({ r, j.kind >= 0 ? j.kind : r.kind });
+            base.layers.push_back ({ r, idea::kMelody, j.edited });
             base.wavs.add (j.wav);
             base.snapKey.push_back (r.key.key); base.snapMinor.push_back (r.key.minor ? 1 : 0);
         }
@@ -960,19 +1276,14 @@ bool MainComponent::loadForSnapshot (const juce::File& wav)
 {
     std::vector<float> x; double fs = 48000;
     if (! readWav (wav, x, fs)) return false;
-    auto r = idea::analyse (x, fs, humKeysDrumVoice());
+    auto r = idea::analyse (x, fs);
     Idea next;
     next.folder = wav.getParentDirectory().getChildFile ("IdeaCatcherSnapshot");
     next.o.key = r.key.key; next.o.minor = r.key.minor; next.o.bpm = r.bpm;
     next.snapKey.push_back (r.key.key); next.snapMinor.push_back (r.key.minor ? 1 : 0);
     next.wavs.add (wav);
-    next.layers.push_back ({ r, r.kind });
-    // 重ね録りの見た目の確認用に、同じ声をドラムとしても重ねる
-    auto r2 = r; r2.gridT0 = idea::effectiveGrid (next.layers[0], r.bpm); r2.gridStep = 0;
-    next.layers[0].r.gridT0 = r2.gridT0;
-    next.layers.push_back ({ r2, idea::kDrums });
-    next.wavs.add (wav);
-    next.snapKey.push_back (r.key.key); next.snapMinor.push_back (r.key.minor ? 1 : 0);
+    next.layers.push_back ({ r, idea::kMelody });
+    next.o.quantize = 3; next.o.strength = 0.75f;
     next.valid = true;
     applyIdea (std::move (next));
     return true;
@@ -1039,7 +1350,8 @@ void MainComponent::saveInfo()
     o->setProperty ("outBpm", cur.o.outBpm);
     if (cur.copy != juce::File()) o->setProperty ("copy", cur.copy.getFullPathName());
     o->setProperty ("kind", cur.layers.empty() ? 0 : cur.layers[0].kind);
-    o->setProperty ("quantize", cur.o.quantize);
+    o->setProperty ("quant2", cur.o.quantize);
+    o->setProperty ("strength", (double) cur.o.strength);
     double secs = 0; int notes = 0;
     juce::Array<juce::var> layers;
     for (size_t i = 0; i < cur.layers.size(); ++i)
@@ -1053,6 +1365,12 @@ void MainComponent::saveInfo()
         l->setProperty ("gridT0", L.r.gridT0);
         l->setProperty ("gridStep", L.r.gridStep);
         if (i < cur.snapKey.size()) { l->setProperty ("snapKey", cur.snapKey[i]); l->setProperty ("snapMinor", cur.snapMinor[i] != 0); }
+        if (L.edited)
+        {
+            juce::Array<juce::var> ns;
+            for (auto& n : L.r.melody) ns.add (juce::Array<juce::var> { n.s, n.e, n.n, n.vel });
+            l->setProperty ("notes", ns);
+        }
         layers.add (juce::var (l));
     }
     o->setProperty ("layers", layers);
@@ -1097,8 +1415,12 @@ juce::File MainComponent::writeLogicVoice()
 void MainComponent::editOptions (std::function<void (idea::MidiOptions&)> f)
 {
     if (! cur.valid) return;
+    const int qBefore = cur.o.quantize;
     f (cur.o);
-    props->setValue ("quantize", cur.o.quantize);
+    // 次の録音の初期値として覚える（テンポが分かっている録音のときだけ）
+    const auto& L0 = cur.layers.front();
+    if (cur.o.quantize != qBefore && L0.r.gridT0 >= 0 && L0.r.gridStep != 0) props->setValue ("quantKnown", cur.o.quantize);
+    props->setValue ("strength", (double) cur.o.strength);
     writeMidi();
     saveInfo();
     refreshRecent();
@@ -1106,33 +1428,113 @@ void MainComponent::editOptions (std::function<void (idea::MidiOptions&)> f)
     repaint();
 }
 
-void MainComponent::openLastInLogic()
+//==============================================================================
+void MainComponent::showQuantMenu()
 {
-    if (! cur.valid || ! cur.mid.existsAsFile()) return;
-    const bool withVoice = props->getBoolValue ("voiceToLogic", true) && mac::logicInstalled();
-    const auto voice = withVoice ? writeLogicVoice() : juce::File();
-    const auto before = mac::logicWindowTitles();
-    mac::openInLogic (cur.mid.getFullPathName().toStdString());
-    if (! voice.existsAsFile()) return;
-    if (! mac::accessibilityTrusted (true))
+    if (! cur.valid) return;
+    juce::PopupMenu m;
+    for (int q = 0; q <= 4; ++q) m.addItem (1 + q, u8 ("クオンタイズ: ") + u8 (idea::quantizeName (q)), true, cur.o.quantize == q);
+    m.addSeparator();
+    const int st = juce::roundToInt (cur.o.strength * 100);
+    m.addItem (11, u8 ("寄せる強さ 100%（ぴったり）"), true, st == 100);
+    m.addItem (12, u8 ("寄せる強さ 75%（おすすめ）"), true, st == 75);
+    m.addItem (13, u8 ("寄せる強さ 50%（人っぽさを残す）"), true, st == 50);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (quantBtn), [this] (int r)
     {
-        report (u8 ("声も Logic に入れるには、システム設定 → プライバシーとセキュリティ → アクセシビリティ で Idea Catcher を ON に"), true);
-        return;
-    }
-    flashHud (u8 ("声を Logic に入れています…"), u8 ("終わるまでキーボードとマウスはそのままで"), cyan, 60.0);
-    mac::importAudioIntoLogic (voice.getFullPathName().toStdString(), cur.mid.getFileNameWithoutExtension().toStdString(), before,
-                               [sp = juce::Component::SafePointer<MainComponent> (this)] (bool ok, const std::string& why)
-    {
-        if (sp == nullptr) return;
-        if (ok) { sp->flashHud (u8 ("声も入りました"), u8 ("オーディオトラックの 1 小節目から"), green, 3.0); return; }
-        juce::String m = why == "noproject" ? u8 ("Logic の新しいプロジェクトが見つかりませんでした")
-                       : why == "notfront"  ? u8 ("Logic を前に出せませんでした")
-                       : why == "nopanel"   ? u8 ("「オーディオファイルを読み込む」の画面が出ませんでした")
-                       : why == "stillopen" ? u8 ("ファイルを選ぶ画面が閉じませんでした。Logic を確かめてください")
-                                            : u8 ("声を入れられませんでした");
-        sp->hudUntil = 0;
-        sp->report (m + u8 ("。声は画面の「声の録音 (WAV)」を Logic にドラッグしてください"), true);
+        if (r >= 1 && r <= 5) editOptions ([r] (auto& o) { o.quantize = r - 1; });
+        else if (r >= 11) editOptions ([r] (auto& o) { o.strength = r == 11 ? 1.0f : r == 12 ? 0.75f : 0.5f; });
     });
+}
+
+void MainComponent::openEditor()
+{
+    if (! cur.valid || state != Done) return;
+    editor = std::make_unique<EditPanel> (*this);
+    addAndMakeVisible (*editor);
+    resized();
+    refreshButtons();
+    editor->grabKeyboardFocus();
+}
+
+void MainComponent::closeEditor()
+{
+    if (editor == nullptr) return;
+    player.stop();
+    removeChildComponent (editor.get());
+    editor = nullptr;
+    refreshButtons();
+    repaint();
+}
+
+void MainComponent::beginEdit()
+{
+    undoStack.push_back (cur.layers);
+    if (undoStack.size() > 60) undoStack.erase (undoStack.begin());
+}
+
+void MainComponent::editDone()
+{
+    if (! cur.valid) return;
+    writeMidi();
+    saveInfo();
+    refreshRecent();
+    repaint();
+}
+
+bool MainComponent::undoEdit()
+{
+    if (undoStack.empty()) return false;
+    cur.layers = undoStack.back();
+    undoStack.pop_back();
+    editDone();
+    return true;
+}
+
+void MainComponent::revertEdits()
+{
+    if (! cur.valid) return;
+    beginEdit();
+    const auto keep = undoStack;
+    loadIdea (cur.folder, true);   // 声から作り直す（手直しした音は使わない）
+    undoStack = keep;
+}
+
+// 試し聴き：MIDI は鼻歌のテンポで鳴らす（声と同じ速さ）。0 秒 = ファイルの頭（弱起があれば 1 小節前）
+void MainComponent::preview (bool midi, bool voice)
+{
+    player.stop();
+    if (! cur.valid) return;
+    const double spb = 60.0 / cur.o.bpm;
+    const double pick = idea::pickupBeats (cur.layers, cur.o);
+    std::vector<Player::Note> ns;
+    for (auto& L : cur.layers)
+        for (auto& p : idea::place (L, cur.o))
+            ns.push_back ({ (p.b0 + pick) * spb, (p.b1 + pick) * spb, p.n, p.vel });
+    std::vector<float> mix;
+    double outFs = 48000;
+    if (voice)
+    {
+        bool first = true;
+        for (size_t i = 0; i < cur.layers.size() && i < (size_t) cur.wavs.size(); ++i)
+        {
+            std::vector<float> x; double fs = 48000;
+            if (! readWav (cur.wavs[(int) i], x, fs)) continue;
+            if (first) { outFs = fs; first = false; }
+            x = resample (x, fs, outFs);
+            const auto start = (int64_t) std::llround ((idea::effectiveGrid (cur.layers[i], cur.o.bpm) - pick * spb) * outFs);
+            const auto len = (int64_t) x.size() - start;
+            if (len > (int64_t) mix.size()) mix.resize ((size_t) len, 0.0f);
+            for (int64_t k = 0; k < len; ++k)
+            {
+                const int64_t si = start + k;
+                if (si >= 0 && si < (int64_t) x.size()) mix[(size_t) k] += x[(size_t) si];
+            }
+        }
+        float pk = 0;
+        for (auto v : mix) pk = std::max (pk, std::abs (v));
+        if (pk > 0) for (auto& v : mix) v *= 0.7f / pk;
+    }
+    player.play (std::move (ns), std::move (mix), outFs, midi, voice);
 }
 
 void MainComponent::refreshRecent()
@@ -1147,10 +1549,10 @@ void MainComponent::refreshRecent()
 void MainComponent::refreshButtons()
 {
     const bool show = cur.valid && state != Analysing;
-    for (juce::Component* b : { (juce::Component*) &kindBtn, (juce::Component*) &keyDownBtn, (juce::Component*) &keyUpBtn, (juce::Component*) &modeBtn,
+    for (juce::Component* b : { (juce::Component*) &editBtn, (juce::Component*) &keyDownBtn, (juce::Component*) &keyUpBtn, (juce::Component*) &modeBtn,
                                 (juce::Component*) &bpmMinus, (juce::Component*) &bpmPlus, (juce::Component*) &bpmHalf, (juce::Component*) &bpmDouble,
                                 (juce::Component*) &humMinus, (juce::Component*) &humPlus, (juce::Component*) &tempoLabel,
-                                (juce::Component*) &quantBtn, (juce::Component*) &logicBtn, (juce::Component*) &dubBtn })
+                                (juce::Component*) &quantBtn, (juce::Component*) &dubBtn })
         b->setVisible (show);
     tempoReset.setVisible (show && cur.o.outBpm > 0 && std::abs (cur.o.outBpm - cur.o.bpm) > 0.01);
     if (! tempoLabel.isBeingEdited())
@@ -1158,11 +1560,11 @@ void MainComponent::refreshButtons()
     dubBtn.setEnabled (state == Done);
     tapBtn.setVisible (state == Recording && ses.mode != Overdub && ! ses.countIn);
     finderBtn.setButtonText (cur.valid ? u8 ("MIDI を Finder で表示") : u8 ("保存フォルダ"));
-    if (cur.valid && ! cur.layers.empty())
-        kindBtn.setButtonText ((cur.layers.size() > 1 ? u8 ("重ね ") + juce::String ((int) cur.layers.size()) + ": " : juce::String())
-                               + u8 (kindName (cur.layers.back().kind)));
+    editBtn.setToggleState (editor != nullptr, juce::dontSendNotification);
+    editBtn.setEnabled (state == Done);
     modeBtn.setButtonText (cur.o.minor ? u8 ("マイナー") : u8 ("メジャー"));
-    quantBtn.setButtonText (cur.o.quantize == 1 ? u8 ("クオンタイズ 1/16") : cur.o.quantize == 2 ? u8 ("クオンタイズ 1/8") : u8 ("クオンタイズ なし"));
+    quantBtn.setButtonText (u8 ("クオンタイズ ") + u8 (idea::quantizeName (cur.o.quantize))
+                            + (cur.o.quantize > 0 ? "  " + juce::String (juce::roundToInt (cur.o.strength * 100)) + "%" : juce::String()));
     hotkeyBtn.setButtonText (u8 ("録音キー: ") + hotKeyLabel());
     countBtn.setButtonText (props->getBoolValue ("countIn", false)
                                 ? u8 ("カウントイン ") + juce::String ((int) std::lround (countBpm())) + " BPM"
@@ -1195,7 +1597,6 @@ void MainComponent::showCountMenu()
 void MainComponent::showMoreMenu()
 {
     juce::PopupMenu m;
-    m.addItem (1, u8 ("声も Logic に入れる（アクセシビリティの許可が要る）"), true, props->getBoolValue ("voiceToLogic", true));
     m.addItem (2, u8 ("録音中はスペースでテンポをたたく"), true, props->getBoolValue ("tapKey", true));
     m.addItem (3, u8 ("ほかのアプリを使っているとき、画面の上に様子を出す"), true, props->getBoolValue ("hud", true));
     const auto mic = juce::String::fromUTF8 (mac::builtInMicName().c_str());
@@ -1221,10 +1622,9 @@ void MainComponent::showMoreMenu()
             if (devices.getCurrentAudioDevice() != nullptr && state != Recording && state != Starting) ensureDevice();   // 開いていれば今すぐ切り替え
             return;
         }
-        const char* k = r == 1 ? "voiceToLogic" : r == 2 ? "tapKey" : r == 3 ? "hud" : nullptr;
+        const char* k = r == 2 ? "tapKey" : r == 3 ? "hud" : nullptr;
         if (k == nullptr) return;
         props->setValue (k, ! props->getBoolValue (k, true));
-        if (r == 1 && props->getBoolValue (k, true)) mac::accessibilityTrusted (true);
     });
 }
 
@@ -1338,14 +1738,12 @@ void MainComponent::resized()
     }
     {
         auto a = row (28);
-        kindBtn.setBounds (a.removeFromLeft (190));
-        a.removeFromLeft (8);
-        quantBtn.setBounds (a.removeFromLeft (150));
+        quantBtn.setBounds (a.removeFromLeft (220));
     }
     roll = c.removeFromTop (100);
 
     auto ac = actions;
-    logicBtn.setBounds (ac.removeFromRight (70));
+    editBtn.setBounds (ac.removeFromRight (70));
     ac.removeFromRight (8);
     dubBtn.setBounds (ac.removeFromRight (120));
     ac.removeFromRight (8);
@@ -1367,9 +1765,9 @@ void MainComponent::resized()
     moreBtn.setBounds (f2.removeFromLeft (80));
     f.removeFromTop (2);
     auto f3 = f.removeFromTop (24);
-    autoOpenBtn.setBounds (f3.removeFromLeft (200));
     autoStopBtn.setBounds (f3);
     prerollBtn.setBounds (f.removeFromTop (24));
+    if (editor != nullptr) editor->setBounds (card.getUnion (recentArea));
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -1412,7 +1810,7 @@ void MainComponent::paint (juce::Graphics& g)
     juce::String big, small;
     switch (state)
     {
-        case Idle:      big = hotKeyLabel() + u8 (" で録音"); small = u8 ("鼻歌でも口ドラムでも。もう一度押すか、黙ると止まります"); break;
+        case Idle:      big = hotKeyLabel() + u8 (" で録音"); small = u8 ("鼻歌を歌って、もう一度押すか、黙ると止まります"); break;
         case Starting:  big = u8 ("マイクを開いています…"); break;
         case Recording:
         {
@@ -1469,7 +1867,7 @@ void MainComponent::paint (juce::Graphics& g)
         g.setColour (dim);
         g.setFont (juce::FontOptions (14.0f));
         g.drawFittedText (state == Analysing ? u8 ("少し待ってください…")
-                                             : u8 ("録ると、ここにキー・テンポ・MIDI が出ます。\nできた MIDI は、キーとテンポ入りの Logic プロジェクトとして開きます。"),
+                                             : u8 ("録ると、ここにキー・テンポ・MIDI が出ます。\nできた MIDI は、つかんで Logic のトラックへドラッグすると入ります。"),
                           card.reduced (24), juce::Justification::centred, 4);
     }
     else
@@ -1487,7 +1885,7 @@ void MainComponent::paint (juce::Graphics& g)
         };
         const auto pct = [] (float v) { return juce::String (juce::roundToInt (juce::jlimit (0.0f, 1.0f, v) * 100)) + "%"; };
         const bool keyUsed = hasMelodyLayer();
-        label (c.removeFromTop (30), "KEY", keyUsed ? shortKey (cur.o.key, cur.o.minor) : u8 ("（ドラムだけ）"));
+        label (c.removeFromTop (30), "KEY", keyUsed ? shortKey (cur.o.key, cur.o.minor) : u8 ("—"));
         c.removeFromTop (8);
         {
             auto tr = c.removeFromTop (30);
@@ -1512,20 +1910,23 @@ void MainComponent::paint (juce::Graphics& g)
             g.drawText (juce::String ((int) std::lround (cur.o.bpm)) + " BPM", hr.removeFromLeft (120), juce::Justification::centred);
         }
 
-        // 小さいピアノロール（レイヤーごとに色を変える）
+        // 小さいピアノロール（レイヤーごとに色を変える）。ここをつかんで Logic へドラッグできる
         auto rr = roll.toFloat();
         g.setColour (panel2);
         g.fillRoundedRectangle (rr, 6.0f);
+        g.setColour (amber.withAlpha (0.55f));
+        g.drawRoundedRectangle (rr.reduced (0.5f), 6.0f, 1.2f);
         struct P { idea::Placed p; int layer; };
         std::vector<P> placed;
+        const double pick = idea::pickupBeats (cur.layers, cur.o);
         for (size_t i = 0; i < cur.layers.size(); ++i)
-            for (auto& p : idea::place (cur.layers[i], cur.o)) placed.push_back ({ p, (int) i });
+            for (auto p : idea::place (cur.layers[i], cur.o)) { p.b0 += pick; p.b1 += pick; placed.push_back ({ p, (int) i }); }
         double lastBeat = 4;
         int lo = 127, hi = 0;
         for (auto& q : placed)
         {
             lastBeat = std::max (lastBeat, q.p.b1);
-            if (q.p.ch != 9) { lo = std::min (lo, q.p.n); hi = std::max (hi, q.p.n); }
+            lo = std::min (lo, q.p.n); hi = std::max (hi, q.p.n);
         }
         const double bars = std::ceil (lastBeat / 4.0);
         const float x0 = rr.getX() + 6, wpx = rr.getWidth() - 12;
@@ -1535,37 +1936,26 @@ void MainComponent::paint (juce::Graphics& g)
             g.setColour (b % 4 == 0 ? line.brighter (0.25f) : line.withAlpha (0.45f));
             g.drawVerticalLine (juce::roundToInt (bx (b)), rr.getY() + 4, rr.getBottom() - 4);
         }
-        const bool hasDrums = std::any_of (placed.begin(), placed.end(), [] (auto& q) { return q.p.ch == 9; });
-        const bool hasMel = std::any_of (placed.begin(), placed.end(), [] (auto& q) { return q.p.ch != 9; });
-        auto melArea = rr.reduced (0, 6);
-        juce::Rectangle<float> drumArea;
-        if (hasDrums) drumArea = hasMel ? melArea.removeFromBottom (36) : melArea;
+        if (pick > 0)
+        {
+            g.setColour (amber.withAlpha (0.12f));
+            g.fillRect (juce::Rectangle<float> (bx (0), rr.getY() + 2, bx (pick) - bx (0), rr.getHeight() - 4));
+        }
+        auto melArea = rr.reduced (0, 6).withTrimmedBottom (14);
         if (hi < lo) { lo = 60; hi = 72; }
-        juce::Array<int> drumRows;   // 上から高いノート番号順（ハイハットが上、キックが下）
-        for (auto& q : placed) if (q.p.ch == 9) drumRows.addIfNotAlreadyThere (q.p.n);
-        drumRows.sort();
-        std::reverse (drumRows.begin(), drumRows.end());
         const float span = (float) std::max (12, hi - lo + 2);
         const juce::Colour melCol[] = { amber, violet, green, red };
         for (auto& q : placed)
         {
             const auto& p = q.p;
-            juce::Rectangle<float> nr;
-            if (p.ch == 9)
-            {
-                const int row = drumRows.indexOf (p.n);
-                const float h = drumArea.getHeight() / (float) juce::jmax (1, drumRows.size());
-                nr = { bx (p.b0), drumArea.getY() + h * (float) row + 1, std::max (3.0f, bx (p.b0 + 0.12) - bx (p.b0)), h - 2 };
-                g.setColour ((q.layer == 0 ? cyan : cyan.withRotatedHue (0.12f)).withAlpha (0.35f + 0.65f * (float) p.vel / 127.0f));
-            }
-            else
-            {
-                const float y = melArea.getBottom() - ((float) (p.n - lo + 1) / span) * melArea.getHeight();
-                nr = { bx (p.b0), y - 2.5f, std::max (3.0f, bx (p.b1) - bx (p.b0) - 1), 5.0f };
-                g.setColour (melCol[q.layer % 4]);
-            }
-            g.fillRoundedRectangle (nr, 1.5f);
+            const float y = melArea.getBottom() - ((float) (p.n - lo + 1) / span) * melArea.getHeight();
+            g.setColour (melCol[q.layer % 4]);
+            g.fillRoundedRectangle ({ bx (p.b0), y - 2.5f, std::max (3.0f, bx (p.b1) - bx (p.b0) - 1), 5.0f }, 1.5f);
         }
+        g.setColour (textC.withAlpha (0.75f));
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText (pick > 0 ? u8 ("⠿ つかんで Logic へ（弱起あり：歌い出しの 1 小節前に落とす）") : u8 ("⠿ つかんで Logic のトラックへドラッグ"),
+                    rr.reduced (8, 3).removeFromBottom (13), juce::Justification::centredRight);
         g.setColour (dim);
         g.setFont (juce::FontOptions (11.5f));
         double secs = 0;
@@ -1575,7 +1965,8 @@ void MainComponent::paint (juce::Graphics& g)
         g.drawText (juce::String ((int) placed.size()) + u8 (" 音 · ") + juce::String ((int) bars) + u8 (" 小節")
                         + (cur.layers.size() > 1 ? u8 (" · 重ね ") + juce::String ((int) cur.layers.size()) : u8 (" · ") + juce::String (secs, 1) + u8 (" 秒"))
                         + u8 ("   確かさ: ")
-                        + (keyUsed ? u8 ("キー ") + pct (L0.kind != idea::kDrums ? L0.r.key.confidence : 1.0f) + " / " : juce::String())
+                        + (cur.layers.back().edited ? u8 ("手直し済み · ") : juce::String())
+                        + (keyUsed ? u8 ("キー ") + pct (L0.r.key.confidence) + " / " : juce::String())
                         + u8 ("テンポ ") + (tempoFixed ? (L0.r.gridStep == 4 ? u8 ("カウント") : u8 ("タップ")) : pct (L0.r.tempoConf)),
                     card.withTop (roll.getBottom() + 4).reduced (14, 0).withHeight (18), juce::Justification::centredLeft);
     }
@@ -1591,7 +1982,7 @@ void MainComponent::paint (juce::Graphics& g)
         g.setFont (juce::FontOptions (12.0f));
         g.drawText (t, r, juce::Justification::centred);
     };
-    chip (dragMidi, u8 ("⠿ MIDI をドラッグ → Logic"), cur.valid);
+    chip (dragMidi, u8 ("⠿ MIDI をドラッグ → Logic"), cur.valid && state == Done);
     chip (dragWav, u8 ("⠿ 声の録音 (WAV) をドラッグ"), cur.valid && ! cur.wavs.isEmpty());
 
     // 最近のアイデア
@@ -1618,8 +2009,8 @@ void MainComponent::paint (juce::Graphics& g)
         if (auto* o = inf.getDynamicObject())
         {
             const int nl = o->getProperty ("layers").isArray() ? o->getProperty ("layers").getArray()->size() : 1;
-            desc = u8 (kindName ((int) o->getProperty ("kind"))) + (nl > 1 ? u8 ("＋") + juce::String (nl - 1) : juce::String()) + "  "
-                 + ((int) o->getProperty ("kind") == idea::kDrums && nl < 2 ? juce::String() : shortKey ((int) o->getProperty ("key"), (bool) o->getProperty ("minor")) + "  ")
+            desc = (nl > 1 ? u8 ("重ね ") + juce::String (nl) + "  " : juce::String())
+                 + shortKey ((int) o->getProperty ("key"), (bool) o->getProperty ("minor")) + "  "
                  + juce::String ((int) std::lround ((double) o->getProperty ("outBpm") > 0 ? (double) o->getProperty ("outBpm") : (double) o->getProperty ("bpm"))) + u8 (" BPM  ·  ")
                  + juce::String ((double) o->getProperty ("seconds"), 1) + u8 (" 秒");
         }
@@ -1659,17 +2050,18 @@ void MainComponent::mouseMove (const juce::MouseEvent& e)
     auto ra = recentArea.withTrimmedTop (20);
     for (int i = 0; i < recent.size(); ++i)
         if (ra.removeFromTop (26).contains (e.getPosition())) h = i;
-    const bool overHot = h >= 0 || recCircle.contains (e.getPosition()) || ((dragMidi.contains (e.getPosition()) || dragWav.contains (e.getPosition())) && cur.valid);
-    setMouseCursor (overHot ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+    const bool overDrag = cur.valid && state == Done && (dragMidi.contains (e.getPosition()) || dragWav.contains (e.getPosition()) || roll.contains (e.getPosition()));
+    const bool overHot = h >= 0 || recCircle.contains (e.getPosition());
+    setMouseCursor (overDrag ? juce::MouseCursor::DraggingHandCursor : overHot ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
     if (h != hoverRecent) { hoverRecent = h; repaint (recentArea); }
 }
 
 void MainComponent::mouseDrag (const juce::MouseEvent& e)
 {
-    if (! cur.valid || dragStarted || e.getDistanceFromDragStart() < 4) return;
+    if (! cur.valid || state != Done || dragStarted || e.getDistanceFromDragStart() < 4) return;
     const auto start = e.getMouseDownPosition();
     juce::File f;
-    if (dragMidi.contains (start)) f = cur.mid;
+    if (dragMidi.contains (start) || roll.contains (start)) f = cur.mid;
     else if (dragWav.contains (start)) f = cur.layers.size() > 1 ? writeLogicVoice() : cur.wavs[0];
     if (! f.existsAsFile()) return;
     dragStarted = true;

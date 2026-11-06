@@ -195,9 +195,8 @@ namespace numdeck
     bool KeyTap::isRefMonitorFrontmost()
     {
         NSRunningApplication* app = [[NSWorkspace sharedWorkspace] frontmostApplication];
-        // Reference Monitor と Hum Keys（Logic と一緒に使う自作アプリ）が前にいる間も、Logic と同じに扱う
+        // Reference Monitor と Idea Catcher（Logic と一緒に使う自作アプリ）が前にいる間も、Logic と同じに扱う
         return app != nil && ([app.bundleIdentifier isEqualToString: @"com.myplugins.referencemonitor"]
-                              || [app.bundleIdentifier isEqualToString: @"com.myplugins.humkeys"]
                               || [app.bundleIdentifier isEqualToString: @"com.myplugins.ideacatcher"]);
     }
 

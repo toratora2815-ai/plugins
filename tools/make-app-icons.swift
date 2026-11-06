@@ -141,48 +141,6 @@ do {
     save(c, "ReferenceMonitor.png")
 }
 
-// ---------- Hum Keys：声の波が鍵盤（ノートの棒）に変わる ----------
-do {
-    let c = makeCtx()
-    background(c, top: 0x2b2140, bottom: 0x0b0a14)
-    let orange: UInt32 = 0xff8a3d, cyan: UInt32 = 0x38e1ff
-    c.addPath(rr(body, 185)); c.clip()
-    radial(c, [col(orange, 0.22), col(orange, 0)], CGPoint(x: 600, y: 520), 420)
-
-    // 左：声の波（だんだん右へ）
-    c.saveGState(); c.setShadow(offset: .zero, blur: 22, color: col(cyan, 0.9))
-    c.setStrokeColor(col(cyan)); c.setLineWidth(16); c.setLineCap(.round); c.setLineJoin(.round)
-    var first = true
-    for xi in stride(from: 170, through: 470, by: 4) {
-        let x = CGFloat(xi), t = (x - 170) / 300
-        let yy = 512 + 120 * (1 - t * 0.6) * sin(t * 5.5 * .pi) * sin(t * .pi * 0.9 + 0.3)
-        if first { c.move(to: CGPoint(x: x, y: yy)); first = false } else { c.addLine(to: CGPoint(x: x, y: yy)) }
-    }
-    c.strokePath(); c.restoreGState()
-
-    // 右：ノートの棒（ピアノロール）
-    let bars: [(CGFloat, CGFloat, CGFloat)] = [(500, 600, 110), (560, 470, 120), (640, 400, 90), (690, 540, 150)]
-    for (i, b) in bars.enumerated() {
-        let r = CGRect(x: b.0, y: b.1, width: b.2, height: 58)
-        c.saveGState(); c.setShadow(offset: .zero, blur: 40, color: col(orange, 0.85))
-        c.addPath(rr(r, 18)); c.setFillColor(col(orange)); c.fillPath(); c.restoreGState()
-        c.saveGState(); c.addPath(rr(r, 18)); c.clip()
-        grad(c, [col(0xffb072), col(i == 3 ? 0xff5c8a : 0xf2652a)], from: CGPoint(x: r.minX, y: r.minY), to: CGPoint(x: r.maxX, y: r.maxY))
-        c.restoreGState()
-    }
-    // 下：鍵盤
-    let kx: CGFloat = 190, kw: CGFloat = 92, ky: CGFloat = 760
-    for k in 0..<7 {
-        let r = CGRect(x: kx + CGFloat(k) * kw, y: ky, width: kw - 8, height: 170)
-        c.addPath(rr(r, 14)); c.setFillColor(col(k == 2 ? orange : 0xe8e6f0)); c.fillPath()
-    }
-    for k in [0, 1, 3, 4, 5] {
-        let r = CGRect(x: kx + CGFloat(k) * kw + kw * 0.62, y: ky - 6, width: kw * 0.62, height: 104)
-        c.addPath(rr(r, 10)); c.setFillColor(col(0x15131f)); c.fillPath()
-    }
-    save(c, "HumKeys.png")
-}
-
 // ---------- Idea Catcher：ひらめきの電球の中に声の波、右上に録音の赤い点 ----------
 do {
     let c = makeCtx()

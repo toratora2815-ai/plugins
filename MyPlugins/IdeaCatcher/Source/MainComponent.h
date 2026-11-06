@@ -1,6 +1,9 @@
 #pragma once
 #include <JuceHeader.h>
 #include "IdeaAnalysis.h"
+#include "Player.h"
+
+class EditPanel;
 
 // 画面の上のほうに出る小さな表示（録音中・解析中・できたとき）。マウスは通す
 class Hud : public juce::Component
@@ -28,7 +31,6 @@ public:
     void mouseMove (const juce::MouseEvent&) override;
 
     void toggleRecord();
-    void openLastInLogic();
     void showMe (bool focus);
     void command (const juce::String& c);
 
@@ -101,9 +103,9 @@ private:
     std::unique_ptr<Hud> hud;
     double hudUntil = 0;
 
-    juce::TextButton kindBtn, keyDownBtn, keyUpBtn, modeBtn, bpmMinus, bpmPlus, bpmHalf, bpmDouble, quantBtn,
-                     logicBtn, dubBtn, finderBtn, hotkeyBtn, inputBtn, countBtn, moreBtn, tapBtn;
-    juce::ToggleButton autoOpenBtn, autoStopBtn, loginBtn, prerollBtn;
+    juce::TextButton editBtn, keyDownBtn, keyUpBtn, modeBtn, bpmMinus, bpmPlus, bpmHalf, bpmDouble, quantBtn,
+                     dubBtn, finderBtn, hotkeyBtn, inputBtn, countBtn, moreBtn, tapBtn;
+    juce::ToggleButton autoStopBtn, loginBtn, prerollBtn;
     juce::TextButton humMinus, humPlus, tempoReset;
     juce::Label tempoLabel;   // 曲のテンポ（クリックで数字を打てる）
 
@@ -121,7 +123,7 @@ private:
     int64_t findPreStart (int64_t S) const;
     void stopRecording();
     void finishAnalysis (idea::Result r, std::vector<float> samples, double fs, Mode m);
-    void loadIdea (const juce::File& folder);
+    void loadIdea (const juce::File& folder, bool ignoreEdits = false);
     void applyIdea (Idea next);
     void tap();
     void removeLastLayer();
@@ -143,6 +145,27 @@ private:
     void showCountMenu();
     void showMoreMenu();
     void showDubMenu();
+    void showQuantMenu();
+    void startDrag();
+
+public:
+    // ---- 手直しの画面から使う ----
+    std::vector<idea::Layer>& layers() { return cur.layers; }
+    const idea::MidiOptions& options() const { return cur.o; }
+    bool hasIdea() const { return cur.valid && state == Done; }
+    void beginEdit();               // 手直しの前（1 つ戻す用に覚える）
+    void editDone();                // 手直しのあと（MIDI と info.json を書き直す）
+    bool undoEdit();
+    void revertEdits();             // 録ったままに戻す（声から作り直す）
+    void preview (bool midi, bool voice);
+    Player player;
+    void closeEditor();
+    juce::String keyText() const { return shortKey (cur.o.key, cur.o.minor); }
+
+private:
+    std::unique_ptr<EditPanel> editor;
+    std::vector<std::vector<idea::Layer>> undoStack;
+    void openEditor();
 
     void updateHud();
     void flashHud (const juce::String& big, const juce::String& small, juce::Colour c, double seconds = 3.5);
