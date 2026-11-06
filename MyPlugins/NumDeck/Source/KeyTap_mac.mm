@@ -343,23 +343,23 @@ namespace numdeck
         {
             // 戻る先: このタイルで開く前に前面だったアプリ → なければ直前に使っていたアプリ（rememberFrontApp）。
             // どちらも分からなければ、何も開かずに隠すだけ（macOS が次のアプリを前にする）。
-            // 以前は Finder を開き直していたが、Finder はウィンドウがないと新しいフォルダのウィンドウを出してしまうのでやめた
+            // Finder は戻る先にしない（開き直すと新しいフォルダのウィンドウが出てしまう。本人も使っていないので前にも出さない）
             NSRunningApplication* back = nil;
             for (NSNumber* pid in @[ appBackPids[p] ?: @0, @(lastFrontPid) ])
             {
                 NSRunningApplication* b = pid.intValue != 0 ? [NSRunningApplication runningApplicationWithProcessIdentifier: (pid_t) pid.intValue] : nil;
-                if (b != nil && ! b.terminated && b.processIdentifier != front.processIdentifier) { back = b; break; }
+                if (b != nil && ! b.terminated && b.processIdentifier != front.processIdentifier
+                    && ! [b.bundleIdentifier isEqualToString: @"com.apple.finder"]) { back = b; break; }
             }
             const bool isSelf = front.processIdentifier == [NSRunningApplication currentApplication].processIdentifier;
-            const bool isFinder = back != nil && [back.bundleIdentifier isEqualToString: @"com.apple.finder"];
-            NSURL* backURL = (back != nil && ! isFinder) ? back.bundleURL : nil;
+            NSURL* backURL = back != nil ? back.bundleURL : nil;
             // 全画面（1 枚だけ）なら、全画面を解いてから隠す
             if (win::leaveFullScreenThenHide (front, backURL)) return;
             if (back != nil)
             {
                 [back unhide];
-                if (isSelf || isFinder)
-                    [back activateWithOptions: 0];   // 自分が前面なら譲れる。Finder は開き直すと新しいウィンドウが出るので前に出すだけ
+                if (isSelf)
+                    [back activateWithOptions: 0];   // 自分が前面なら譲れる
                 else
                     [[NSWorkspace sharedWorkspace] openApplicationAtURL: backURL
                                                           configuration: [NSWorkspaceOpenConfiguration configuration]

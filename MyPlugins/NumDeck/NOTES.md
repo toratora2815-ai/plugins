@@ -51,4 +51,4 @@ v1.21.0: 分類「Idea Catcher」（Cat::IdeaCatcher、remote "ic:" → sendRemo
 v1.22.0: タイルの種類に「Aside（ひとりごと秘書）」（"as:memo" / "as:undo" / "as:show" → 分散通知 com.myplugins.aside.command）
 v1.23.0: 「トラック」にオートメーションの Latch ⇔ Read（⌃⌥⇧⌘A）/ Latch に（⌃⌥⇧⌘T）/ Read に（⌃⌥⇧⌘R）。最初の割り当てには入れない、Logic に 1 回覚えさせる
 v1.24.0: Hum Keys をやめたので分類「Hum Keys」（Cat::HumKeys・"hk:"）を消した。icOpen（"ic:open"）は「できた MIDI を出す（ドラッグ用）」（Idea Catcher 1.4.0 から Logic は開かず、画面を出すだけ）
-v1.24.1: アプリのタイルで前面のアプリを隠すとき、戻る先が分からなくても Finder を開き直さない（Finder はウィンドウがないと新しいフォルダを出すため）。戻る先は「このタイルで開く前のアプリ」→「直前に使っていたアプリ（lastFrontPid）」→ なし。Num Deck 自身は [NSApp hide:]、Finder へは activate だけ
+v1.24.1: アプリのタイルで前面のアプリを隠すとき、戻る先が分からなくても Finder を開き直さない（Finder はウィンドウがないと新しいフォルダを出すため）。戻る先は「このタイルで開く前のアプリ」→「直前に使っていたアプリ（lastFrontPid）」→ なし。Finder は戻る先にしない（前にも出さない）。Num Deck 自身は [NSApp hide:]
