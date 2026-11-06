@@ -114,8 +114,8 @@ namespace echo
         // 揺れ（セント）
         float sineRate, sineDepth, sinePhaseR;          // 正弦波（右の位相 度）
         float sqAmp, sqInterval, sqJitter, sqSmooth;    // 四角（＝読み出しが三角に動く）: 高さ・半周期 s・ばらつき 0..1・角のなまり s
-        int sqRMode; float sqRAmp;                      // 右: 0 同じ 1 逆 2 別々（sqRAmp = 右の高さの倍率）
-        float flAmp, flRate; int flSame;                // ランダムなフラッター（セント rms・帯域 Hz・左右同じなら 1）
+        int sqRMode; float sqRAmp;                      // 右: 0 同じ 1 逆 2 別々 3 同じ動きを sqRLag 秒遅れて（sqRAmp = 右の高さの倍率）
+        float flAmp, flRate; int flSame;                // ランダムなフラッター（セント rms・帯域 flRate/4〜flRate Hz・左右同じなら 1）
         // 歪み: SATURATION 0 / 6 / 12 / 18 / 24 dB のときの、入れる倍率と戻す倍率（dB）。間は直線で結ぶ
         float satIn[5], satOut[5];
         float hard;     // 曲がり方の硬さ（y = x / (1 + |x|^k)^(1/k) の k）
@@ -130,6 +130,10 @@ namespace echo
         // 歪みの前に掛けて後で戻す EQ（周波数ごとの歪みやすさ）: 180 Hz ローシェルフ・900 Hz / 3.5 kHz ハイシェルフの dB、全体 dB
         float emph[4];
         float compAtt, compRel;   // 歪みの前のコンプの速さ（ms）
+        int ppLoopDiff;           // Ping-Pong ではにじみをループの中に入れる（往復ごとに広がる。Verbed 以外のにじむスタイル）
+        float sqRLag;             // sqRMode 3 の遅れ（秒）
+        int modOut;               // 1 = 揺れは出口で 1 回だけ（Vibrato）。0 = ループの中（B から A へ戻る所と出口のタップ）
+        float ceilDb;             // くり返しが 100% を超えたときの天井（dBFS 相当。参考の FEEDBACK 125% に合わせた値）
     };
 
     // ---------------- 遅延線（32 点の窓付き sinc 補間。高音が鈍らない） ----------------
@@ -365,14 +369,16 @@ namespace echo
         // 状態（左右）
         double phase = 0;
         float sqSign[2] { 1, -1 }, sqLeft[2] { 0, 0 }, sqOut[2] { 0, 0 };
-        float fl1[2] {}, fl2[2] {};
+        float fl1[2] {}, fl2[2] {}, fl3[2] {};
         double off[2] {};   // 読み出しのずれ（サンプル、＋＝遅く）
+        std::vector<float> hist; int histPos = 0;   // sqRMode 3 用（左の四角の過去）
         Rng rng[2];
         bool started = false;
         void reset()
         {
             phase = 0; sqSign[0] = 1; sqSign[1] = -1; sqLeft[0] = sqLeft[1] = 0; sqOut[0] = sqOut[1] = 0;
-            fl1[0] = fl1[1] = fl2[0] = fl2[1] = 0; off[0] = off[1] = 0;
+            fl1[0] = fl1[1] = fl2[0] = fl2[1] = fl3[0] = fl3[1] = 0; off[0] = off[1] = 0;
+            std::fill (hist.begin(), hist.end(), 0.0f); histPos = 0;
             rng[0].s = 0x12345u; rng[1].s = 0x9e3779u;
             started = false;
         }
@@ -410,19 +416,33 @@ namespace echo
                     sqOut[c] += (sqSign[c] * p.sqAmp - sqOut[c]) * a;
                 }
                 cents[0] += sqOut[0];
-                cents[1] += p.sqRMode == 0 ? sqOut[0] * p.sqRAmp : p.sqRMode == 1 ? -sqOut[0] * p.sqRAmp : sqOut[1] * p.sqRAmp;
+                if (p.sqRMode == 3)
+                {
+                    const int need = (int) (p.sqRLag * fs) + 2;
+                    if ((int) hist.size() < need) { hist.assign ((size_t) need, sqOut[0]); histPos = 0; }
+                    const int lag = need - 1;
+                    hist[(size_t) histPos] = sqOut[0];
+                    const int rp = (histPos - lag + (int) hist.size()) % (int) hist.size();
+                    cents[1] += hist[(size_t) rp] * p.sqRAmp;
+                    histPos = (histPos + 1) % (int) hist.size();
+                }
+                else
+                    cents[1] += p.sqRMode == 0 ? sqOut[0] * p.sqRAmp : p.sqRMode == 1 ? -sqOut[0] * p.sqRAmp : sqOut[1] * p.sqRAmp;
             }
             if (p.flAmp > 0)
             {
                 const float a = 1.0f - std::exp (-2.0f * (float) kPi * p.flRate / (float) fs);
-                // 2 段の 1 次ローパスのノイズ。rms がおよそ flAmp になるように倍率をかける
-                const float scale = p.flAmp * std::sqrt (2.0f / std::max (1e-6f, a)) * 0.9f;
+                const float b = 1.0f - std::exp (-2.0f * (float) kPi * 0.25f * p.flRate / (float) fs);
+                // 2 段の 1 次ローパスのノイズから、その 1/4 の速さの成分を引いた帯域のノイズ（参考はゆっくりした成分がない）。
+                // rms がおよそ flAmp になるように倍率をかける（2.1 は測って合わせた値）
+                const float scale = p.flAmp * std::sqrt (2.0f / std::max (1e-6f, a)) * 0.9f * 2.1f;
                 for (int c = 0; c < 2; ++c)
                 {
-                    if (c == 1 && p.flSame) { cents[1] += fl2[0] * scale; break; }
+                    if (c == 1 && p.flSame) { cents[1] += (fl2[0] - fl3[0]) * scale; break; }
                     fl1[c] += (rng[c].gauss() - fl1[c]) * a;
                     fl2[c] += (fl1[c] - fl2[c]) * a;
-                    cents[c] += fl2[c] * scale;
+                    fl3[c] += (fl2[c] - fl3[c]) * b;
+                    cents[c] += (fl2[c] - fl3[c]) * scale;
                 }
             }
             const double leak = 1.0 - 1.0 / (30.0 * fs);
@@ -439,6 +459,8 @@ namespace echo
     struct Pass
     {
         Saturator sat; Chain loop; Chain split; Biquad hiCut; Chain pre, post;
+        float ceil = 2.0f, knee = 1.5f;
+        void setCeiling (float db) { ceil = std::pow (10.0f, db / 20.0f); knee = 0.75f * ceil; }
         void prepare (double fs, const Halfband& h1, const Halfband& h2) { sat.prepare (h1, h2, fs); }
         void reset() { sat.reset(); loop.reset(); split.reset(); hiCut.reset(); pre.reset(); post.reset(); }
         void setEmphasis (const float* e, double fs)
@@ -452,9 +474,9 @@ namespace echo
             x = post.process (sat.process (pre.process (x)));
             x = split.process (loop.process (x));
             x = hiCut.process (x);
-            // くり返しが 100% を超えても、約 +6 dBFS で止める（測った参考と同じ天井）
+            // くり返しが 100% を超えても、スタイルごとの天井で止める（参考の FEEDBACK 125% に合わせた高さ）。天井の 3/4 から丸める
             const float a = std::abs (x);
-            if (a > 1.5f) x = std::copysign (1.5f + 0.5f * std::tanh ((a - 1.5f) * 2.0f), x);
+            if (a > knee) x = std::copysign (knee + (ceil - knee) * std::tanh ((a - knee) / (ceil - knee)), x);
             return x;
         }
     };
@@ -475,6 +497,8 @@ namespace echo
         int style = 1;
         double rhythmMs = 50; int repeats = 8; float decayDb = 0; double loopBeatsMs = 1000;
         float wobble = 1.0f;     // 揺れの量（1 = スタイルのまま）
+        // 音符・テンポで決まる時間か（そのときは追いかけず、20 ms のクロスフェードですぐ切り替える。参考と同じ）
+        bool sync1 = false, sync2 = false, syncR = false;
     };
 
     // LOW CUT = 1 次ハイパス 2 段（出口）、HIGH CUT = 1 次ローパス（ループ内）。測った特性に当てはめた表
@@ -519,6 +543,8 @@ namespace echo
                 A[c].prepare (maxS); B[c].prepare (maxS);
                 pa[c].prepare (fs, h1, h2); pb[c].prepare (fs, h1, h2);
                 outDiff[c].prepare (fs);
+                if (c == 0) ppDiff.prepare (fs);
+                outMod[c].prepare ((int) (fs * 0.05));
             }
             dryDelay.clear();
             configured = false;
@@ -529,10 +555,10 @@ namespace echo
             for (int c = 0; c < 2; ++c)
             {
                 A[c].reset(); B[c].reset(); pa[c].reset(); pb[c].reset(); color[c].reset(); colorSplit[c].reset(); lowCut[c].reset(); lowCut2[c].reset(); outDiff[c].reset();
-                tSm[c] = -1; tSm2[c] = -1;
+                tSm[c] = TimeState(); tSm2[c] = TimeState();
             }
-            mod.reset();
-            rhythmSm = -1;
+            mod.reset(); ppDiff.reset(); outMod[0].reset(); outMod[1].reset();
+            rhythmSm = TimeState();
         }
 
         void set (const Params& p)
@@ -540,7 +566,7 @@ namespace echo
             const bool styleChanged = ! configured || p.style != q.style;
             const bool filtChanged = styleChanged || p.highCut != q.highCut || p.lowCut != q.lowCut || p.saturationDb != q.saturationDb;
             q = p;
-            prof = &profiles()[std::max (0, std::min (numProfiles() - 1, p.style))];
+            prof = useCustom ? &custom : &profiles()[std::max (0, std::min (numProfiles() - 1, p.style))];
             if (filtChanged)
             {
                 double lcA, lcB; lowCutHz (p.lowCut, lcA, lcB);
@@ -562,11 +588,13 @@ namespace echo
                         ps->sat.set (dIn, dOut, prof->hard, prof->bias, prof->compThr, prof->compRatio);
                         ps->sat.setTimes (compAttOverride > 0 ? compAttOverride : prof->compAtt, compRelOverride > 0 ? compRelOverride : prof->compRel);
                         ps->setEmphasis (prof->emph, fs);
+                        ps->setCeiling (ceilOverride > -90 ? ceilOverride : prof->ceilDb);
                     }
                 }
                 for (int c = 0; c < 2; ++c)
                 {
                     outDiff[c].set (prof->diffG[c], prof->diffLen[c], fs);
+                    if (c == 0) { ppDiff.set (prof->diffG[0], prof->diffLen[0], fs); if (styleChanged && configured) ppDiff.reset(); }
                     if (styleChanged && configured) outDiff[c].reset();
                     // 奇数回目（A）と偶数回目（B）の音量差。1 回目は A を通るので、色で戻す
                     pa[c].loop.set (prof->loop, prof->nLoop, prof->loopGain + 0.5f * prof->passTilt, fs);
@@ -580,6 +608,8 @@ namespace echo
                 }
             }
             configured = true;
+            ppDiffInLoop = p.mode == 2 && prof->ppLoopDiff != 0 && outDiff[0].on;
+            outLat = prof->modOut ? std::ceil (0.004 * fs) : 0.0;   // ±0.4 ms の揺れが入る余裕
             inGain = std::pow (10.0f, p.inputDb / 20.0f);
             outGain = std::pow (10.0f, p.outputDb / 20.0f);
             const float m = std::max (0.0f, std::min (1.0f, p.mix));
@@ -594,12 +624,15 @@ namespace echo
                 rg[k] = (float) std::pow (10.0, -(n > 1 ? p.decayDb * k / (n - 1) : 0.0) / 20.0);
                 s2 += (double) rg[k] * rg[k];
             }
-            const float norm = (float) std::min (1.0, std::sqrt (2.0 / s2));
+            const float norm = (float) (1.0 / std::sqrt (2.0 * s2));   // 参考: 1 回目の大きさ × g / √(2Σg²)（左右を足した音に掛ける）
             for (int k = 0; k < n; ++k) rg[k] *= norm;
             nRep = n;
         }
         void setDuck (float g) { duck = g; }
+        // 合わせ込み用: スタイルの中身を差し替える
+        void overrideProfile (const Profile& p) { custom = p; useCustom = true; configured = false; }
         float compAttOverride = 0, compRelOverride = 0;   // 合わせ込み用（0 = スタイルの値）
+        float ceilOverride = -100;                          // 合わせ込み用（-100 = スタイルの値）
         const Params& get() const { return q; }
         const Profile& profile() const { return *prof; }
 
@@ -618,33 +651,30 @@ namespace echo
             const double maxD = maxDelaySec * fs - 8;
             // 時間はなめらかに追う（テープのように音程が動く。参考を測って時定数 0.504 s の指数、全スタイル同じ）
             const double aT = 1.0 - std::exp (-1.0 / (0.504 * fs));
-            for (int c = 0; c < 2; ++c)
-            {
-                const double tgt = (q.mode == 1 && c == 1) ? t2 : t1;
-                if (tSm[c] < 0) tSm[c] = tgt;
-                if (tSm2[c] < 0) tSm2[c] = t2;
-            }
-            if (rhythmSm < 0) rhythmSm = q.rhythmMs * ms;
+            const float xStep = (float) (1.0 / (0.02 * fs));
 
             for (int i = 0; i < n; ++i)
             {
                 const float inL = L[i] * inGain, inR = R[i] * inGain;
                 double mL, mR;
                 mod.tick (P, fs, q.wobble, mL, mR);
+                double oML = 0, oMR = 0;
+                if (P.modOut) { oML = mL; oMR = mR; mL = mR = 0; }   // 出口で揺らすスタイルはループの中は揺らさない
                 float wet[2] { 0, 0 };
                 if (q.mode == 0 || q.mode == 1)
                 {
                     for (int c = 0; c < 2; ++c)
                     {
-                        const double tgt = (q.mode == 1 && c == 1) ? t2 : t1;
-                        tSm[c] += (tgt - tSm[c]) * aT;
-                        const double T = tSm[c], md = c == 0 ? mL : mR;
-                        const double oOdd = P.off[c * 2] * ms + q.groove * T, oEven = P.off[c * 2 + 1] * ms;
-                        const double base = T - lat + md;
-                        const float aEnd = A[c].read (clampD (base, maxD));
-                        const float bEnd = B[c].read (clampD (base, maxD));
-                        const float tapA = A[c].read (clampD (base + oOdd + feel, maxD));
-                        const float tapB = B[c].read (clampD (base + oEven + feel, maxD));
+                        const bool second = q.mode == 1 && c == 1;
+                        tSm[c].update (second ? t2 : t1, second ? q.sync2 : q.sync1, aT, xStep);
+                        const double md = c == 0 ? mL : mR;
+                        const double oOdd = P.off[c * 2] * ms + feel, oEven = P.off[c * 2 + 1] * ms + feel;
+                        const auto& ts = tSm[c];
+                        // 揺れは「B から A へ戻る所」と「出口のタップ」だけ（参考: 2 回目は 1 回目と同じ深さ、3 回目で T 離れた 2 つが重なる）
+                        const float aEnd = readT (ts, [&] (double T) { return A[c].read (clampD (T - lat, maxD)); });
+                        const float bEnd = readT (ts, [&] (double T) { return B[c].read (clampD (T - lat + md, maxD)); });
+                        const float tapA = readT (ts, [&] (double T) { return A[c].read (clampD (T - lat + md + oOdd + q.groove * T - outLat, maxD)); });
+                        const float tapB = readT (ts, [&] (double T) { return B[c].read (clampD (T - lat + md + oEven - outLat, maxD)); });
                         const float in = c == 0 ? inL : inR;
                         A[c].write (pa[c].process (in + fb * bEnd));
                         B[c].write (pb[c].process (fb * aEnd));
@@ -654,36 +684,59 @@ namespace echo
                 else if (q.mode == 2)
                 {
                     // Ping-Pong: 左右を足して 1 本。A（ECHO 1）→ 左、B（ECHO 2）→ 右、1 周で FEEDBACK 1 回
-                    tSm[0] += (t1 - tSm[0]) * aT; tSm2[0] += (t2 - tSm2[0]) * aT;
+                    tSm[0].update (t1, q.sync1, aT, xStep); tSm2[0].update (t2, q.sync2, aT, xStep);
                     const float mono = (inL + inR) * 0.70710678f;
-                    const double a = tSm[0] - lat + mL, b = tSm2[0] - lat + mR;
-                    const float aEnd = A[0].read (clampD (a, maxD));
-                    const float bEnd = B[0].read (clampD (b, maxD));
-                    const float tapA = A[0].read (clampD (a + feel, maxD));
-                    const float tapB = B[0].read (clampD (b + feel, maxD));
-                    A[0].write (pa[0].process (mono + fb * bEnd));
-                    B[0].write (pb[0].process (aEnd));
+                    const float aEnd = readT (tSm[0], [&] (double T) { return A[0].read (clampD (T - lat + mL, maxD)); });
+                    const float bEnd = readT (tSm2[0], [&] (double T) { return B[0].read (clampD (T, maxD)); });   // B は処理なし（遅れを引かない）・揺らさない
+                    // にじむスタイルは、Single と同じだけ前に出す（Digital のずれ −3.44 / +4.56 ms を引いた分）
+                    const double shL = (P.off[0] + 3.44) * ms, shR = (P.off[2] - 4.56) * ms;
+                    float tapA, tapB, toA;
+                    if (ppDiffInLoop)
+                    {
+                        // にじみはループの中（A に書く前）。前に出す分も 1 往復ごとに（参考と同じく往復ごとに広がる）
+                        const float aEnd2 = readT (tSm[0], [&] (double T) { return A[0].read (clampD (T - lat + mL + shL, maxD)); });
+                        tapA = readT (tSm[0], [&] (double T) { return A[0].read (clampD (T - lat + mL + shL + feel - outLat, maxD)); });
+                        tapB = readT (tSm2[0], [&] (double T) { return B[0].read (clampD (T + feel - outLat, maxD)); });
+                        toA = ppDiff.process (pa[0].process (mono + fb * bEnd));
+                        B[0].write (aEnd2);
+                    }
+                    else
+                    {
+                        tapA = readT (tSm[0], [&] (double T) { return A[0].read (clampD (T - lat + mL + feel + shL - outLat, maxD)); });
+                        tapB = readT (tSm2[0], [&] (double T) { return B[0].read (clampD (T + feel + shR - outLat, maxD)); });
+                        toA = pa[0].process (mono + fb * bEnd);
+                        B[0].write (aEnd);   // 参考は 1 往復で処理 1 回（右へ渡る所では削れない）
+                    }
+                    A[0].write (toA);
                     wet[0] = tapA; wet[1] = tapB;
                 }
                 else
                 {
-                    // Rhythm: 線 A に「入力 + くり返し」を書き、RHYTHM の間隔で REPEATS 個読む。全体は 2 拍ごとにくり返す
-                    rhythmSm += (q.rhythmMs * ms - rhythmSm) * aT;
+                    // Rhythm: 左右を足した音を線 A に「入力 + くり返し」で書き、RHYTHM の間隔で REPEATS 個読む。全体は 2 拍ごとにくり返す。
+                    // 出口は左右とも同じ（参考と同じ）
+                    rhythmSm.update (q.rhythmMs * ms, q.syncR, aT, xStep);
                     const double loopLen = std::max (1.0, q.loopBeatsMs * ms);
-                    for (int c = 0; c < 2; ++c)
+                    const float back = fb * A[0].read (clampD (loopLen - lat + mL, maxD));
+                    A[0].write (pa[0].process (inL + inR + back));
+                    float s = rg[0] * back;
+                    s += readT (rhythmSm, [&] (double RT)
                     {
-                        const double md = c == 0 ? mL : mR;
-                        const float back = fb * A[c].read (clampD (loopLen - lat + md, maxD));
-                        const float in = c == 0 ? inL : inR;
-                        A[c].write (pa[c].process (in + back));
-                        float s = rg[0] * back;
-                        for (int k = 1; k < nRep; ++k) s += rg[k] * A[c].read (clampD (k * rhythmSm - lat + md + feel, maxD));
-                        wet[c] = s;
-                    }
+                        float a = 0;
+                        for (int k = 1; k < nRep; ++k) a += rg[k] * A[0].read (clampD (k * RT - lat + mL + feel - outLat, maxD));
+                        return a;
+                    });
+                    wet[0] = wet[1] = s;
                 }
                 for (int c = 0; c < 2; ++c)
                 {
-                    float w = outDiff[c].process (colorSplit[c].process (color[c].process (wet[c])));
+                    float w = colorSplit[c].process (color[c].process (wet[c]));
+                    if (P.modOut)
+                    {
+                        // 出口の揺れ: 短い遅延線を outLat を中心に揺らす（その分ループの読み出しを早めてある）
+                        outMod[c].write (w);
+                        w = outMod[c].read (outLat + (c == 0 ? oML : oMR));
+                    }
+                    if (! ppDiffInLoop) w = outDiff[c].process (w);
                     w = lowCut2[c].process (lowCut[c].process (w));
                     wet[c] = w * duck;
                 }
@@ -702,15 +755,36 @@ namespace echo
         double fs = 48000;
         Params q;
         const Profile* prof = nullptr;
+        Profile custom {}; bool useCustom = false;
         bool configured = false;
         Halfband h1, h2;
         DelayLine A[2], B[2];
         Pass pa[2], pb[2];
         Chain color[2], colorSplit[2];
-        Diffuser outDiff[2];
+        Diffuser outDiff[2], ppDiff;
+        DelayLine outMod[2];
+        double outLat = 0;   // 出口で揺らすスタイルの遅れ（サンプル）
+        bool ppDiffInLoop = false;
         Biquad lowCut[2], lowCut2[2];
         ModGen mod;
-        double tSm[2] { -1, -1 }, tSm2[2] { -1, -1 }, rhythmSm = -1;
+        // 時間の状態: ms のつまみはなめらかに追い、音符・テンポは切り替え（old から cur へ xf でクロスフェード）
+        struct TimeState
+        {
+            double cur = -1, old = 0; float xf = 0;
+            inline void update (double target, bool jump, double a, float step)
+            {
+                if (cur < 0) { cur = target; xf = 0; return; }
+                if (jump) { if (std::abs (target - cur) > 0.5) { old = cur; cur = target; xf = 1.0f; } }
+                else cur += (target - cur) * a;
+                if (xf > 0) xf = std::max (0.0f, xf - step);
+            }
+        };
+        TimeState tSm[2], tSm2[2], rhythmSm;
+        template <class F> static inline float readT (const TimeState& t, F&& f)
+        {
+            const float v = f (t.cur);
+            return t.xf > 0 ? v + t.xf * (f (t.old) - v) : v;
+        }
         float inGain = 1, outGain = 1, dryG = 0.7f, wetG = 0.7f, duck = 1.0f;
         float rg[16] {}; int nRep = 8;
         std::vector<float> dryDelay;

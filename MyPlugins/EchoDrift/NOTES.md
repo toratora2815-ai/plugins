@@ -34,7 +34,7 @@ Echo Drift（EchoDrift、PLUGIN_CODE Ecdr、Plugin Link Kind 15）… テープ�
 - 読み出しは 32 点の窓付き sinc（Kaiser β 9、512 位相）。最小の遅れ 17 サンプル
 - 揺れ（ModGen）: 音程（セント）= 正弦 ＋ 四角（＝読み出しは三角に動く。半周期・ばらつき・角のなまり、右は同じ / 逆 / 別々）＋ ランダムなフラッター。
   位置のずれ = ∫(1 − 2^(c/1200))（30 秒で 0 に戻る漏れ）。0 を中心に動くように、四角は最初を半分の長さ、正弦は位相 0.25 から
-- 時間はなめらかに追う（時定数 0.504 s の指数。参考を測ると全スタイル同じ。切り替え式のスタイルはない）
+- 時間: ms のつまみはなめらかに追う（時定数 0.504 s の指数、全スタイル同じ）。音符・テンポで決まる時間は 20 ms のクロスフェードですぐ切替（TimeState）
 
 ## スタイル表（Source/Profiles.h、自動生成）
 build/EchoFit で: m1/m3（周波数特性・ループ）→ fit1.py（RBJ の直列に当てはめ）、m6/m6b（歪み）→ fitsat2.py、m5（揺れ。手で表にした値は gen.py の MOD）、
@@ -42,6 +42,8 @@ diffq.json（にじみの形、左右別 5 点）→ fitdiff2.py、m9（時間�
 m12（コンプの速さ）→ fitcomp.py、calib3.py（ずれ・音量・残りの A−B を 100 Hz〜8 kHz のエネルギーで合わせ込み、T = 700 ms）→ gen.py が Profiles.h を書く。
 host.swift / render_echo は環境変数 CHANGE="秒:id=値" で途中のつまみ変更、render_echo は ATT / REL / WOBBLE で上書き。
 比較: cmp1.py（時刻・帯域ごと）、cmpsat.py（歪み）、cmpmod.py（揺れ）、m9/m10/m11/m12 の mine。
+結果（1.2.0）: 短い音の頭 平均 1.9 dB（最大 8.6）、2 音の混変調 平均 4.0 dB、FEEDBACK 125% の行き着く音量 平均 2.9 dB・山 4.1 dB（テープ系は山が 3〜5 dB 尖る。
+Shortwave / Tube Reel の SATURATION 12 dB、Diffused、Squawk〔参考は 125% でも消える〕は合っていない）。Ping-Pong・Rhythm は普通のスタイルで ±0.2 dB・±1〜3 ms。
 結果（1.1.0）: 10 kHz までほぼ ±1〜2 dB、奇数偶数の音色差 平均 0.8 dB、周波数ごとの歪み 平均 0.8 dB、コンプの動き 平均 1.8 dB、揺れの深さ ±10%。
 
 ## ツール
@@ -49,6 +51,13 @@ host.swift / render_echo は環境変数 CHANGE="秒:id=値" で途中のつま�
 - tools/test_echo.cpp … 数値テスト（時刻・音量・FEEDBACK・MIX・125% で発振しない・無音・Ping-Pong・44.1/96 kHz・揺れ・処理の重さ）
 
 ## 版
+- 1.2.0（2026-11-06）: 音符・テンポで決まる時間は追いかけず 20 ms のクロスフェードで切替（参考と同じ。ms のつまみだけ 0.504 s で追う）。
+  Ping-Pong は 1 往復で処理 1 回（右へ渡る所は素通し）、にじみスタイルは往復ごとに広がる（ループの中、Verbed だけは出口）。
+  Rhythm は左右を足して両方へ同じものを出す、音量 = g/√(2Σg²)、RHYTHM の時間の式 0.1003·(e^(12.61x)−1)。
+  揺れは「B から A へ戻る所」と出口のタップだけ（2 回目は 1 回目と同じ深さ、3 回目で T 離れた 2 つが重なる）、Vibrato は出口で 1 回だけ（modOut）。
+  フラッターは帯域（flRate/4〜flRate）、右が左を遅れて追う型（sqRMode 3、Digital Chorus 0.6 s）、Roller Echo などの揺れの表を帯域ごとに合わせ直し。
+  歪み・コンプを 15 スタイルで当て直し（fitjoint.py: 正弦の音量・倍音、コンプの動き、2 音の混変調、短い音の頭を同時に、エンジンを鳴らして Nelder-Mead）。
+  FEEDBACK 100% 超えの天井をスタイルごとに（ceilDb、0〜8 dB。ふつうの音に触れないよう 0 dB 以上）
 - 1.1.0（2026-11-06）: 奇数・偶数回目の音色差（split）、歪みの周波数ごとの効き方（エンファシス）とコンプの速さをスタイルごとに、
   にじみをループの外へ（左右別の形、時間に関係なく一定、Splattered の最短 213 ms）、時間を変えたときの動きを 0.504 s に
 - 1.0.0（2026-11-06）: 最初の版。31 スタイル、4 モード、テンポ同期、PRIME、WOBBLE、内蔵プリセット 12、Plugin Link（Fader Pilot → VOCAL DUCK）

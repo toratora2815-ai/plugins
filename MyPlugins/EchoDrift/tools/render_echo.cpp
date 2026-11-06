@@ -68,6 +68,10 @@ static echo::Params toParams (std::map<int, double>& v)
     const double bpm = 30 + 210 * v[124];
     p.mode = (int) v[14];
     p.time1Ms = timeMs (v[20]); p.time2Ms = timeMs (v[26]);
+    // 音符モード（16 / 22 が 0 以外）: 19 / 25 の番号 0..6 = 1/1..1/64、7..13 = 3 連、14..20 = 付点
+    auto note = [&] (int idx) { const double b = 4 * 60000.0 / bpm / std::pow (2.0, idx % 7); return idx >= 14 ? b * 1.5 : (idx >= 7 ? b * 2.0 / 3.0 : b); };
+    if (v[16] > 0.5) { p.time1Ms = note ((int) v[19]); p.sync1 = true; }
+    if (v[22] > 0.5) { p.time2Ms = note ((int) v[25]); p.sync2 = true; }
     p.feedback = (float) (v[27] * 1.25);
     p.mix = (float) v[10];
     p.inputDb = (float) ((v[8] - 0.5) * 48); p.outputDb = (float) ((v[9] - 0.5) * 48);
@@ -78,7 +82,8 @@ static echo::Params toParams (std::map<int, double>& v)
     p.prime = v[31] > 0.5;
     p.style = (int) v[64];
     // RHYTHM の時間（0..1 → 0..30000 ms。参考と同じ形の指数）
-    p.rhythmMs = 0.0946 * (std::exp (12.67 * v[44]) - 1.0);
+    p.rhythmMs = 0.1003 * (std::exp (12.61 * v[44]) - 1.0);
+    if (v[39] > 0.5 && v[39] < 3.5) { const double b = 2 * 60000.0 / bpm / std::pow (2.0, (int) v[43] % 6); p.rhythmMs = v[39] == 2 ? b * 1.5 : (v[39] == 3 ? b * 2 / 3 : b); p.syncR = true; }
     p.repeats = 1 + (int) std::lround (v[51] * 15);
     p.decayDb = (float) (v[52] * 40);
     p.loopBeatsMs = 2 * 60000.0 / bpm;
@@ -103,6 +108,18 @@ int main (int argc, char** argv)
     echo::Params p = toParams (v);
     echo::Engine eng;
     eng.prepare (sr);
+    // 歪みの中身を差し替える（合わせ込み用）: PROF_OV="k,bias,thr,ratio,att,rel,dIn,dOut,dInSlope"
+    if (const char* ov = std::getenv ("PROF_OV"))
+    {
+        echo::Profile pr = echo::profiles()[std::max (0, std::min (echo::numProfiles() - 1, p.style))];
+        double x[9] {}; int n = 0; const char* c = ov;
+        while (n < 9 && *c) { x[n++] = std::strtod (c, (char**) &c); if (*c == ',') ++c; }
+        pr.hard = (float) x[0]; pr.bias = (float) x[1]; pr.compThr = (float) x[2]; pr.compRatio = (float) x[3];
+        pr.compAtt = (float) x[4]; pr.compRel = (float) x[5];
+        for (int i = 0; i < 5; ++i) { pr.satIn[i] += (float) (x[6] + x[8] * i); pr.satOut[i] += (float) (x[7] - x[8] * i); }
+        eng.overrideProfile (pr);
+    }
+    if (const char* c = std::getenv ("CEIL_DB")) eng.ceilOverride = (float) std::atof (c);
     if (const char* a = std::getenv ("ATT")) eng.compAttOverride = (float) std::atof (a);
     if (const char* r = std::getenv ("REL")) eng.compRelOverride = (float) std::atof (r);
     eng.set (p);

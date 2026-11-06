@@ -14,13 +14,13 @@ Logic Pro では **Audio Units → MyPlugins → Echo Drift**。
   - SINGLE: 左右とも ECHO 1 の時間。左右で少しだけ（数 ms）ずれて返ってくるので自然に広がる
   - DUAL: 左が ECHO 1、右が ECHO 2 の時間
   - PING-PONG: 左右を足して、左（ECHO 1）→ 右（ECHO 2）→ 左… と跳ねる
-  - RHYTHM: RHYTHM の間隔で REPEATS 個のタップ。全体が 2 拍ごとに FEEDBACK でくり返す
+  - RHYTHM: 左右を足した音に、RHYTHM の間隔で REPEATS 個のタップ（左右とも同じ）。全体が 2 拍ごとに FEEDBACK でくり返す
 - **PRESET** … 内蔵プリセット 12 個
 
 ### ECHO
 | つまみ | 意味 |
 |---|---|
-| ECHO 1 / ECHO 2 | エコーの時間（1 ms〜15 秒）。下の選択で **Time**（ms）/ **Note**（音符）/ **Dotted**（付点）/ **Triplet**（3 連）。音符のときはテンポに合わせる |
+| ECHO 1 / ECHO 2 | エコーの時間（1 ms〜15 秒）。下の選択で **Time**（ms）/ **Note**（音符）/ **Dotted**（付点）/ **Triplet**（3 連）。音符のときはテンポに合わせる。ms のつまみを回すとテープのように音程がうねりながら約 0.5 秒で移り、音符を切り替えたときはすぐ切り替わる |
 | RHYTHM / REPEATS / DECAY | RHYTHM モードだけ。タップの間隔、数（1〜16）、最後のタップがどれだけ小さくなるか（0〜40 dB） |
 | FEEDBACK | くり返しの量（0〜125%）。100% を超えると音がふくらみ続けるが、スタイルの歪みと天井（約 +6 dBFS）で止まる |
 | MIX | 元の音とエコーの割合（等パワー。50% で両方 −3 dB） |

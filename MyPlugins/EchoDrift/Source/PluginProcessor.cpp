@@ -124,8 +124,8 @@ echo::Params EchoDriftProcessor::readParams() const
     echo::Params q;
     q.mode = (int) v();
     q.style = (int) v();
-    { const double t = v(); const int s = (int) v(); const int n = (int) v(); q.time1Ms = s == 0 ? t : noteMs (s, n, 1.0); }
-    { const double t = v(); const int s = (int) v(); const int n = (int) v(); q.time2Ms = s == 0 ? t : noteMs (s, n, 1.0); }
+    { const double t = v(); const int s = (int) v(); const int n = (int) v(); q.time1Ms = s == 0 ? t : noteMs (s, n, 1.0); q.sync1 = s != 0; }
+    { const double t = v(); const int s = (int) v(); const int n = (int) v(); q.time2Ms = s == 0 ? t : noteMs (s, n, 1.0); q.sync2 = s != 0; }
     q.time1Ms = juce::jlimit (0.5, 15000.0, q.time1Ms);
     q.time2Ms = juce::jlimit (0.5, 15000.0, q.time2Ms);
     q.feedback = v() / 100.0f;
@@ -137,7 +137,7 @@ echo::Params EchoDriftProcessor::readParams() const
     q.feelMs = v() / 100.0 * beatMs;
     q.prime = v() > 0.5f;
     q.wobble = v() / 100.0f;
-    { const int s = (int) v(); const int n = (int) v(); const double t = v(); q.rhythmMs = s == 0 ? t : noteMs (s, n, 0.5); }
+    { const int s = (int) v(); const int n = (int) v(); const double t = v(); q.rhythmMs = s == 0 ? t : noteMs (s, n, 0.5); q.syncR = s != 0; }
     q.rhythmMs = juce::jlimit (1.0, 4000.0, q.rhythmMs);
     q.repeats = (int) v();
     q.decayDb = v();
