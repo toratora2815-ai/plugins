@@ -125,10 +125,57 @@ int main()
         std::printf ("     NORMALIZE + GAIN -6: peak %.2f dB\n", hs::ampDb (peak (y[0])));
         check (std::abs (hs::ampDb (peak (y[0])) - (-6.3f)) < 0.05f, "NORMALIZE to -0.3 dB, then GAIN");
     }
+
+    // STRETCH: 長さだけ変わって、高さと音量は変わらない
+    {
+        ss::Channels sine (2, std::vector<float> ((size_t) fs));
+        for (size_t i = 0; i < sine[0].size(); ++i) sine[0][i] = sine[1][i] = 0.5f * (float) std::sin (2 * M_PI * 220 * i / fs);
+        for (float f : { 2.0f, 0.5f, 1.5f, 4.0f, 0.25f })
+        {
+            auto s = plain; s.stretch = f;
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto y = ss::render (sine, fs, s);
+            const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
+            const double sec = y[0].size() / fs;
+            int zc = 0; const size_t a = (size_t) (0.05 * fs), b = y[0].size() - (size_t) (0.05 * fs);
+            for (size_t i = a + 1; i < b; ++i) if ((y[0][i - 1] < 0) != (y[0][i] < 0)) ++zc;
+            const double hz = zc / 2.0 / ((b - a) / fs);
+            // 10 ms ごとの RMS のばらつき（うなりがないか）
+            float mn = 1e9f, mx = -1e9f;
+            for (double t = 0.05; t + 0.06 < sec; t += 0.01) { const float r = rmsDb (y[0], t, t + 0.01); mn = std::min (mn, r); mx = std::max (mx, r); }
+            std::printf ("     STRETCH %.2fx: %.3f s, %.1f Hz, level wobble %.2f dB, %.0f ms\n", f, sec, hz, mx - mn, ms);
+            check (std::abs (sec - f) < 0.01 && std::abs (hz - 220) < 220 * (f < 0.3f ? 0.025 : 0.012) && mx - mn < 1.0f && finite (y), "STRETCH keeps pitch and level, changes length");
+        }
+        // キックを 2 倍: 頭が残って、壊れない
+        auto s = plain; s.stretch = 2.0f;
+        const auto y = ss::render (k, fs, s);
+        std::printf ("     kick STRETCH 2x: %.2f s, head %.1f dB vs %.1f dB\n", y[0].size() / fs, rmsDb (y[0], 0, 0.02), rmsDb (k[0], 0, 0.02));
+        check (std::abs (rmsDb (y[0], 0, 0.02) - rmsDb (k[0], 0, 0.02)) < 2.0f && finite (y), "STRETCH on a kick keeps the hit");
+    }
+    // LOW CUT / HIGH CUT / WIDTH
+    {
+        auto tone = [] (double hz) { ss::Channels c (2, std::vector<float> ((size_t) fs)); for (size_t i = 0; i < c[0].size(); ++i) c[0][i] = c[1][i] = 0.5f * (float) std::sin (2 * M_PI * hz * i / fs); return c; };
+        auto lvl = [] (const ss::Channels& c) { return rmsDb (c[0], 0.3, 0.9); };
+        auto s = plain; s.lowCutHz = 200;
+        const float l50 = lvl (ss::render (tone (50), fs, s)) - lvl (tone (50)), l1k = lvl (ss::render (tone (1000), fs, s)) - lvl (tone (1000));
+        s = plain; s.highCutHz = 2000;
+        const float h8k = lvl (ss::render (tone (8000), fs, s)) - lvl (tone (8000)), h200 = lvl (ss::render (tone (200), fs, s)) - lvl (tone (200));
+        std::printf ("     LOW CUT 200: 50 Hz %+.1f dB, 1 kHz %+.1f dB   HIGH CUT 2k: 8 kHz %+.1f dB, 200 Hz %+.1f dB\n", l50, l1k, h8k, h200);
+        check (l50 < -40 && std::abs (l1k) < 0.3f && h8k < -40 && std::abs (h200) < 0.3f, "LOW / HIGH CUT (24 dB/oct)");
+        ss::Channels st (2, std::vector<float> (4800));
+        for (size_t i = 0; i < st[0].size(); ++i) { st[0][i] = 0.3f * (float) std::sin (i * 0.05); st[1][i] = 0.3f * (float) std::sin (i * 0.031); }
+        s = plain; s.width = 0;
+        const auto m = ss::render (st, fs, s);
+        float d = 0; for (size_t i = 0; i < m[0].size(); ++i) d = std::max (d, std::abs (m[0][i] - m[1][i]));
+        s.width = 2;
+        const auto w2 = ss::render (st, fs, s);
+        const float side0 = std::abs (st[0][1000] - st[1][1000]), side2 = std::abs (w2[0][1000] - w2[1][1000]);
+        check (d < 1e-6f && std::abs (side2 - 2 * side0) < 1e-5f, "WIDTH 0 = mono, 200 % = side doubled");
+    }
     // 全部のせ（モノラル）と、とても短いもの
     {
         ss::Channels m (1, k[0]);
-        ss::Settings s; s.attack = 0.5f; s.length = 0.6f; s.room = 1; s.size = 1; s.tone = 1; s.drive = 0.5f; s.pitch = -5; s.reverse = ss::revAll;
+        ss::Settings s; s.attack = 0.5f; s.length = 0.6f; s.room = 1; s.size = 1; s.tone = 1; s.drive = 0.5f; s.pitch = -5; s.reverse = ss::revAll; s.stretch = 1.7f; s.lowCutHz = 80; s.highCutHz = 9000; s.width = 1.5f;
         check (finite (ss::render (m, fs, s)), "everything at once, mono");
         ss::Channels tiny (2, std::vector<float> (40, 0.3f));
         s.start = 0.9f; s.end = 0.1f;

@@ -1,5 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
+#include "PluginLinkJuce.h"
+#include "PresetBar.h"
 #include "Render.h"
 
 // 読み込んだ音・作り直した音
@@ -56,9 +58,17 @@ public:
     juce::File sourceFile() const { return juce::File (apvts.state.getProperty ("file", "").toString()); }
 
     juce::AudioProcessorValueTreeState apvts;
+
+    myp::Presets presets { *this, apvts, "SampleSculptor" };   // 自分のプリセット・取り消し
+
+    plink::Link link { plink::kindSampleSculptor, apvts };   // Plugin Link
+
+    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) link.setTrackName (*tp.name); }
     std::atomic<int> version { 0 };               // 作り直すたびに増える（画面が描き直す）
     std::atomic<bool> busy { false }, editorOpen { false };
-    std::atomic<float> playPos { -1.0f };         // 0..1、止まっているとき -1
+    std::atomic<float> playPos { -1.0f };         // 0..1、止まっているとき -1（A のときは元のファイルの中の位置）
+    std::atomic<bool> playingOriginal { false };
+    std::atomic<int> abMode { 0 };                // 0 = B（できた音）、1 = A（元の音、音量はそろえる）
     juce::String message;                         // 読めなかったとき等（メッセージスレッドだけ）
     void pollMessages();                          // 裏で読み終えた結果を state へ（メッセージスレッドから呼ぶ）
 
@@ -82,7 +92,9 @@ private:
     // 試し聴き（1 声）
     double hostFs = 48000.0, pos = 0.0, rate = 1.0;
     float voiceGain = 1.0f, declick = 0.0f;
-    bool playing = false;
+    bool playing = false, voiceOriginal = false;
+    double voiceFrom = 0, voiceTo = 0;
+    std::atomic<float> matchGain { 1.0f };
     std::atomic<int> playRequest { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SampleSculptorProcessor)

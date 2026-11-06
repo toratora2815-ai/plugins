@@ -85,21 +85,32 @@ private:
     void openChooser();
     void dragOut (juce::Component& from);
     void updateTile();
+    void updateAB();
 
     SampleSculptorProcessor& processor;
+
+    // 画面のいちばん下: Plugin Link と プリセット・取り消し
+
+    plink::LinkBar linkBar { processor.apvts, juce::Colour (0xffffb44d), juce::Colour (0xff1c1c20), juce::Colour (0xffe8e8ec) };
+
+    myp::PresetBar presetBar { processor.presets, juce::Colour (0xffffb44d), juce::Colour (0xff1c1c20), juce::Colour (0xffe8e8ec) };
+
+    static constexpr int footerH = 40;
+
+    void layoutFooter();
     SculptLook look;
     WaveView wave { processor };
-    Knob fadeIn, fadeOut, pitch, attack, snap, length, room, size, tone, drive, gain;
+    Knob fadeIn, fadeOut, pitch, stretch, attack, snap, length, room, size, tone, lowCut, highCut, width, drive, gain;
     juce::ComboBox reverseBox;
     juce::Label reverseLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> reverseAtt;
-    juce::TextButton openButton { "OPEN" }, playButton { "PLAY" }, saveButton { "EXPORT" }, resetButton { "RESET" };
+    juce::TextButton abButton { "B: RESULT" }, openButton { "OPEN" }, playButton { "PLAY" }, saveButton { "EXPORT" }, resetButton { "RESET" };
     juce::ToggleButton normalize { "NORMALIZE" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> normalizeAtt;
     ExportTile exportTile;
     std::unique_ptr<juce::FileChooser> chooser;
 
-    juce::Rectangle<int> gEdit, gShape, gRoom, gOut;
+    juce::Rectangle<int> gEdit, gShape, gRoom, gTone, gOut;
     int seenVersion = -1;
     bool dropHot = false;
     juce::String status;

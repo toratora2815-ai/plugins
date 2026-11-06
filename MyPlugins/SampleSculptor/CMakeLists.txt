@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
-project(SampleSculptor VERSION 1.1.0)
+project(SampleSculptor VERSION 1.2.0)
 
 option(COPY_AFTER_BUILD "Copy plugin to system folder after build" ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -47,3 +47,6 @@ target_link_libraries(SampleSculptor
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
+
+# 自作プラグイン共通の部品（Plugin Link・プリセット）
+target_include_directories(SampleSculptor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../Shared)

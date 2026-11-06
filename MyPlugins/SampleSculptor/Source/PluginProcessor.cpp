@@ -8,6 +8,8 @@ namespace
     juce::String pct1 (float v, int)      { return juce::String (v * 100.0f, 1) + " %"; }
     juce::String ms (float v, int)        { return v >= 1000.0f ? juce::String (v / 1000.0f, 2) + " s" : juce::String (v, v < 10.0f ? 1 : 0) + " ms"; }
     juce::String db (float v, int)        { return (v > 0.05f ? "+" : "") + juce::String (v, 1) + " dB"; }
+    juce::String hzLow (float v, int)     { return v <= 20.5f ? juce::String ("OFF") : juce::String (juce::roundToInt (v)) + " Hz"; }
+    juce::String hzHigh (float v, int)    { return v >= 19990.0f ? juce::String ("OFF") : (v >= 1000.0f ? juce::String (v / 1000.0f, 1) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz"); }
     juce::String semis (float v, int)     { return (v > 0.005f ? "+" : "") + juce::String (v, 1) + " st"; }
     constexpr double maxSeconds = 600.0;
 }
@@ -30,7 +32,8 @@ SampleSculptorProcessor::~SampleSculptorProcessor()
 const juce::StringArray& SampleSculptorProcessor::paramIds()
 {
     static const juce::StringArray ids { "start", "end", "fadein", "fadeout", "reverse", "pitch", "attack", "snap", "length",
-                                         "room", "size", "tone", "drive", "gain", "normalize" };
+                                         "room", "size", "tone", "drive", "gain", "normalize",
+                                         "stretch", "lowcut", "highcut", "width" };
     return ids;
 }
 
@@ -52,6 +55,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout SampleSculptorProcessor::cre
     v.push_back (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "reverse", 1 }, "Reverse",
                                                                juce::StringArray { "OFF", "SOUND", "SOUND + ROOM" }, 0));
     add ("pitch", "Pitch", { -24.0f, 24.0f, 0.1f }, 0.0f, semis);
+    add ("stretch", "Stretch", skewed (25.0f, 400.0f, 1.0f, 100.0f), 100.0f, pct);
+    add ("lowcut", "Low Cut", skewed (20.0f, 1000.0f, 1.0f, 120.0f), 20.0f, hzLow);
+    add ("highcut", "High Cut", skewed (1000.0f, 20000.0f, 10.0f, 6000.0f), 20000.0f, hzHigh);
+    add ("width", "Width", { 0.0f, 200.0f, 1.0f }, 100.0f, pct);
     add ("attack", "Attack", { -100.0f, 100.0f, 1.0f }, 0.0f, pctSigned);
     add ("snap", "Snap", skewed (1.0f, 50.0f, 0.1f, 12.0f), 15.0f, ms);
     add ("length", "Length", { -100.0f, 100.0f, 1.0f }, 0.0f, pctSigned);
@@ -61,6 +68,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout SampleSculptorProcessor::cre
     add ("drive", "Drive", { 0.0f, 100.0f, 1.0f }, 0.0f, pct);
     add ("gain", "Gain", { -24.0f, 24.0f, 0.1f }, 0.0f, db);
     v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "normalize", 1 }, "Normalize", true));
+    // Plugin Link（LINK の番号）
+    v.push_back (plink::makeGroupParameter (9));
     return { v.begin(), v.end() };
 }
 
@@ -80,6 +89,10 @@ ss::Settings SampleSculptorProcessor::readSettings() const
     s.fadeOutMs = f ("fadeout");
     s.reverse = (int) f ("reverse");
     s.pitch = f ("pitch");
+    s.stretch = f ("stretch") / 100.0f;
+    s.lowCutHz = f ("lowcut");
+    s.highCutHz = f ("highcut");
+    s.width = f ("width") / 100.0f;
     s.attack = f ("attack") / 100.0f;
     s.snapMs = f ("snap");
     s.length = f ("length") / 100.0f;
@@ -177,6 +190,19 @@ void SampleSculptorProcessor::run()
                 rendered = out;
             }
             old.reset();   // 古い音はここ（裏のスレッド）で捨てる
+            {
+                // A/B の音量合わせ: 元の音（START〜END）と、できた音の RMS
+                auto rms = [] (const ss::Channels& c, size_t a, size_t b)
+                {
+                    double e = 0; size_t k = 0;
+                    for (auto& v : c) for (size_t i = a; i < std::min (b, v.size()); ++i) { e += (double) v[i] * v[i]; ++k; }
+                    return std::sqrt (e / (double) std::max<size_t> (1, k));
+                };
+                const auto st = readSettings();
+                const size_t n = src->length();
+                const double rs = rms (src->ch, (size_t) (st.start * n), (size_t) (st.end * n)), ro = rms (out->ch, 0, out->length());
+                matchGain = rs > 1e-7 ? (float) juce::jlimit (0.06, 16.0, ro / rs) : 1.0f;
+            }
             busy = false;
             ++version;
             if (playAfter.exchange (false)) playRequest = 1;
@@ -200,19 +226,28 @@ void SampleSculptorProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     const juce::SpinLock::ScopedTryLockType l (lock);
     if (! l.isLocked()) return;   // 作り直した音を入れ替えている瞬間（ほんの一瞬）
-    const SampleAudio* a = rendered.get();
-    const size_t len = a != nullptr ? a->length() : 0;
-
+    const int req = playRequest.exchange (0);
     auto start = [&] (double semitones, float gain)
     {
-        if (len == 0) return;
-        pos = 0.0;
-        rate = a->fs / hostFs * std::pow (2.0, semitones / 12.0);
+        voiceOriginal = abMode.load() == 1;
+        const SampleAudio* v = voiceOriginal ? source.get() : rendered.get();
+        if (v == nullptr || v->length() < 2) { playing = false; return; }
+        const double L = (double) v->length();
+        if (voiceOriginal)
+        {
+            // A = 元の音（START〜END の所だけ）。音量は B（できた音）にそろえる
+            const double st = apvts.getRawParameterValue ("start")->load(), en = apvts.getRawParameterValue ("end")->load();
+            voiceFrom = juce::jlimit (0.0, L - 2, std::floor (st * L));
+            voiceTo = juce::jlimit (voiceFrom + 1, L - 1, std::ceil (juce::jmax (en, st + 0.001) * L));
+            gain *= matchGain.load();
+        }
+        else { voiceFrom = 0; voiceTo = L - 1; }
+        pos = voiceFrom;
+        rate = v->fs / hostFs * std::pow (2.0, semitones / 12.0);
         voiceGain = gain;
         declick = playing ? 0.0f : 1.0f;
         playing = true;
     };
-    const int req = playRequest.exchange (0);
     if (req == 1) start (0.0, 1.0f);
     if (req == 2) playing = false;
 
@@ -220,14 +255,18 @@ void SampleSculptorProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     int next = 0;
     auto renderTo = [&] (int until)
     {
+        const SampleAudio* a = voiceOriginal ? source.get() : rendered.get();
+        if (a == nullptr) playing = false;
         for (int i = next; i < until; ++i)
         {
             if (! playing) break;
             const size_t i0 = (size_t) pos;
-            if (i0 + 1 >= len) { playing = false; break; }
+            if ((double) i0 + 1 >= voiceTo || i0 + 1 >= a->length()) { playing = false; break; }
             const float f = (float) (pos - (double) i0);
             declick = juce::jmin (1.0f, declick + 0.01f);
-            const float g = voiceGain * declick;
+            // 終わりの 3 ms はフェード（A の切り取りでプチッとしないように）
+            const float tail = (float) juce::jmin (1.0, (voiceTo - pos) / (0.003 * a->fs));
+            const float g = voiceGain * declick * tail;
             for (int c = 0; c < outCh; ++c)
             {
                 const auto& src = a->ch[(size_t) juce::jmin (c, (int) a->ch.size() - 1)];
@@ -244,7 +283,9 @@ void SampleSculptorProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         if (msg.isNoteOn()) start (msg.getNoteNumber() - 60, msg.getFloatVelocity());
     }
     renderTo (n);
-    playPos = playing && len > 0 ? (float) (pos / (double) len) : -1.0f;
+    const SampleAudio* shown = voiceOriginal ? source.get() : rendered.get();
+    playPos = playing && shown != nullptr && shown->length() > 0 ? (float) (pos / (double) shown->length()) : -1.0f;
+    playingOriginal = playing && voiceOriginal;
 }
 
 juce::File SampleSculptorProcessor::outputFolder()

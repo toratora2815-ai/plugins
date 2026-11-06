@@ -138,7 +138,13 @@ void WaveView::paint (juce::Graphics& g)
     if (pp >= 0.0f)
     {
         g.setColour (text);
-        g.fillRect (ol.getX() + pp * ol.getWidth() - 1.0f, ol.getY(), 2.0f, ol.getHeight());
+        if (proc.playingOriginal.load()) g.fillRect (sl.getX() + pp * sl.getWidth() - 1.0f, sl.getY(), 2.0f, sl.getHeight());
+        else                             g.fillRect (ol.getX() + pp * ol.getWidth() - 1.0f, ol.getY(), 2.0f, ol.getHeight());
+    }
+    if (proc.abMode.load() == 1)
+    {
+        g.setColour (text.withAlpha (0.8f));
+        g.drawText ("A: hearing the ORIGINAL (level matched)", juce::Rectangle<float> (sl.getX(), 4, sl.getWidth(), 16), juce::Justification::centredRight);
     }
 }
 
@@ -219,6 +225,12 @@ SampleSculptorEditor::SampleSculptorEditor (SampleSculptorProcessor& p) : AudioP
     setupKnob (fadeIn,  "fadein",  "FADE IN",  false, 0.0, violet);
     setupKnob (fadeOut, "fadeout", "FADE OUT", false, 0.0, violet);
     setupKnob (pitch,   "pitch",   "PITCH",    true, 0.0, violet);
+    setupKnob (stretch, "stretch", "STRETCH",  false, 100.0, violet);
+    setupKnob (lowCut,  "lowcut",  "LOW CUT",  false, 20.0, juce::Colour (0xff7fb8ff));
+    setupKnob (highCut, "highcut", "HIGH CUT", false, 20000.0, juce::Colour (0xff7fb8ff));
+    setupKnob (width,   "width",   "WIDTH",    false, 100.0, juce::Colour (0xff7fb8ff));
+    stretch.slider.setTooltip ("make it longer / shorter WITHOUT changing the pitch (100 % = as is)");
+    width.slider.setTooltip ("0 % = mono, 100 % = as is, 200 % = wider (stereo files only)");
     setupKnob (attack,  "attack",  "ATTACK",   true, 0.0, accent);
     setupKnob (snap,    "snap",    "SNAP",     false, 15.0, accent);
     setupKnob (length,  "length",  "LENGTH",   true, 0.0, accent);
@@ -244,7 +256,14 @@ SampleSculptorEditor::SampleSculptorEditor (SampleSculptorProcessor& p) : AudioP
     addAndMakeVisible (reverseBox);
     reverseAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (processor.apvts, "reverse", reverseBox);
 
-    for (auto* b : { &openButton, &playButton, &saveButton, &resetButton })
+    abButton.setTooltip ("A = the original (level matched), B = the result. Click to switch and hear it");
+    abButton.onClick = [this]
+    {
+        processor.abMode = processor.abMode.load() == 1 ? 0 : 1;
+        updateAB();
+        processor.play();
+    };
+    for (auto* b : { &abButton, &openButton, &playButton, &saveButton, &resetButton })
     {
         b->setColour (juce::TextButton::buttonColourId, edge);
         b->setColour (juce::TextButton::textColourOffId, text);
@@ -278,8 +297,12 @@ SampleSculptorEditor::SampleSculptorEditor (SampleSculptorProcessor& p) : AudioP
     exportTile.onClick = [this] { auto f = processor.exportWav(); if (f.existsAsFile()) f.revealToUser(); updateTile(); };
     wave.onDragOut = [this] { dragOut (wave); };
     addAndMakeVisible (exportTile);
+    addAndMakeVisible (linkBar);
+    addAndMakeVisible (presetBar);
+    linkBar.status = [this] (bool& lit) -> juce::String { lit = processor.link.on(); return lit ? juce::String ("on this LINK") : juce::String ("Plugin Link OFF"); };
 
-    setSize (900, 610);
+    updateAB();
+    setSize (1040, 620 + footerH);
     wave.refresh();
     startTimerHz (30);
 }
@@ -294,7 +317,7 @@ void SampleSculptorEditor::setupKnob (Knob& k, const char* id, const char* name,
 {
     auto& s = k.slider;
     s.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    s.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 76, 18);
+    s.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, 18);
     s.setColour (juce::Slider::rotarySliderFillColourId, c);
     s.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     s.setColour (juce::Slider::textBoxTextColourId, text);
@@ -304,7 +327,7 @@ void SampleSculptorEditor::setupKnob (Knob& k, const char* id, const char* name,
     s.setDoubleClickReturnValue (true, def);
     k.label.setText (name, juce::dontSendNotification);
     k.label.setJustificationType (juce::Justification::centred);
-    k.label.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    k.label.setFont (juce::FontOptions (11.0f, juce::Font::bold));
     k.label.setColour (juce::Label::textColourId, text);
     addAndMakeVisible (k.label);
 }
@@ -318,6 +341,14 @@ void SampleSculptorEditor::dragOut (juce::Component& from)
     updateTile();
     repaint();
     juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, &from);
+}
+
+void SampleSculptorEditor::updateAB()
+{
+    const bool a = processor.abMode.load() == 1;
+    abButton.setButtonText (a ? "A: ORIGINAL" : "B: RESULT");
+    abButton.setColour (juce::TextButton::buttonColourId, a ? text.withAlpha (0.85f) : edge);
+    abButton.setColour (juce::TextButton::textColourOffId, a ? bg : accent);
 }
 
 void SampleSculptorEditor::updateTile()
@@ -369,13 +400,16 @@ void SampleSculptorEditor::timerCallback()
 
 void SampleSculptorEditor::resized()
 {
-    auto b = getLocalBounds().reduced (16);
+    layoutFooter();
+    auto b = getLocalBounds().withTrimmedBottom (footerH).reduced (16);
     auto top = b.removeFromTop (34);
     resetButton.setBounds (top.removeFromRight (70).reduced (0, 3));
     top.removeFromRight (8);
     normalize.setBounds (top.removeFromRight (110));
     top.removeFromRight (8);
     playButton.setBounds (top.removeFromRight (80).reduced (0, 3));
+    top.removeFromRight (8);
+    abButton.setBounds (top.removeFromRight (110).reduced (0, 3));
     top.removeFromRight (8);
     openButton.setBounds (top.removeFromRight (70).reduced (0, 3));
     b.removeFromTop (8);
@@ -389,12 +423,13 @@ void SampleSculptorEditor::resized()
     wave.setBounds (b.removeFromTop (240));
     b.removeFromTop (12);
 
-    // EDIT 3 / SHAPE 3 / ROOM 3 / OUT 2
-    const int gap = 10;
-    const float unit = (float) (b.getWidth() - gap * 3) / 11.0f;
-    gEdit = b.removeFromLeft ((int) (unit * 3)); b.removeFromLeft (gap);
+    // EDIT 4 / SHAPE 3 / ROOM 3 / TONE 3 / OUT 2
+    const int gap = 8;
+    const float unit = (float) (b.getWidth() - gap * 4) / 15.0f;
+    gEdit = b.removeFromLeft ((int) (unit * 4)); b.removeFromLeft (gap);
     gShape = b.removeFromLeft ((int) (unit * 3)); b.removeFromLeft (gap);
     gRoom = b.removeFromLeft ((int) (unit * 3)); b.removeFromLeft (gap);
+    gTone = b.removeFromLeft ((int) (unit * 3)); b.removeFromLeft (gap);
     gOut = b;
 
     auto place = [] (juce::Rectangle<int> area, std::initializer_list<Knob*> ks)
@@ -410,10 +445,11 @@ void SampleSculptorEditor::resized()
         }
     };
     auto e = gEdit;
-    reverseBox.setBounds (e.removeFromTop (26).withTrimmedLeft (54).reduced (6, 2));
-    place (gEdit, { &fadeIn, &fadeOut, &pitch });
+    reverseBox.setBounds (e.removeFromTop (26).withTrimmedLeft (50).withWidth (190).reduced (4, 2));
+    place (gEdit, { &fadeIn, &fadeOut, &pitch, &stretch });
     place (gShape, { &attack, &snap, &length });
     place (gRoom, { &room, &size, &tone });
+    place (gTone, { &lowCut, &highCut, &width });
     place (gOut, { &drive, &gain });
 }
 
@@ -440,6 +476,7 @@ void SampleSculptorEditor::paint (juce::Graphics& g)
     group (gEdit, "EDIT", violet);
     group (gShape, "SHAPE", accent);
     group (gRoom, "ROOM", teal);
+    group (gTone, "TONE", juce::Colour (0xff7fb8ff));
     group (gOut, "OUT", text.withAlpha (0.6f));
 
     if (status.isNotEmpty())
@@ -452,8 +489,26 @@ void SampleSculptorEditor::paint (juce::Graphics& g)
     if (dropHot)
     {
         g.setColour (accent.withAlpha (0.15f));
-        g.fillRect (getLocalBounds());
+        g.fillRect (getLocalBounds().withTrimmedBottom (footerH));
         g.setColour (accent);
-        g.drawRect (getLocalBounds(), 3);
+        g.drawRect (getLocalBounds().withTrimmedBottom (footerH), 3);
+    }
+}
+
+// 画面のいちばん下（Plugin Link と プリセット・取り消し）。幅が狭いときは 2 段
+void SampleSculptorEditor::layoutFooter()
+{
+    auto f = getLocalBounds().removeFromBottom (footerH).reduced (8, 5);
+    if (getWidth() >= 760)
+    {
+        presetBar.setBounds (f.removeFromRight (presetBar.preferredWidth()).withSizeKeepingCentre (presetBar.preferredWidth(), myp::PresetBar::height));
+        f.removeFromRight (6);
+        linkBar.setBounds (f.withSizeKeepingCentre (f.getWidth(), plink::LinkBar::height));
+    }
+    else
+    {
+        linkBar.setBounds (f.removeFromTop (plink::LinkBar::height));
+        f.removeFromTop (4);
+        presetBar.setBounds (f.removeFromTop (myp::PresetBar::height));
     }
 }

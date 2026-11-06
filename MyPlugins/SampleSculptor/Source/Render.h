@@ -3,7 +3,8 @@
 //
 // 順番:  切り取り（START / END）→ ピッチ（再生速度ごと）→ 形（ATTACK / LENGTH / ROOM の DRY 側）
 //        → 逆再生（SOUND）→ 響きを足す（ROOM の WET 側、尾の分だけ長くなる）→ 逆再生（SOUND + ROOM = 吸い込む響き）
-//        → DRIVE（4 倍オーバーサンプリング）→ フェード → 音量（NORMALIZE / GAIN）
+//        → DRIVE（4 倍オーバーサンプリング）→ LOW / HIGH CUT → WIDTH → フェード → 音量（NORMALIZE / GAIN）
+//        STRETCH（音程そのまま長さだけ）は切り取りのすぐ後
 #include "HitEngine.h"
 #include <vector>
 #include <cmath>
@@ -21,6 +22,9 @@ namespace ss
         float fadeInMs = 0.0f, fadeOutMs = 0.0f;
         int reverse = revOff;
         float pitch = 0.0f;                       // 半音
+        float stretch = 1.0f;                     // 長さの倍率（音程は変えない）0.25..4
+        float lowCutHz = 20.0f, highCutHz = 20000.0f;   // 20 / 20000 = なし
+        float width = 1.0f;                       // 0 = モノラル、1 = そのまま、2 = 広く
         float attack = 0.0f, snapMs = 15.0f, length = 0.0f;   // -1..1
         float room = 0.0f, size = 0.4f, tone = 0.5f;          // room -1..1
         float drive = 0.0f;                       // 0..1
@@ -123,6 +127,131 @@ namespace ss
         }
     }
 
+    // STRETCH: 音程を変えずに長さだけ変える（WSOLA。窓 約 43 ms、半分ずつ重ねる。
+    // 次の窓は「前の窓の自然な続き」に一番似た所を ±11 ms から探すので、うなりやブツブツが出にくい）
+    inline Channels timeStretch (const Channels& in, double factor, double fs)
+    {
+        if (std::abs (factor - 1.0) < 0.005 || in.empty() || in[0].size() < 64) return in;
+        int N = (int) std::lround (2048.0 * fs / 48000.0);
+        N = std::max (256, N & ~7);
+        const int Hs = N / 2, tol = N / 4, half = N / 2;
+        const double Ha = Hs / factor;
+        const long inN = (long) in[0].size();
+        const long outN = std::max<long> (16, (long) std::lround ((double) inN * factor));
+
+        // 似た所探しは、左右を足して 4 分の 1 に間引いたもので
+        const int D = 4;
+        std::vector<float> mono ((size_t) inN, 0.0f);
+        for (auto& c : in) for (long i = 0; i < inN; ++i) mono[(size_t) i] += c[(size_t) i];
+        std::vector<float> md ((size_t) (inN / D + 1), 0.0f);
+        for (long i = 0; i < inN; ++i) md[(size_t) (i / D)] += mono[(size_t) i];
+        auto atM = [&] (long i) { return i >= 0 && i < inN ? mono[(size_t) i] : 0.0f; };
+        auto atD = [&] (long i) { return i >= 0 && i < (long) md.size() ? md[(size_t) i] : 0.0f; };
+
+        std::vector<float> w ((size_t) N);
+        for (int i = 0; i < N; ++i) w[(size_t) i] = 0.5f - 0.5f * (float) std::cos (2.0 * M_PI * i / N);   // 50 % 重ねで足すと 1
+
+        Channels out (in.size(), std::vector<float> ((size_t) outN, 0.0f));
+        std::vector<float> wsum ((size_t) outN, 0.0f);
+        long prevC = 0;
+        for (long k = 0; k * Hs - half < outN; ++k)
+        {
+            const long oc = k * Hs;                 // 出力の窓の真ん中
+            long c = (long) std::lround (k * Ha);   // 入力の窓の真ん中（予定）
+            if (k > 0)
+            {
+                const long nat = prevC + Hs;        // 前の窓の自然な続き
+                const long lo = std::max<long> (0, c - tol), hi = std::min<long> (inN - 1, c + tol);
+                // 粗く（4 サンプルおき）
+                long best = std::clamp (c, lo, hi);
+                double bestV = -1e30;
+                for (long cand = lo; cand <= hi; cand += D)
+                {
+                    double v = 0;
+                    for (int i = -half / D; i < half / D; ++i) v += (double) atD ((cand / D) + i) * atD ((nat / D) + i);
+                    if (v > bestV) { bestV = v; best = cand; }
+                }
+                // 細かく（±3）
+                const long b0 = best;
+                bestV = -1e30;
+                for (long cand = std::max (lo, b0 - 3); cand <= std::min (hi, b0 + 3); ++cand)
+                {
+                    double v = 0;
+                    for (int i = -half; i < half; i += 2) v += (double) atM (cand + i) * atM (nat + i);
+                    if (v > bestV) { bestV = v; best = cand; }
+                }
+                c = best;
+            }
+            for (size_t ch = 0; ch < in.size(); ++ch)
+            {
+                const auto& src = in[ch];
+                auto& dst = out[ch];
+                for (int i = 0; i < N; ++i)
+                {
+                    const long o = oc - half + i, s = c - half + i;
+                    if (o < 0 || o >= outN) continue;
+                    const float v = (s >= 0 && s < inN) ? src[(size_t) s] : 0.0f;
+                    dst[(size_t) o] += v * w[(size_t) i];
+                    if (ch == 0) wsum[(size_t) o] += w[(size_t) i];
+                }
+            }
+            prevC = c;
+        }
+        for (auto& ch : out)
+            for (long i = 0; i < outN; ++i) ch[(size_t) i] /= std::max (wsum[(size_t) i], 1.0e-3f);
+        return out;
+    }
+
+    // LOW / HIGH CUT（バターワース 4 次 = 24 dB/oct。前から 1 回だけかけるので、打った瞬間より前に音がにじまない）
+    struct Biquad
+    {
+        double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+        void set (bool highpass, double fc, double q, double fs)
+        {
+            const double w0 = 2 * M_PI * fc / fs, cw = std::cos (w0), al = std::sin (w0) / (2 * q), a0 = 1 + al;
+            if (highpass) { b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = (1 + cw) / 2; }
+            else          { b0 = (1 - cw) / 2; b1 = 1 - cw;    b2 = (1 - cw) / 2; }
+            b0 /= a0; b1 /= a0; b2 /= a0; a1 = -2 * cw / a0; a2 = (1 - al) / a0;
+        }
+        float process (float x)
+        {
+            const double y = b0 * x + z1;
+            z1 = b1 * x - a1 * y + z2;
+            z2 = b2 * x - a2 * y;
+            return (float) y;
+        }
+    };
+
+    inline void cutFilters (Channels& c, float lowHz, float highHz, double fs)
+    {
+        const bool lo = lowHz > 20.5f, hi = highHz < 19900.0f && highHz < fs * 0.45;
+        if (! lo && ! hi) return;
+        for (auto& x : c)
+        {
+            Biquad f[4];
+            if (lo) { f[0].set (true, lowHz, 0.5412, fs); f[1].set (true, lowHz, 1.3066, fs); }
+            if (hi) { f[2].set (false, highHz, 0.5412, fs); f[3].set (false, highHz, 1.3066, fs); }
+            for (auto& v : x)
+            {
+                float y = v;
+                if (lo) y = f[1].process (f[0].process (y));
+                if (hi) y = f[3].process (f[2].process (y));
+                v = y;
+            }
+        }
+    }
+
+    // WIDTH: 真ん中（M）はそのまま、左右の差（S）だけを 0〜2 倍
+    inline void stereoWidth (Channels& c, float width)
+    {
+        if (c.size() < 2 || std::abs (width - 1.0f) < 0.001f) return;
+        for (size_t i = 0; i < c[0].size(); ++i)
+        {
+            const float m = 0.5f * (c[0][i] + c[1][i]), sd = 0.5f * (c[0][i] - c[1][i]) * width;
+            c[0][i] = m + sd; c[1][i] = m - sd;
+        }
+    }
+
     inline Channels render (const Channels& src, double fs, const Settings& s)
     {
         if (src.empty() || src[0].empty()) return {};
@@ -136,7 +265,8 @@ namespace ss
         Channels x;
         for (int c = 0; c < numCh; ++c) x.emplace_back (src[(size_t) c].begin() + (long) a, src[(size_t) c].begin() + (long) b);
 
-        // 2. ピッチ
+        // 2. STRETCH（音程そのまま）→ ピッチ（速さごと）
+        x = timeStretch (x, std::clamp (s.stretch, 0.25f, 4.0f), fs);
         x = repitch (x, s.pitch);
 
         // 3. 形（ROOM は DRY 側だけ。WET はあとで）
@@ -191,6 +321,10 @@ namespace ss
 
         // 7. DRIVE
         drive (x, s.drive);
+
+        // 7b. LOW / HIGH CUT と WIDTH
+        cutFilters (x, s.lowCutHz, s.highCutHz, fs);
+        stereoWidth (x, s.width);
 
         // 8. フェード（なめらかな曲線）
         const size_t len = x[0].size();
