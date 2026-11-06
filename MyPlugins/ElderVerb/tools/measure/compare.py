@@ -41,7 +41,8 @@ if __name__ == "__main__":
         p = dict(pp, ReverbMode=k / 24)
         a = ir(p, tail=10); b = rend(p, 10)
         fa, fb = fit.features(a), fit.features(b)
-        dc = np.mean(np.abs(np.log(np.maximum(fb["dc"], .5) / np.maximum(fa["dc"], .5)))) * 100
+        m = FREQS <= 10000   # 70s は 12 kHz より上がほぼ無音（本物は -90 dB のノイズ）なので、聞こえる帯域で比べる
+        dc = np.mean(np.abs(np.log(np.maximum(fb["dc"][m], .5) / np.maximum(fa["dc"][m], .5)))) * 100
         env = np.mean(np.abs(fa["env"] - fb["env"]))
         m = FREQS <= 10000   # 70s は 12 kHz より上がほぼ無音（本物は -90 dB のノイズ）なので、聞こえる帯域で比べる
         sp = np.mean(np.abs((fa["sL"][m] - fa["sL"][m].mean()) - (fb["sL"][m] - fb["sL"][m].mean())))

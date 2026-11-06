@@ -32,7 +32,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`, `Pchd`, `Blsc`, `Rfrc`, `Hzsp`, `Vltm`, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`, `Pchd`, `Blsc`, `Rfrc`, `Hzsp`, `Vltm`, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`, `Eldv`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -186,6 +186,11 @@
   合わせ込みの数値は Tuning（tools/hf_cli.cpp が測定用の CLI）
   v1.1.0: Plugin Link（Balance Scope の出すぎ帯域を linkBands で足す、削り量を 16 帯域で送る）、プリセット保存・取り消し
 
+- Elder Verb（ElderVerb）… 70〜80 年代のデジタルリバーブ機材ふうのリバーブ。この Mac の市販ビンテージリバーブを AU で鳴らして測り、合わせ込んだオリジナル。
+  22 モード（Concert Hall〜Vintage Hall、順番は本物の ReverbMode = k/24 の k−1）、COLOR 70s / 80s / NOW、つまみ 15 個は本物と同じ 0..1 の意味なので、
+  この Mac の .vpreset をプリセットメニューからそのまま読める。エンジンは ElderEngine.h（JUCE なし）: 入口の拡散 4 段 → 粒のかたまり（ATTACK で形と始まり）→ 4 枝の輪。
+  モードごとの性格は Source/Profiles.h（tools/measure の fit.py / fitmod.py → genprof.py で自動生成。作業データは build/ElderVerbFit、AU を鳴らす auhost.swift）。
+  70s は出口に 12 kHz の 12 次楕円（VintageFilter.h）＋ループ内 12.7 kHz の 1 次。比べ方は tools/measure/compare.py au
 - Meld Verb（MeldVerb）… EARLY / PLATE / HALL の 3 つを三角形の BLEND パッドで混ぜるリバーブ。市販の同じ型のリバーブを AU で鳴らして測り、合わせ込んだオリジナル。
   エンジンは MeldEngine.h（JUCE なし）: Early（12 個の跳ね返りを TIME の中に並べ、SIZE＝にじみの長さのオールパス、ANGLE＝時間で大きく／小さく＋左右の割合、残りの小さな 4 本 FDN）、
   Tank（16 本 FDN。中域の残響時間 = rtMul × TIME〔PLATE 1.32 / HALL 1.25〕、空気の吸収と BALANCE は「1 回あたり一定」の損失、LOWPASS は残響時間の上限〔SIZE で伸びる〕）、
