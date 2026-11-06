@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "MacSupport.h"
+#include "NoiseReduce.h"
 
 namespace
 {
@@ -459,7 +460,19 @@ bool MainComponent::ensureDevice()
         ringW = 0;
         devices.addAudioCallback (this);
     };
-    if (devices.getCurrentAudioDevice() != nullptr) { prepare(); return true; }
+    // マイクは Mac 本体に固定（Bluetooth のマイクを開くと、AirPods などが電話用の低い音質になる）
+    auto useBuiltIn = [this]
+    {
+        if (! props->getBoolValue ("builtInMic", true)) return;
+        const auto name = juce::String::fromUTF8 (mac::builtInMicName().c_str());
+        if (name.isEmpty()) return;
+        auto setup = devices.getAudioDeviceSetup();
+        if (setup.inputDeviceName == name) return;
+        setup.inputDeviceName = name;
+        setup.useDefaultInputChannels = true;
+        devices.setAudioDeviceSetup (setup, true);
+    };
+    if (devices.getCurrentAudioDevice() != nullptr) { useBuiltIn(); if (devices.getCurrentAudioDevice() == nullptr) return false; prepare(); return true; }
     juce::String err;
     if (! devicesInited)
     {
@@ -469,6 +482,7 @@ bool MainComponent::ensureDevice()
     }
     else
         devices.restartLastAudioDevice();
+    if (devices.getCurrentAudioDevice() != nullptr) useBuiltIn();
     if (devices.getCurrentAudioDevice() == nullptr)
     {
         setState (cur.valid ? Done : Idle);
@@ -738,8 +752,10 @@ void MainComponent::stopRecording()
 
     const auto dv = humKeysDrumVoice();
     const double fs = recFs;
-    juce::Thread::launch ([sp = juce::Component::SafePointer<MainComponent> (this), samples = std::move (samples), fs, dv, ao, gridT0, gridStep, m]() mutable
+    const int noise = props->getIntValue ("noise", 1);
+    juce::Thread::launch ([sp = juce::Component::SafePointer<MainComponent> (this), samples = std::move (samples), fs, dv, ao, gridT0, gridStep, m, noise]() mutable
     {
+        nr::reduce (samples, fs, noise);   // 保存する声にもかかる
         auto r = idea::analyse (samples, fs, dv, ao);
         r.gridT0 = gridT0; r.gridStep = gridStep;
         juce::MessageManager::callAsync ([sp, r = std::move (r), samples = std::move (samples), fs, m]() mutable
@@ -1104,8 +1120,23 @@ void MainComponent::showMoreMenu()
     m.addItem (1, u8 ("声も Logic に入れる（アクセシビリティの許可が要る）"), true, props->getBoolValue ("voiceToLogic", true));
     m.addItem (2, u8 ("録音中はスペースでテンポをたたく"), true, props->getBoolValue ("tapKey", true));
     m.addItem (3, u8 ("ほかのアプリを使っているとき、画面の上に様子を出す"), true, props->getBoolValue ("hud", true));
+    const auto mic = juce::String::fromUTF8 (mac::builtInMicName().c_str());
+    m.addItem (4, u8 ("マイクは Mac 本体に固定（") + (mic.isNotEmpty() ? mic : u8 ("本体のマイクなし")) + u8 ("）"),
+               mic.isNotEmpty(), props->getBoolValue ("builtInMic", true));
+    m.addSeparator();
+    const int nz = props->getIntValue ("noise", 1);
+    m.addItem (10, u8 ("ノイズ除去: なし"), true, nz == 0);
+    m.addItem (11, u8 ("ノイズ除去: ふつう"), true, nz == 1);
+    m.addItem (12, u8 ("ノイズ除去: 強め（テンポがずれることも）"), true, nz == 2);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (moreBtn), [this] (int r)
     {
+        if (r >= 10) { props->setValue ("noise", r - 10); return; }
+        if (r == 4)
+        {
+            props->setValue ("builtInMic", ! props->getBoolValue ("builtInMic", true));
+            if (devices.getCurrentAudioDevice() != nullptr && state != Recording && state != Starting) ensureDevice();   // 開いていれば今すぐ切り替え
+            return;
+        }
         const char* k = r == 1 ? "voiceToLogic" : r == 2 ? "tapKey" : r == 3 ? "hud" : nullptr;
         if (k == nullptr) return;
         props->setValue (k, ! props->getBoolValue (k, true));

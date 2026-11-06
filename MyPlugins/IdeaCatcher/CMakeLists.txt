@@ -39,7 +39,7 @@ target_sources(IdeaCatcher PRIVATE
     Source/MainComponent.cpp
     Source/MacSupport_mac.mm)
 target_link_libraries(IdeaCatcher PRIVATE
-    "-framework AVFoundation" "-framework Carbon" "-framework ServiceManagement" "-framework UserNotifications" "-framework ApplicationServices")
+    "-framework AVFoundation" "-framework Carbon" "-framework ServiceManagement" "-framework UserNotifications" "-framework ApplicationServices" "-framework CoreAudio")
 
 target_compile_definitions(IdeaCatcher PRIVATE
     DONT_SET_USING_JUCE_NAMESPACE=1

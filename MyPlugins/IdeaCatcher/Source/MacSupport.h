@@ -46,6 +46,9 @@ namespace mac
     void notify (const std::string& title, const std::string& body, const std::string& id);
     void setNotificationHandler (std::function<void (const std::string&)> onClick);
 
+    // Mac 本体のマイクの名前（なければ空。Mac mini など）。Bluetooth のマイクを開くと音質が落ちるので、こちらを使う
+    std::string builtInMicName();
+
     // アクセシビリティの許可（prompt = 許可の画面を出す）
     bool accessibilityTrusted (bool prompt);
 

@@ -4,6 +4,7 @@
 #import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
 #import <ApplicationServices/ApplicationServices.h>
+#import <CoreAudio/CoreAudio.h>
 #include <unistd.h>
 #include "MacSupport.h"
 
@@ -315,6 +316,31 @@ namespace mac
     }
 
     //==========================================================================
+    std::string builtInMicName()
+    {
+        AudioObjectPropertyAddress addr { kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+        UInt32 size = 0;
+        if (AudioObjectGetPropertyDataSize (kAudioObjectSystemObject, &addr, 0, nullptr, &size) != noErr) return {};
+        std::vector<AudioDeviceID> ids (size / sizeof (AudioDeviceID));
+        if (AudioObjectGetPropertyData (kAudioObjectSystemObject, &addr, 0, nullptr, &size, ids.data()) != noErr) return {};
+        for (auto id : ids)
+        {
+            UInt32 transport = 0, ts = sizeof (transport);
+            AudioObjectPropertyAddress ta { kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+            if (AudioObjectGetPropertyData (id, &ta, 0, nullptr, &ts, &transport) != noErr || transport != kAudioDeviceTransportTypeBuiltIn) continue;
+            AudioObjectPropertyAddress sa { kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput, kAudioObjectPropertyElementMain };
+            UInt32 ss = 0;
+            if (AudioObjectGetPropertyDataSize (id, &sa, 0, nullptr, &ss) != noErr || ss == 0) continue;   // 入力がない（スピーカー）
+            CFStringRef name = nullptr; UInt32 ns = sizeof (name);
+            AudioObjectPropertyAddress na { kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+            if (AudioObjectGetPropertyData (id, &na, 0, nullptr, &ns, &name) != noErr || name == nullptr) continue;
+            std::string out = [(__bridge NSString*) name UTF8String] ?: "";
+            CFRelease (name);
+            if (! out.empty()) return out;
+        }
+        return {};
+    }
+
     bool accessibilityTrusted (bool prompt)
     {
         NSDictionary* o = @{ (__bridge NSString*) kAXTrustedCheckOptionPrompt: @(prompt) };

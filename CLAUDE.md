@@ -186,6 +186,9 @@
   HUD（Hud、mac::makeOverlay、このアプリが前面でないときだけ）、通知（UNUserNotificationCenter、autoOpen OFF のとき。クリックで Logic）、
   声を Logic へ（Voice for Logic.wav を作り、mac::importAudioIntoLogic が AX で ⇧⌘I のメニュー項目を押して ⇧⌘G でパス入力。窓は MIDI のファイル名か 名称未設定 で見分ける。アクセシビリティ許可が要る、設定 voiceToLogic）、
   MIDI に "Key Am" のマーカー。Num Deck 1.21.0 に Cat::IdeaCatcher（remote "ic:…" → sendRemote("ideacatcher", …)）
+  v1.2.0: マイクは Mac 本体に固定（設定 builtInMic、mac::builtInMicName が CoreAudio の Built-in で入力のある機器を探す。出力はそのまま）。
+  ノイズ除去（NoiseReduce.h、JUCE なし。30 Hz ハイパス→STFT 2048/512、静かな 15% の平均をノイズに、ならしたパワーでウィーナー風に下げる。設定 noise 0/1/2 = なし/ふつう -15 dB/強め -24 dB。
+  録り終えて解析する前にかけ、保存する声にも入る。静かな所と声の差が 12 dB 未満なら何もしない）
 
 ## Claude からの提案（余った利用枠の活用）
 - Claude が自分で「次に作るもの・直すもの」を3つ提案し、本人が「GO」を出したら作る仕組み。指示書は `ideas/PROPOSAL_PROMPT.md`
