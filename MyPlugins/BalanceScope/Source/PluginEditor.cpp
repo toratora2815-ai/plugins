@@ -73,11 +73,11 @@ BalanceScopeEditor::BalanceScopeEditor (BalanceScopeProcessor& p) : AudioProcess
     linkBar.extra = &windowBox;
     linkBar.extraWidth = 118;
     linkBar.extraLabel = "JUDGE BY";
-    linkBar.setSources (processor.link, { plink::kindHushField, plink::kindGainStage, plink::kindReference });
+    linkBar.setSources (processor.link, { plink::kindHushField, plink::kindGainStage });
     linkBar.status = [this] (bool& lit)
     {
         const auto li = processor.getLinkInfo();
-        if (! li.on) return juce::String ("Plugin Link OFF  -  same LINK number as Hush Field / Fader Pilot / Gain Stage / Reference to connect");
+        if (! li.on) return juce::String ("Plugin Link OFF  -  same LINK number as Hush Field / Fader Pilot / Gain Stage to connect");
         juce::StringArray parts;
         if (! li.valid) parts.add (li.recent ? "Listening (needs 3 s of the last 10 s)..." : "Listening...");
         else if (li.first.excessDb <= 0.0f) parts.add ("Balanced - nothing too loud");
@@ -96,7 +96,6 @@ BalanceScopeEditor::BalanceScopeEditor (BalanceScopeProcessor& p) : AudioProcess
             parts.add ("Gain Stage " + juce::String (gdb > 0.05f ? "+" : "") + juce::String (gdb, 1) + " dB"
                        + (li.gain.v[plink::gs::learned] > 0.5f ? " (learned)" : ""));
         }
-        if (processor.refPaused.load()) parts.insert (0, "PAUSED - Reference is playing the reference track");
         if (li.peers == 0) parts.add ("no other plugin on this LINK yet");
         lit = li.peers > 0;
         return parts.joinIntoString ("   |   ");
@@ -406,7 +405,7 @@ void BalanceScopeEditor::drawLinkOverlay (juce::Graphics& g, juce::Rectangle<flo
             g.fillRect (juce::Rectangle<float> (x0 + 1.0f, r.getY(), x1 - x0 - 2.0f, full * red / 12.0f));
         }
         g.setColour (teal.withAlpha (0.9f));
-        g.drawText ("VELVET TAMER CUT", juce::Rectangle<float> (r.getX() + 4, r.getY() + 2, 140, 14), juce::Justification::centredLeft);
+        g.drawText ("HUSH FIELD CUT", juce::Rectangle<float> (r.getX() + 4, r.getY() + 2, 140, 14), juce::Justification::centredLeft);
     }
 }
 

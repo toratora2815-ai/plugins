@@ -8,3 +8,4 @@ v1.1.0: 参考曲のカーブを CAPTURE して比べる（REF A/B/C、apvts.sta
 v1.2.0: Plugin Link で「出すぎの帯域」を送る（BandMath.h の findExcess。平均 3 秒以上、150 Hz〜12 kHz、REF と比べているときは REF 基準）
 v1.3.0: Link で上位 2 か所（findExcess2）、JUDGE BY（ID linkWindow、WHOLE / LAST 10 s＝時定数 10 秒の recentPower）、オケの音量 musicDb をブロックごとに送る、
 Velvet Tamer（今は Hush Field）の削り量（グラフに青緑の棒）と Gain Stage の GAIN を受けて表示
+v1.3.1: 表示名 "HUSH FIELD CUT"。Reference（プラグイン、削除）を待つ処理（refOn / refPaused、FROM の候補）を外した

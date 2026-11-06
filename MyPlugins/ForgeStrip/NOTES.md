@@ -9,3 +9,4 @@ EXCITER（XY の 4 角の歪み、4 倍 FIR OS）/ TRANSIENT（3 ms 先読み、
 v1.1.0: コンプ MODE（cmode = Modern / Vintage〔VintageTable.h の 2 次元表、vintTune の 2 段の動き〕/ Punch〔PunchCore、しきい値なし、山にいる間 α(E−B)、下がり始めたら α×16.5/SUSTAIN dB/ms〕）、
 自動ゲイン（2 段、最大 20 dB）、自動リリース（長く下げると最大 2 倍）、EQ の Soft Sat（x − 0.24x|x| + 0.036x²）とダイナミック（しきい値→0 dBFS の直線）、
 SCULPTOR の Add Punch / Add Polish（PunchPolish）、PHASE は直線位相 FIR（遅れ 2401）、LP/HP はマッチド設計。Plugin Link（独自の種類 200、ForgeLink.h）で Forge Mixer から OUTPUT/PAN/WIDTH を動かす
+Forge Mixer 1.0.1: プリセット・取り消しの欄を外した（つまみが LINK だけで、取り消すものがないため。画面は 980×600）

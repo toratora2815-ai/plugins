@@ -96,6 +96,7 @@ ITU-R BS.1770（EBU R128）の計算方法どおりに測ります（EBU の公�
 - プリセットで変わるのはつまみだけ。覚えた参照曲（REF A〜C）と LINK の番号は変わりません
 
 ## 変更履歴
+- v1.3.1 … グラフの削り量の表示名を「HUSH FIELD CUT」に。削除したプラグイン版 Reference とのつながりを外した
 - v1.3.0 … Plugin Link：出すぎを上位 2 か所、JUDGE BY（WHOLE SONG / LAST 10 s）、オケの音量を送る、削り量と Gain Stage の GAIN を表示、FROM（相手選び）
 - v1.2.0 … Plugin Link（LINK 1〜4。出すぎの帯域を送る）
 - v1.1.0 … 参考曲のカーブを覚えて比べる（REF A / B / C、DIFF）、ラウドネスメーター（LUFS / PEAK / PLR）、Custom の目標カーブ

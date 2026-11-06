@@ -1,7 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
 #include "ForgeLink.h"
-#include "PresetBar.h"
 
 // Forge Mixer: 音は素通し。同じ LINK 番号の Forge Strip を一覧し、音量・パン・幅の指示を出す
 class ForgeMixerProcessor : public juce::AudioProcessor, private juce::Timer
@@ -36,7 +35,6 @@ public:
     { if (auto x = getXmlFromBinary (data, size)) if (x->hasTagName (apvts.state.getType())) apvts.replaceState (juce::ValueTree::fromXml (*x)); }
 
     juce::AudioProcessorValueTreeState apvts;
-    myp::Presets myPresets { *this, apvts, "ForgeMixer" };
     plink::Link link { fslink::kindMixer, apvts };
 
     // 画面から: いま動かしている Strip への指示（token が同じなら上書き）

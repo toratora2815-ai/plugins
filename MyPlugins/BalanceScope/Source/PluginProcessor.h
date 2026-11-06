@@ -74,7 +74,6 @@ public:
         plink::Peer tamer, gain;   // found = 見つかった
     };
     LinkInfo getLinkInfo() const;
-    std::atomic<bool> refPaused { false };   // Reference が参照曲を流していて、測るのを止めている
     plink::Link link { plink::kindBalanceScope, apvts };
 
 private:

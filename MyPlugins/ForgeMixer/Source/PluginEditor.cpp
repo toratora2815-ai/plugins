@@ -114,7 +114,6 @@ ForgeMixerEditor::ForgeMixerEditor (ForgeMixerProcessor& p) : AudioProcessorEdit
 {
     addAndMakeVisible (field);
     addAndMakeVisible (linkBar);
-    addAndMakeVisible (presetBar);
     linkBar.status = [this] (bool& lit)
     {
         const int n = (int) field.shown.size();
@@ -122,7 +121,7 @@ ForgeMixerEditor::ForgeMixerEditor (ForgeMixerProcessor& p) : AudioProcessorEdit
         if (! processor.link.on()) return juce::String::fromUTF8 ("LINK を 1〜4 にしてください");
         return juce::String (n) + juce::String::fromUTF8 (" トラック。点をドラッグ = 音量とパン、ホイール = 幅、ダブルクリック = 元に戻す");
     };
-    setSize (980, 600 + myp::PresetBar::height);
+    setSize (980, 600);
     startTimerHz (10);
 }
 
@@ -165,7 +164,6 @@ void ForgeMixerEditor::paint (juce::Graphics& g)
 void ForgeMixerEditor::resized()
 {
     auto r = getLocalBounds();
-    presetBar.setBounds (r.removeFromBottom (myp::PresetBar::height));
     linkBar.setBounds (r.removeFromBottom (plink::LinkBar::height));
     r.removeFromTop (40);
     r = r.reduced (12, 6);

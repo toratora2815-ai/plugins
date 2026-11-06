@@ -39,7 +39,6 @@ private:
     ForgeMixerProcessor& processor;
     MixField field { processor };
     plink::LinkBar linkBar { processor.apvts, juce::Colour (0xffffb454), juce::Colour (0xff1d1d22), juce::Colour (0xffe8e4dc) };
-    myp::PresetBar presetBar { processor.myPresets, juce::Colour (0xffffb454), juce::Colour (0xff1d1d22), juce::Colour (0xffe8e4dc), true };
     juce::Rectangle<int> listArea;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ForgeMixerEditor)
 };
