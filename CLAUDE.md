@@ -102,7 +102,7 @@
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作
 - Mix Time Machine（MixTimeMachine）1.0.0 … バウンス履歴と聴き比べ。~/Music/Logic（と Bounces フォルダ）を見張って新しいバウンスを自動で取り込み、
   FLAC でコピー保存（~/Music/Mix Time Machine）。A/B を音量合わせ・頭のずれ自動合わせで切替、5回のブラインドテスト、何が変わったか（音量・PLR・広がり・音色差）
-- Num Deck（NumDeck）1.24.1 … テンキーに Logic などの操作を割り当てる（3×3 タイル画面、Logic Pro / 業務モード、マクロ、2 画面）。
+- Num Deck（NumDeck）1.24.2 … テンキーに Logic などの操作を割り当てる（3×3 タイル画面、Logic Pro / 業務モード、マクロ、2 画面）。
   仕事のリンク（URL）は公開リポジトリに書かず、本人の設定ファイル（~/Library/Application Support/Num Deck）にだけ入れる。今の本人の設定は Home = ON/OFF、Clear = モード切替
 - Idea Catcher（IdeaCatcher）1.4.0 … 思いつきの鼻歌を録って、キー・テンポ入りの MIDI にするメニューバー常駐アプリ。録音キー ⌃⌥I、さかのぼり録音、ノイズ除去、重ね録り。
   録ってから解析（遅れなし）→ 余分な音の掃除 → クオンタイズ（細かさ・強さ）→ 手直しの画面 → ピアノロールをつかんで Logic へドラッグ。Logic は開かない・操作しない。

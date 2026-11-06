@@ -335,16 +335,26 @@ namespace numdeck
         // （全画面の LINE などの上で押しても、そのアプリのまま。Finder などに切り替わらない）
         if ([[[NSBundle mainBundle].bundlePath stringByStandardizingPath] isEqualToString: p])
         {
+            // 補助アプリ（「いつも手前」の間）は macOS の「隠す」が効かないので、ウィンドウを直接しまう・出す
+            // （押したときの表示とメニューバーのアイコンは小さいので対象外）
+            auto isDeckWindow = [] (NSWindow* w) { return w.frame.size.width > 200 && w.level < NSStatusWindowLevel; };
             bool visible = false;
             for (NSWindow* w in [NSApp windows])
-                if (w.isVisible && w.level < NSStatusWindowLevel && w.frame.size.width > 200) visible = true;
-            if (! [NSApp isHidden] && visible)
-                [NSApp hide: nil];
+                if (isDeckWindow (w) && w.isVisible) visible = true;
+            static NSMutableArray<NSWindow*>* tucked = nil;   // しまったウィンドウ（出すときはこれだけ出す）
+            if (tucked == nil) tucked = [[NSMutableArray alloc] init];
+            if (visible && ! [NSApp isHidden])
+            {
+                [tucked removeAllObjects];
+                for (NSWindow* w in [NSApp windows])
+                    if (isDeckWindow (w) && w.isVisible) { [tucked addObject: w]; [w orderOut: nil]; }
+            }
             else
             {
                 [NSApp unhide: nil];
-                for (NSWindow* w in [NSApp windows])
-                    if (w.frame.size.width > 200 && w.level < NSStatusWindowLevel) [w orderFrontRegardless];
+                for (NSWindow* w in tucked)
+                    if ([[NSApp windows] containsObject: w]) [w orderFrontRegardless];
+                [tucked removeAllObjects];
             }
             return;
         }
