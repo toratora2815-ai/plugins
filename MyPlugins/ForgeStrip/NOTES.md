@@ -10,3 +10,6 @@ v1.1.0: コンプ MODE（cmode = Modern / Vintage〔VintageTable.h の 2 次元�
 自動ゲイン（2 段、最大 20 dB）、自動リリース（長く下げると最大 2 倍）、EQ の Soft Sat（x − 0.24x|x| + 0.036x²）とダイナミック（しきい値→0 dBFS の直線）、
 SCULPTOR の Add Punch / Add Polish（PunchPolish）、PHASE は直線位相 FIR（遅れ 2401）、LP/HP はマッチド設計。Plugin Link（独自の種類 200、ForgeLink.h）で Forge Mixer から OUTPUT/PAN/WIDTH を動かす
 Forge Mixer 1.0.1: プリセット・取り消しの欄を外した（つまみが LINK だけで、取り消すものがないため。画面は 980×600）
+v1.2.0: 差の残りを詰めた。SCULPTOR は帯域ごとの寄せ具合 sculptTune::adapt（平均 0.9 dB）と ToneTargets.h の再校正、Add Punch / Polish は ppTune（山の記憶→持ち上げ、0.5 / 0.9 dB）、
+Vintage は vintTune に hold・rc・rp（リリースが R^rp に比例、1.0 dB）、UNMASK は覆い隠しの広がりモデル（unmaskTune::T、相手の各帯域から上へ up0−upK·(差)、下へ down dB/帯域、21 通りで 0.86 dB）。
+HP の 20〜50 Hz（基準の −55 dB 付近のくせ）とエキサイター (1,1)（基準は音量で形が変わる）は合わせていない

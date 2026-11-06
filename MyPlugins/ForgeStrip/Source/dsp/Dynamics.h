@@ -125,7 +125,7 @@ namespace autoGainTune { struct T { float up1 = 100, dn1 = 400, up2 = 5, dn2 = 7
 // Vintage の時間の動き（測定に合わせた値。tools の当てはめで決めた）
 namespace vintTune
 {
-    struct T { float ka = 0.3f, kr = 1.0f, kh = 1.4f, w = 0.15f, ts = 1500.0f; };
+    struct T { float ka = 0.45f, kr = 1.4f, kh = 1.4f, w = 0.19f, ts = 1200.0f, rc = 0.093f, rp = 1.43f, hold = 1.5f; };
     inline T& t() { static T v; return v; }
 }
 
@@ -211,16 +211,16 @@ struct CompCore
             const auto& vt = vintTune::t();
             const float fastT = gr * (1.0f - vt.w), slowT = gr * vt.w;
             const float tF = dbToGain (-fastT);
-            if (tF < g) g = tF + coefMs (b.attack * vt.ka, sr) * (g - tF);
+            if (tF < g) { g = tF + coefMs (b.attack * vt.ka, sr) * (g - tF); holdLeft = (int) (vt.hold * b.attack * 0.001f * (float) sr); }
+            else if (holdLeft > 0) --holdLeft;   // 測定: 戻り始める前に ATTACK × 1.5 ほど待つ
             else
             {
+                // 測定: リリースの時定数 = rc × RELEASE^rp（dB でならす）
                 float dbF = -gainToDb (g);
-                dbF = fastT + coefMs (b.release * vt.kr, sr) * (dbF - fastT);
+                dbF = fastT + coefMs (vt.rc * std::pow (std::max (1.0f, b.release), vt.rp) * vt.kr, sr) * (dbF - fastT);
                 g = dbToGain (-dbF);
             }
-            const float u1 = 1.0f / std::max (g, 1.0e-9f);
-            if (u1 >= u2) u2 = u1;
-            else u2 = u1 + coefMs (std::min (b.attack, b.release) * vt.kh, sr) * (u2 - u1);
+            u2 = 1.0f / std::max (g, 1.0e-9f);
             slowDb = slowT + coefMs (vt.ts, sr) * (slowDb - slowT);
             gOut = dbToGain (-slowDb) / u2;
         }
@@ -263,7 +263,7 @@ struct CompCore
         return gOut;
     }
     float makeupDb() const { return makeB; }
-    float u2 = 1.0f, slowDb = 0.0f;
+    float u2 = 1.0f, slowDb = 0.0f; int holdLeft = 0;
 };
 
 class CompModule

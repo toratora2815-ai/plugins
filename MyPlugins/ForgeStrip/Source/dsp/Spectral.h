@@ -177,6 +177,9 @@ private:
 };
 
 // ---------------------------------------------------------------------
+// 帯域ごとの「入力の音色への反応の強さ」（基準をピンク雑音と白色雑音で測って合わせる。1 = そのまま）
+namespace sculptTune { inline float (&adapt())[kToneBands] { static float a[kToneBands] = { 0.863f, 0.863f, 0.863f, 0.863f, 0.974f, 1.088f, 1.297f, 1.361f, 1.449f, 1.617f, 1.712f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.181f, 1.160f, 1.164f, 1.083f, 1.056f, 1.049f, 1.038f, 0.933f, 0.933f, 0.933f, 0.933f }; return a; } }
+
 struct SculptorSettings
 {
     int target = 22;          // 0..22 = 楽器、23 = Add Punch、24 = Add Polish、25 = なし
@@ -188,7 +191,9 @@ struct SculptorSettings
 
 // SCULPTOR の「Add Punch」「Add Polish」（測定: 音色ではなく音量の動き）
 //   静かになった所を長い平均との差で持ち上げ（ku）、鳴り始めを短い平均との差で持ち上げる（kt）。Polish は Punch の 1.8 倍
-namespace ppTune { struct T { float refMs = 800, midMs = 20, ku = 0.2f, kd = 0.02f, kt = 0.0f, upMs = 50, downMs = 5, maxUp = 8, polish = 1.8f; }; inline T& t() { static T v; return v; } }
+namespace ppTune { struct T { float refMs = 10000, midMs = 20, ku = 0.12f, kd = 0.3f, kt = 0.0f, upMs = 200, downMs = 5, maxUp = 3.6f, polish = 1.0f; };
+    inline T& t() { static T v; return v; }
+    inline T& tPolish() { static T v { 10000, 20, 0.22f, 0.6f, 0.5f, 200, 5, 6.5f, 1.0f }; return v; } }
 
 struct PunchPolish
 {
@@ -197,18 +202,18 @@ struct PunchPolish
     void reset() { pk.reset(); ref = mid = -120; g = 0; }
     void process (float* L, float* R, int n, bool polish, float amount)
     {
-        const auto& t = ppTune::t();
-        const float k = (polish ? t.polish : 1.0f) * amount;
-        const float cR = coefMs (t.refMs, sr), cM = coefMs (t.midMs, sr), cU = coefMs (t.upMs, sr), cD = coefMs (t.downMs, sr);
+        // 測定: ピークの記憶 P（ゆっくり下がる）と今の音量の差 × ku を持ち上げ（上限 maxUp）、山にいる間は kd だけ下げる
+        const auto& t = polish ? ppTune::tPolish() : ppTune::t();
+        const float cR = coefMs (t.refMs, sr), cU = coefMs (t.upMs, sr), cD = coefMs (t.downMs, sr), cM = coefMs (t.midMs, sr);
         for (int i = 0; i < n; ++i)
         {
             const float x = gainToDb (pk.push (std::max (std::abs (L[i]), std::abs (R[i]))) + 1e-9f);
             if (x < -90.0f) { L[i] *= dbToGain (g); R[i] *= dbToGain (g); continue; }
-            if (ref < -110.0f) ref = mid = x;
-            ref = x + cR * (ref - x);
             mid = x > mid ? x : x + cM * (mid - x);
-            float target = t.ku * std::max (0.0f, ref - mid) - t.kd * std::max (0.0f, mid - ref) + t.kt * std::max (0.0f, x - ref);
-            target = clampv (target * k, -6.0f, t.maxUp);
+            ref = mid > ref ? mid : mid + cR * (ref - mid);   // ピークの記憶
+            const float d = ref - mid;
+            float target = d > 0.5f ? std::min (t.maxUp, t.ku * d + t.kt) : -t.kd;
+            target *= amount;
             g = target + (target > g ? cU : cD) * (g - target);
             const float gg = dbToGain (g);
             L[i] *= gg; R[i] *= gg;
@@ -257,7 +262,7 @@ protected:
             {
                 const float f = toneBandHz (b);
                 const float tilt = (cfg.tone / 50.0f) * 0.55f * std::log2 (f / 1000.0f);
-                float d = (T[b] - (float) mT + tilt) - (smooth[(size_t) b] - (float) mIn);
+                float d = (T[b] - (float) mT + tilt) - sculptTune::adapt()[b] * (smooth[(size_t) b] - (float) mIn);
                 if (smooth[(size_t) b] < total - 70.0f) d = std::min (d, 0.0f);   // ほぼ無い帯域は持ち上げない
                 if (f < cfg.lowHz || f > cfg.highHz) d = 0.0f;
                 want[(size_t) b] = clampv (d * amt, -30.0f, 30.0f);
@@ -293,8 +298,12 @@ struct UnmaskSettings
 
 namespace unmaskTune
 {
-    // 周波数ごとの効きやすさ（低中域ほど強い。測定の形）と感度の換算。tools/fs_fit で合わせる
-    struct T { float sensOffset = 3.0f, sensPerPct = 0.6f, slope = 0.7f, maxCut = 30.0f; };
+    // 周波数ごとの効きやすさ（低中域ほど強い。測定の形）と感度の換算。21 通りの測定に合わせた値（平均差 0.86 dB）
+    struct T { float sensOffset = -4.84f, sensPerPct = 0.28f, slope = 1.026f, maxCut = 30.0f;
+               // 覆い隠しの広がり（1/3 オクターブあたり dB）: 上へは相手が大きいほどゆるやか、下へは急
+               float up0 = 13.18f, upK = 0.239f, upMin = 3.0f, down = 25.5f;
+               // 下げる量の山: 相手の広がり − 自分 = c dB のとき一番、幅 w（大きく上回る所＝もう聞こえる所は下げない）
+               float c = 9.8f, w = 10.74f, big = 0.526f; };
     inline T& t() { static T v; return v; }
     // 帯域ごとの効きやすさ（基準をピンク雑音どうしで測った形、最大 = 1）
     inline float weightBand (int k)
@@ -327,17 +336,31 @@ protected:
         {
             // サイドチェーンが主信号をどれだけ上回るか（隣の帯域にも少し広げる）
             const float sens = tu.sensOffset + tu.sensPerPct * (cfg.sensitivity - 50.0f);
+            // サイドチェーンの「覆い隠す範囲」（上へ広がる）
+            float ex[kToneBands];
+            for (int k = 0; k < kToneBands; ++k) ex[k] = -200.0f;
+            for (int j = 0; j < kToneBands; ++j)
+            {
+                const float S = scS[(size_t) j];
+                if (S < -150.0f) continue;
+                const float rel = S - mainS[(size_t) j];
+                const float up = std::max (tu.upMin, tu.up0 - tu.upK * rel);
+                for (int k = 0; k < kToneBands; ++k)
+                {
+                    const float e = k >= j ? S - up * (float) (k - j) : S - tu.down * (float) (j - k);
+                    ex[k] = std::max (ex[k], e);
+                }
+            }
             for (int b = 0; b < kToneBands; ++b)
             {
-                float s = scS[(size_t) b];
-                if (b > 0) s = std::max (s, scS[(size_t) b - 1] - 9.0f);
-                if (b < kToneBands - 1) s = std::max (s, scS[(size_t) b + 1] - 9.0f);
-                const float m = s - mainS[(size_t) b] + sens;
+                const float m = ex[b] - mainS[(size_t) b] + sens;
                 const float f = toneBandHz (b);
-                // なめらかに 0 から増える（softplus）
-                float cut = tu.slope * std::log1p (std::exp (std::min (m, 40.0f) / 3.0f)) * 3.0f;
+                // 山の形: m が c のあたりで一番、大きく上回る所（もうはっきり聞こえる）は big の割合まで下がる
+                const float z = (m - tu.c) / tu.w;
+                float shape = m < tu.c ? std::exp (-0.5f * z * z) : tu.big + (1.0f - tu.big) * std::exp (-0.5f * z * z);
+                float cut = tu.slope * 10.0f * shape;
                 cut *= unmaskTune::weightBand (b) * (cfg.amount / 100.0f);
-                if (scS[(size_t) b] < -90.0f) cut = 0;
+                if (scS[(size_t) b] < -150.0f && ex[b] < -150.0f) cut = 0;
                 if (f < cfg.lowHz || f > cfg.highHz) cut = 0;
                 want[(size_t) b] = -std::min (cut, tu.maxCut);
             }

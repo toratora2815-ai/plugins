@@ -107,9 +107,11 @@ int main (int argc, char** argv)
     auto& ut = fs::unmaskTune::t();
     keys["T.um.sensOffset"] = [&ut] (float v) { ut.sensOffset = v; }; keys["T.um.sensPerPct"] = [&ut] (float v) { ut.sensPerPct = v; };
     keys["T.um.slope"] = [&ut] (float v) { ut.slope = v; };
+    keys["T.um.up0"] = [&ut] (float v) { ut.up0 = v; }; keys["T.um.upK"] = [&ut] (float v) { ut.upK = v; }; keys["T.um.down"] = [&ut] (float v) { ut.down = v; };
+    keys["T.um.c"] = [&ut] (float v) { ut.c = v; }; keys["T.um.w"] = [&ut] (float v) { ut.w = v; }; keys["T.um.big"] = [&ut] (float v) { ut.big = v; };
     auto& vt = fs::vintTune::t();
     keys["T.v.ka"] = [&vt] (float v) { vt.ka = v; }; keys["T.v.kr"] = [&vt] (float v) { vt.kr = v; };
-    keys["T.v.kh"] = [&vt] (float v) { vt.kh = v; }; keys["T.v.w"] = [&vt] (float v) { vt.w = v; }; keys["T.v.ts"] = [&vt] (float v) { vt.ts = v; };
+    keys["T.v.kh"] = [&vt] (float v) { vt.kh = v; }; keys["T.v.w"] = [&vt] (float v) { vt.w = v; }; keys["T.v.ts"] = [&vt] (float v) { vt.ts = v; }; keys["T.v.rc"] = [&vt] (float v) { vt.rc = v; }; keys["T.v.rp"] = [&vt] (float v) { vt.rp = v; }; keys["T.v.hold"] = [&vt] (float v) { vt.hold = v; };
     keys["T.ar.lo"] = [] (float v) { fs::autoRelTune::lo() = v; }; keys["T.ar.tau"] = [] (float v) { fs::autoRelTune::tau() = v; };
     auto& agt = fs::autoGainTune::t();
     keys["T.ag.up1"] = [&agt] (float v) { agt.up1 = v; }; keys["T.ag.dn1"] = [&agt] (float v) { agt.dn1 = v; };
@@ -119,7 +121,13 @@ int main (int argc, char** argv)
     auto& ppt = fs::ppTune::t();
     keys["T.pp.ref"] = [&ppt] (float v) { ppt.refMs = v; }; keys["T.pp.mid"] = [&ppt] (float v) { ppt.midMs = v; };
     keys["T.pp.ku"] = [&ppt] (float v) { ppt.ku = v; }; keys["T.pp.kd"] = [&ppt] (float v) { ppt.kd = v; }; keys["T.pp.kt"] = [&ppt] (float v) { ppt.kt = v; };
-    keys["T.pp.up"] = [&ppt] (float v) { ppt.upMs = v; }; keys["T.pp.pol"] = [&ppt] (float v) { ppt.polish = v; };
+    keys["T.pp.up"] = [&ppt] (float v) { ppt.upMs = v; }; keys["T.pp.max"] = [&ppt] (float v) { ppt.maxUp = v; }; keys["T.pp.pol"] = [&ppt] (float v) { ppt.polish = v; };
+    auto& ppo = fs::ppTune::tPolish();
+    keys["T.po.ref"] = [&ppo] (float v) { ppo.refMs = v; }; keys["T.po.mid"] = [&ppo] (float v) { ppo.midMs = v; };
+    keys["T.po.ku"] = [&ppo] (float v) { ppo.ku = v; }; keys["T.po.kd"] = [&ppo] (float v) { ppo.kd = v; }; keys["T.po.kt"] = [&ppo] (float v) { ppo.kt = v; };
+    keys["T.po.up"] = [&ppo] (float v) { ppo.upMs = v; }; keys["T.po.max"] = [&ppo] (float v) { ppo.maxUp = v; };
+    for (int k = 0; k < 30; ++k) keys["T.sa" + std::to_string (k)] = [k] (float v) { fs::sculptTune::adapt()[k] = v; };
+    keys["T.safile"] = [] (float) {};
     auto& ph = s.phase;
     keys["ph.rot"] = [&ph] (float v) { ph.rotation = v; }; keys["ph.delay"] = [&ph] (float v) { ph.delayMs = v; };
     for (int b = 0; b < 12; ++b)
@@ -163,6 +171,7 @@ int main (int argc, char** argv)
         it->second (std::stof (v));
     }
     s.comp[1].vintage = s.comp[1].vintage;   // そのまま
+    if (const char* af = std::getenv ("FS_ADAPT")) { FILE* f = std::fopen (af, "r"); if (f) { for (int k = 0; k < 30; ++k) { float v; if (std::fscanf (f, "%f", &v) == 1) fs::sculptTune::adapt()[k] = v; } std::fclose (f); } }
     fs::Strip strip;
     strip.prepare (48000.0, 512);
     strip.set (s);
