@@ -30,6 +30,13 @@ ModHostProcessor::ModHostProcessor()
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
     formats.addFormat (std::make_unique<juce::AudioUnitPluginFormat>());
+    for (int k = 0; k < numInternal; ++k)
+    {
+        internalParam[k] = apvts.getParameter (internalId (k));
+        internalShown[k] = internalParam[k]->getValue();
+    }
+    bandsParam = apvts.getRawParameterValue ("bands");
+    autoGainParam = apvts.getRawParameterValue ("autoGain");
 
     for (int m = 0; m < mh::numMods; ++m)
     {
@@ -110,7 +117,32 @@ juce::AudioProcessorValueTreeState::ParameterLayout ModHostProcessor::createLayo
     }
     // Plugin Link（LINK の番号）
     v.push_back (plink::makeGroupParameter (9));
+    // 通り道（DRIVE → 中のプラグイン → MIX → AUTO GAIN → OUT）と帯域分け・MORPH
+    addF ("drive", "Drive", { -24.0f, 24.0f, 0.1f }, 0.0f, db);
+    addF ("mix",   "Mix",   { 0.0f, 100.0f, 0.1f }, 100.0f, upct);
+    addF ("out",   "Output", { -24.0f, 24.0f, 0.1f }, 0.0f, db);
+    addF ("morph", "Morph", { 0.0f, 100.0f, 0.1f }, 0.0f, upct);
+    addF ("sendLow",  "Send Low",  { 0.0f, 100.0f, 0.1f }, 100.0f, upct);
+    addF ("sendMid",  "Send Mid",  { 0.0f, 100.0f, 0.1f }, 100.0f, upct);
+    addF ("sendHigh", "Send High", { 0.0f, 100.0f, 0.1f }, 100.0f, upct);
+    auto hzText = [] (float v, int) { return v >= 1000.0f ? juce::String (v / 1000.0f, 2) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz"; };
+    addF ("splitLow",  "Split Low",  skewed (40.0f, 2000.0f, 1.0f, 250.0f), 200.0f, hzText);
+    addF ("splitHigh", "Split High", skewed (500.0f, 16000.0f, 1.0f, 3000.0f), 3000.0f, hzText);
+    v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "autoGain", 1 }, "Auto Gain", false));
+    v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "bands", 1 }, "Bands", false));
     return { v.begin(), v.end() };
+}
+
+const char* ModHostProcessor::internalId (int k)
+{
+    static const char* ids[numInternal] = { "drive", "mix", "out", "morph", "sendLow", "sendMid", "sendHigh", "splitLow", "splitHigh" };
+    return ids[juce::jlimit (0, numInternal - 1, k)];
+}
+
+juce::String ModHostProcessor::internalName (int k)
+{
+    static const char* n[numInternal] = { "DRIVE", "MIX", "OUT", "MORPH", "SEND LOW", "SEND MID", "SEND HIGH", "SPLIT LOW", "SPLIT HIGH" };
+    return juce::String::fromUTF8 ("◆ Mod Host: ") + n[juce::jlimit (0, numInternal - 1, k)];
 }
 
 bool ModHostProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -168,9 +200,24 @@ void ModHostProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
             amountSmooth[m][t].reset (sampleRate, 0.03), amountSmooth[m][t].setCurrentAndTargetValue (amountParam[m][t]->load() * 0.01f);
     }
 
+    maxDelay = (int) (sampleRate * 2.0);
+    dUn.prepare (maxDelay); dSent.prepare (maxDelay); dRaw.prepare (maxDelay);
+    xover.reset();
+    autoGain.prepare (sampleRate, mh::chunk);
+    analyzer.setSampleRate (sampleRate);
+    work.setSize (6, maxBlock, false, true, false);
+    rampDrive = rampMix = rampOut = rampAg = -1.0f;   // 下で今の値に
+
     const juce::ScopedLock sl (hostLock);
     if (hosted != nullptr) prepareHosted (*hosted);
     resizeFor (hosted.get(), scratch, hostIns, hostOuts, maxBlock, baseVal, lastSet, wasActive, activeList, prevActive, offsets);
+    rebuildMorphLocked();
+    {
+        auto val = [this] (int k) { return internalParam[k]->convertFrom0to1 (internalParam[k]->getValue()); };
+        rampDrive = juce::Decibels::decibelsToGain (val (inDrive)); rampMix = val (inMix) * 0.01f; rampOut = juce::Decibels::decibelsToGain (val (inOut));
+        rampAg = 1.0f;
+        for (int k = 0; k < 3; ++k) rampSend[k] = val (inSendLow + k) * 0.01f;
+    }
     setLatencySamples (hosted != nullptr ? hosted->getLatencySamples() : 0);
 }
 
@@ -198,25 +245,6 @@ mh::Settings ModHostProcessor::readSettings (int m) const
     s.bipolar = bipolarParam[m]->load() > 0.5f;
     s.phase = phaseParam[m]->load() / 360.0f;
     return s;
-}
-
-void ModHostProcessor::processHosted (juce::AudioBuffer<float>& main, int start, int n)
-{
-    const int mainCh = main.getNumChannels();
-    const int sc = scratch.getNumChannels();
-    for (int c = 0; c < sc; ++c)
-    {
-        if (c < hostIns && mainCh > 0) scratch.copyFrom (c, 0, main, juce::jmin (c, mainCh - 1), start, n);
-        else scratch.clear (c, 0, n);
-    }
-    juce::AudioBuffer<float> view (scratch.getArrayOfWritePointers(), sc, n);
-    juce::MidiBuffer midi;
-    hosted->processBlock (view, midi);
-    for (int c = 0; c < mainCh; ++c)
-    {
-        if (hostOuts <= 0) break;
-        main.copyFrom (c, start, scratch, juce::jmin (c, hostOuts - 1), 0, n);
-    }
 }
 
 void ModHostProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -254,13 +282,13 @@ void ModHostProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     const int nParams = params != nullptr ? juce::jmin (params->size(), (int) baseVal.size()) : 0;
     if (p != nullptr) p->setPlayHead (getPlayHead());
 
-    bool anyRoute = false;
+    bool anyRoute = morphIdx.size() > 0 && p != nullptr;
     for (int m = 0; m < mh::numMods && ! anyRoute; ++m)
         for (int t = 0; t < mh::numTargets; ++t)
-            if (const int idx = targets[m][t].load(); idx >= 0 && idx < nParams) { anyRoute = true; break; }
+            if (const int idx = targets[m][t].load(); (idx >= 0 && idx < nParams) || isInternal (idx)) { anyRoute = true; break; }
 
     // つながっている間は 64 サンプルごと、そうでなければまとめて
-    const int maxPiece = p != nullptr ? juce::jmin (anyRoute ? mh::chunk : maxBlock, scratch.getNumSamples()) : mh::chunk;
+    const int maxPiece = juce::jmin (anyRoute ? mh::chunk : maxBlock, scratch.getNumSamples(), work.getNumSamples());
     float vals[mh::numMods] {};
 
     // Plugin Link の値（LINK 型の MOD が使う）: Fader Pilot のフェーダー位置（-12〜+12 dB → 0〜1）、
@@ -276,6 +304,12 @@ void ModHostProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     }
     linkValueNow = linkValue; linkSourceNow = linkFrom;
 
+    const bool bandsOn = bandsParam->load() > 0.5f;
+    const bool autoOn = autoGainParam->load() > 0.5f;
+    const int latency = p != nullptr ? juce::jlimit (0, maxDelay, p->getLatencySamples()) : 0;
+    const int mainCh = main.getNumChannels();
+    float eff[numInternal] {};
+
     for (int start = 0; start < numSamples; start += maxPiece)
     {
         const int n = juce::jmin (maxPiece, numSamples - start);
@@ -287,7 +321,7 @@ void ModHostProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
             mh::Block b;
             b.numSamples = k; b.sampleRate = rate; b.playing = playing; b.bpm = bpm; b.barQuarters = barQ;
             b.ppq = ppq + (start + done) / rate * bpm / 60.0;
-            for (int c = 0; c < main.getNumChannels(); ++c) b.inputPeak = juce::jmax (b.inputPeak, main.getMagnitude (c, start + done, k));
+            for (int c = 0; c < mainCh; ++c) b.inputPeak = juce::jmax (b.inputPeak, main.getMagnitude (c, start + done, k));
             if (haveSide)
                 for (int c = 0; c < scNum && scFirst + c < buffer.getNumChannels(); ++c)
                     b.sidechainPeak = juce::jmax (b.sidechainPeak, buffer.getMagnitude (scFirst + c, start + done, k));
@@ -295,16 +329,16 @@ void ModHostProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
             for (int m = 0; m < mh::numMods; ++m) vals[m] = mods[m].process (set[m], b, steps[m]);
         }
 
-        if (p == nullptr) continue;
-
-        // 各つまみに足す量
+        // 各つまみに足す量（中のプラグインのつまみ / Mod Host 自身のつまみ）
+        float ioff[numInternal] {};
         activeList.clear();
         for (int m = 0; m < mh::numMods; ++m)
             for (int t = 0; t < mh::numTargets; ++t)
             {
                 const float amt = amountSmooth[m][t].skip (n);
                 const int idx = targets[m][t].load();
-                if (idx < 0 || idx >= nParams) continue;
+                if (isInternal (idx)) { ioff[idx - internalBase] += amt * vals[m]; continue; }
+                if (p == nullptr || idx < 0 || idx >= nParams) continue;
                 if (std::find (activeList.begin(), activeList.end(), idx) == activeList.end())
                 {
                     if (activeList.size() >= activeList.capacity()) continue;   // 確保し直さない
@@ -313,41 +347,138 @@ void ModHostProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
                 }
                 offsets[(size_t) idx] += amt * vals[m];
             }
+        for (int k = 0; k < numInternal; ++k)
+        {
+            eff[k] = juce::jlimit (0.0f, 1.0f, internalParam[k]->getValue() + ioff[k]);
+            internalShown[k] = eff[k];
+        }
 
-        // つながりが外れたつまみは元の位置に戻す
-        for (int idx : prevActive)
-            if (idx < nParams && std::find (activeList.begin(), activeList.end(), idx) == activeList.end())
+        if (p != nullptr)
+        {
+            // MORPH: A と B の間の値を計算（つないでいるつまみは、その値を「元の位置」にする）
+            const float mo = eff[inMorph];
+            for (size_t j = 0; j < morphIdx.size(); ++j)
             {
-                (*params)[idx]->setValue (baseVal[(size_t) idx]);
-                wasActive[(size_t) idx] = 0;
+                const int idx = morphIdx[j];
+                if (idx >= nParams) continue;
+                const float v = mh::morphValue (morphA[j], morphB[j], mo, morphDisc[j] != 0);
+                morphCur[(size_t) idx] = v;
+                if (std::find (activeList.begin(), activeList.end(), idx) != activeList.end()) continue;
+                if (std::abs (v - morphLast[(size_t) idx]) > 1.0e-4f) { (*params)[idx]->setValue (v); morphLast[(size_t) idx] = v; }
             }
 
-        for (int idx : activeList)
-        {
-            auto* prm = (*params)[idx];
-            const float cur = prm->getValue();
-            // こちらが最後に入れた値と違う＝その間に人がつまみを動かした → そこを新しい元の位置に
-            if (! wasActive[(size_t) idx] || std::abs (cur - lastSet[(size_t) idx]) > 1.0e-5f)
-                baseVal[(size_t) idx] = cur;
-            const float nv = mh::applyOffset (baseVal[(size_t) idx], offsets[(size_t) idx]);
-            if (std::abs (nv - cur) > 1.0e-6f) prm->setValue (nv);
-            lastSet[(size_t) idx] = nv;
-            wasActive[(size_t) idx] = 1;
-        }
-        prevActive.assign (activeList.begin(), activeList.end());
+            // つながりが外れたつまみは元の位置に戻す
+            for (int idx : prevActive)
+                if (idx < nParams && std::find (activeList.begin(), activeList.end(), idx) == activeList.end())
+                {
+                    (*params)[idx]->setValue (baseVal[(size_t) idx]);
+                    wasActive[(size_t) idx] = 0;
+                    morphLast[(size_t) idx] = -1.0f;
+                }
 
-        processHosted (main, start, n);
+            for (int idx : activeList)
+            {
+                auto* prm = (*params)[idx];
+                const float cur = prm->getValue();
+                if (morphDriven[(size_t) idx]) baseVal[(size_t) idx] = morphCur[(size_t) idx];
+                // こちらが最後に入れた値と違う＝その間に人がつまみを動かした → そこを新しい元の位置に
+                else if (! wasActive[(size_t) idx] || std::abs (cur - lastSet[(size_t) idx]) > 1.0e-5f)
+                    baseVal[(size_t) idx] = cur;
+                const float nv = mh::applyOffset (baseVal[(size_t) idx], offsets[(size_t) idx]);
+                if (std::abs (nv - cur) > 1.0e-6f) prm->setValue (nv);
+                lastSet[(size_t) idx] = nv;
+                wasActive[(size_t) idx] = 1;
+            }
+            prevActive.assign (activeList.begin(), activeList.end());
+        }
+
+        // ── 音の通り道 ──
+        float now[numInternal];
+        for (int k = 0; k < numInternal; ++k) now[k] = internalParam[k]->convertFrom0to1 (eff[k]);
+        const float drive1 = juce::Decibels::decibelsToGain (now[inDrive]), mix1 = now[inMix] * 0.01f, out1 = juce::Decibels::decibelsToGain (now[inOut]);
+        const float send1[3] = { now[inSendLow] * 0.01f, now[inSendMid] * 0.01f, now[inSendHigh] * 0.01f };
+        if (bandsOn) xover.set (now[inSplitLow], now[inSplitHigh], (float) rate);
+
+        float* un[2]   = { work.getWritePointer (0), work.getWritePointer (1) };
+        float* sent[2] = { work.getWritePointer (2), work.getWritePointer (3) };
+        float* raw[2]  = { work.getWritePointer (4), work.getWritePointer (5) };
+        const int scCh = scratch.getNumChannels();
+        for (int i = 0; i < n; ++i)
+        {
+            const float r = (float) (i + 1) / (float) n;
+            const float drive = rampDrive + (drive1 - rampDrive) * r;
+            float s3[3];
+            for (int k = 0; k < 3; ++k) s3[k] = rampSend[k] + (send1[k] - rampSend[k]) * r;
+            for (int c = 0; c < 2; ++c)
+            {
+                const float x = main.getSample (juce::jmin (c, mainCh - 1), start + i);
+                float sv = x, uv = 0.0f;
+                if (bandsOn)
+                {
+                    float lo, mi, hi;
+                    xover.process (c, x, lo, mi, hi);
+                    sv = s3[0] * lo + s3[1] * mi + s3[2] * hi;
+                    uv = (lo + mi + hi) - sv;
+                }
+                un[c][i] = uv; sent[c][i] = sv; raw[c][i] = x;
+            }
+            // 中のプラグインへ（モノラルのプラグインなら L+R）
+            if (hostIns == 1) scratch.setSample (0, i, 0.5f * (sent[0][i] + sent[1][i]) * drive);
+            else for (int c = 0; c < 2 && c < scCh; ++c) scratch.setSample (c, i, sent[c][i] * drive);
+        }
+        for (int c = (hostIns == 1 ? 1 : 2); c < scCh; ++c) scratch.clear (c, 0, n);
+
+        if (p != nullptr)
+        {
+            juce::AudioBuffer<float> view (scratch.getArrayOfWritePointers(), scCh, n);
+            juce::MidiBuffer midi;
+            p->processBlock (view, midi);
+        }
+
+        const float* wet[2] = { scratch.getReadPointer (0), scratch.getReadPointer (p != nullptr && hostOuts == 1 ? 0 : juce::jmin (1, scCh - 1)) };
+        if (p == nullptr && hostIns == 1) wet[1] = wet[0];
+        const float agTarget = autoOn ? autoGain.gain : 1.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            const float r = (float) (i + 1) / (float) n;
+            const float mix = rampMix + (mix1 - rampMix) * r;
+            const float outG = rampOut + (out1 - rampOut) * r;
+            const float ag = rampAg + (agTarget - rampAg) * r;
+            float uL = un[0][i], uR = un[1][i], sL = sent[0][i], sR = sent[1][i], xL = raw[0][i], xR = raw[1][i];
+            dUn.process (uL, uR, latency);
+            dSent.process (sL, sR, latency);
+            dRaw.process (xL, xR, latency);
+            float yL = uL + (1.0f - mix) * sL + mix * wet[0][i];
+            float yR = uR + (1.0f - mix) * sR + mix * wet[1][i];
+            autoGain.measure (xL, xR, yL, yR);
+            yL *= ag * outG; yR *= ag * outG;
+            analyzer.push (xL, xR, yL, yR);
+            main.setSample (0, start + i, mainCh > 1 ? yL : 0.5f * (yL + yR));
+            if (mainCh > 1) main.setSample (1, start + i, yR);
+        }
+        autoGain.update();
+        rampDrive = drive1; rampMix = mix1; rampOut = out1; rampAg = agTarget;
+        for (int k = 0; k < 3; ++k) rampSend[k] = send1[k];
     }
+    autoGainShown = rampAg;
 
     for (int m = 0; m < mh::numMods; ++m)
     {
         modNow[m] = vals[m];
         for (int t = 0; t < mh::numTargets; ++t)
-            if (const int idx = targets[m][t].load(); p != nullptr && idx >= 0 && idx < nParams && wasActive[(size_t) idx])
+        {
+            const int idx = targets[m][t].load();
+            if (isInternal (idx))
+            {
+                shownBase[m][t] = internalParam[idx - internalBase]->getValue();
+                shownNow[m][t] = eff[idx - internalBase];
+            }
+            else if (p != nullptr && idx >= 0 && idx < nParams && wasActive[(size_t) idx])
             {
                 shownBase[m][t] = baseVal[(size_t) idx];
                 shownNow[m][t] = lastSet[(size_t) idx];
             }
+        }
     }
 }
 
@@ -402,7 +533,8 @@ static void restoreInto (juce::AudioPluginInstance& p, const juce::XmlElement& x
             p.setStateInformation (mb.getData(), (int) mb.getSize());
     }
     for (int m = 0; m < mh::numMods; ++m)
-        for (int t = 0; t < mh::numTargets; ++t) targets[m][t] = -1;
+        for (int t = 0; t < mh::numTargets; ++t)
+            if (! ModHostProcessor::isInternal (targets[m][t].load())) targets[m][t] = -1;
 
     const auto& params = p.getParameters();
     if (auto* rs = x.getChildByName ("ROUTES"))
@@ -440,11 +572,11 @@ void ModHostProcessor::finishLoad (std::unique_ptr<juce::AudioPluginInstance> in
 
     prepareHosted (*inst);
     if (restore != nullptr) restoreInto (*inst, *restore, targets, shownBase);
-    else
-        for (int m = 0; m < mh::numMods; ++m)
-            for (int t = 0; t < mh::numTargets; ++t) targets[m][t] = -1;
+    else clearHostedTargets();
 
+    hasA = hasB = false; storedA.clear(); storedB.clear();
     installHosted (std::move (inst));
+    if (restore != nullptr) restoreMorph (*restore);
     const juce::ScopedLock sl (stateLock);
     pendingState.reset();
 }
@@ -459,6 +591,7 @@ void ModHostProcessor::installHosted (std::unique_ptr<juce::AudioPluginInstance>
         old = std::move (hosted);
         hosted = std::move (inst);
         resizeFor (hosted.get(), scratch, hostIns, hostOuts, maxBlock, baseVal, lastSet, wasActive, activeList, prevActive, offsets);
+        rebuildMorphLocked();
     }
     if (old != nullptr) { old->removeListener (this); old->releaseResources(); old.reset(); }
     if (hosted != nullptr) hosted->addListener (this);
@@ -479,9 +612,103 @@ void ModHostProcessor::unloadPlugin()
         const juce::ScopedLock sl (stateLock);
         pendingState.reset();
     }
-    for (int m = 0; m < mh::numMods; ++m)
-        for (int t = 0; t < mh::numTargets; ++t) targets[m][t] = -1;
+    clearHostedTargets();
+    hasA = hasB = false; storedA.clear(); storedB.clear();
     installHosted (nullptr);
+}
+
+void ModHostProcessor::clearHostedTargets()
+{
+    for (int m = 0; m < mh::numMods; ++m)
+        for (int t = 0; t < mh::numTargets; ++t)
+            if (! isInternal (targets[m][t].load())) targets[m][t] = -1;
+}
+
+// ───────────────────────── MORPH ─────────────────────────
+
+void ModHostProcessor::storeMorph (int which)
+{
+    if (hosted == nullptr) return;
+    const auto& params = hosted->getParameters();
+    std::vector<float> v ((size_t) params.size());
+    for (int i = 0; i < params.size(); ++i) v[(size_t) i] = params[i]->getValue();
+    // MOD でつないでいるつまみは、動いている途中ではなく元の位置を覚える
+    for (int m = 0; m < mh::numMods; ++m)
+        for (int t = 0; t < mh::numTargets; ++t)
+            if (const int idx = targets[m][t].load(); idx >= 0 && idx < params.size()) v[(size_t) idx] = shownBase[m][t].load();
+    (which == 0 ? storedA : storedB) = std::move (v);
+    (which == 0 ? hasA : hasB) = true;
+    {
+        const juce::ScopedLock sl (hostLock);
+        rebuildMorphLocked();
+    }
+    // 覚えた直後に音が飛ばないように、MORPH をいま覚えた側に置く
+    if (hasA && hasB)
+        if (auto* mp = apvts.getParameter ("morph")) mp->setValueNotifyingHost (which == 0 ? 0.0f : 1.0f);
+}
+
+void ModHostProcessor::clearMorph()
+{
+    hasA = hasB = false; storedA.clear(); storedB.clear();
+    const juce::ScopedLock sl (hostLock);
+    rebuildMorphLocked();
+}
+
+void ModHostProcessor::rebuildMorphLocked()
+{
+    morphIdx.clear(); morphA.clear(); morphB.clear(); morphDisc.clear();
+    const size_t n = baseVal.size();
+    morphDriven.assign (n, 0); morphCur.assign (n, 0.0f); morphLast.assign (n, -1.0f);
+    morphIdx.reserve (n); morphA.reserve (n); morphB.reserve (n); morphDisc.reserve (n);
+    if (hosted != nullptr && hasA && hasB)
+    {
+        const auto& params = hosted->getParameters();
+        const size_t m = std::min ({ n, storedA.size(), storedB.size(), (size_t) params.size() });
+        for (size_t i = 0; i < m; ++i)
+            if (std::abs (storedA[i] - storedB[i]) > 1.0e-5f)
+            {
+                morphIdx.push_back ((int) i);
+                morphA.push_back (storedA[i]); morphB.push_back (storedB[i]);
+                auto* prm = params[(int) i];
+                morphDisc.push_back (prm->isDiscrete() || prm->isBoolean() ? 1 : 0);
+                morphDriven[i] = 1;
+            }
+    }
+    morphCount = (int) morphIdx.size();
+}
+
+static juce::String floatsToString (const std::vector<float>& v)
+{
+    juce::StringArray a;
+    for (float x : v) a.add (juce::String (x, 5));
+    return a.joinIntoString (",");
+}
+
+std::unique_ptr<juce::XmlElement> ModHostProcessor::morphToXml() const
+{
+    auto e = std::make_unique<juce::XmlElement> ("MORPH");
+    if (hasA) e->setAttribute ("a", floatsToString (storedA));
+    if (hasB) e->setAttribute ("b", floatsToString (storedB));
+    return e;
+}
+
+void ModHostProcessor::restoreMorph (const juce::XmlElement& x)
+{
+    hasA = hasB = false; storedA.clear(); storedB.clear();
+    if (auto* e = x.getChildByName ("MORPH"))
+    {
+        auto parse = [] (const juce::String& s, std::vector<float>& out)
+        {
+            juce::StringArray a; a.addTokens (s, ",", {});
+            out.clear();
+            for (auto& t : a) out.push_back (t.getFloatValue());
+            return ! out.empty();
+        };
+        hasA = e->hasAttribute ("a") && parse (e->getStringAttribute ("a"), storedA);
+        hasB = e->hasAttribute ("b") && parse (e->getStringAttribute ("b"), storedB);
+    }
+    const juce::ScopedLock sl (hostLock);
+    rebuildMorphLocked();
 }
 
 // ───────────────────────── つなぐ先 ─────────────────────────
@@ -490,16 +717,17 @@ int ModHostProcessor::numHostedParams() const { return hosted != nullptr ? hoste
 
 juce::String ModHostProcessor::paramName (int i) const
 {
+    if (isInternal (i)) return internalName (i - internalBase);
     if (hosted == nullptr || i < 0 || i >= hosted->getParameters().size()) return {};
     return hosted->getParameters()[i]->getName (64);
 }
 
 void ModHostProcessor::setTarget (int m, int t, int idx)
 {
-    if (hosted == nullptr || idx < 0 || idx >= hosted->getParameters().size()) idx = -1;
+    if (! isInternal (idx) && (hosted == nullptr || idx < 0 || idx >= hosted->getParameters().size())) idx = -1;
     if (idx >= 0)
     {
-        const float v = hosted->getParameters()[idx]->getValue();
+        const float v = isInternal (idx) ? internalParam[idx - internalBase]->getValue() : hosted->getParameters()[idx]->getValue();
         shownBase[m][t] = v; shownNow[m][t] = v;
         // AMOUNT が 0 のままだと何も起きないので、最初は +50 % に
         if (std::abs (amountParam[m][t]->load()) < 0.05f && juce::MessageManager::existsAndIsCurrentThread())
@@ -535,7 +763,10 @@ void ModHostProcessor::handleAsyncUpdate()
         {
             const juce::ScopedLock sl (hostLock);
             if ((int) baseVal.size() != hosted->getParameters().size())
+            {
                 resizeFor (hosted.get(), scratch, hostIns, hostOuts, maxBlock, baseVal, lastSet, wasActive, activeList, prevActive, offsets);
+                rebuildMorphLocked();
+            }
         }
         setLatencySamples (hosted->getLatencySamples());
         tailSeconds = hosted->getTailLengthSeconds();
@@ -558,6 +789,7 @@ void ModHostProcessor::handleAsyncUpdate()
         {
             // 同じプラグインがもう入っている → 中身だけ入れ直す
             restoreInto (*hosted, *x, targets, shownBase);
+            restoreMorph (*x);
             const juce::ScopedLock sl (stateLock);
             pendingState.reset();
             hostListeners.call ([] (Listener& l) { l.hostedPluginChanged(); });
@@ -573,7 +805,7 @@ std::unique_ptr<juce::XmlElement> ModHostProcessor::routesToXml() const
     auto r = std::make_unique<juce::XmlElement> ("ROUTES");
     for (int m = 0; m < mh::numMods; ++m)
         for (int t = 0; t < mh::numTargets; ++t)
-            if (const int idx = targets[m][t].load(); idx >= 0)
+            if (const int idx = targets[m][t].load(); idx >= 0 && ! isInternal (idx))
             {
                 auto* e = r->createNewChildElement ("R");
                 e->setAttribute ("m", m);
@@ -599,12 +831,23 @@ void ModHostProcessor::getStateInformation (juce::MemoryBlock& destData)
         st->createNewChildElement ("M")->setAttribute ("v", a.joinIntoString (","));
     }
 
+    // Mod Host 自身のつまみへのつなぎ（中のプラグインがなくても残す）
+    auto* ir = root.createNewChildElement ("IROUTES");
+    for (int m = 0; m < mh::numMods; ++m)
+        for (int t = 0; t < mh::numTargets; ++t)
+            if (const int idx = targets[m][t].load(); isInternal (idx))
+            {
+                auto* e = ir->createNewChildElement ("R");
+                e->setAttribute ("m", m); e->setAttribute ("t", t);
+                e->setAttribute ("id", internalId (idx - internalBase));
+            }
+
     {
         const juce::ScopedLock sl (stateLock);
         if (pendingState != nullptr)
         {
             // まだ読み込み中（または、この Mac にそのプラグインが無い）→ 受け取ったままを返す
-            for (auto* name : { "PLUGIN", "PSTATE", "ROUTES" })
+            for (auto* name : { "PLUGIN", "PSTATE", "ROUTES", "MORPH" })
                 if (auto* c = pendingState->getChildByName (name)) root.addChildElement (new juce::XmlElement (*c));
         }
         else if (hosted != nullptr)
@@ -614,6 +857,7 @@ void ModHostProcessor::getStateInformation (juce::MemoryBlock& destData)
             hosted->getStateInformation (mb);
             root.createNewChildElement ("PSTATE")->addTextElement (mb.toBase64Encoding());
             root.addChildElement (routesToXml().release());
+            root.addChildElement (morphToXml().release());
         }
     }
     copyXmlToBinary (root, destData);
@@ -639,10 +883,22 @@ void ModHostProcessor::setStateInformation (const void* data, int sizeInBytes)
         }
     }
 
+    for (int m = 0; m < mh::numMods; ++m)
+        for (int t = 0; t < mh::numTargets; ++t)
+            if (isInternal (targets[m][t].load())) targets[m][t] = -1;
+    if (auto* ir = xml->getChildByName ("IROUTES"))
+        for (auto* r : ir->getChildIterator())
+        {
+            const int m = r->getIntAttribute ("m", -1), t = r->getIntAttribute ("t", -1);
+            if (m < 0 || m >= mh::numMods || t < 0 || t >= mh::numTargets) continue;
+            for (int k = 0; k < numInternal; ++k)
+                if (r->getStringAttribute ("id") == internalId (k)) targets[m][t] = internalBase + k;
+        }
+
     {
         const juce::ScopedLock sl (stateLock);
         pendingState = std::make_unique<juce::XmlElement> ("PENDING");
-        for (auto* name : { "PLUGIN", "PSTATE", "ROUTES" })
+        for (auto* name : { "PLUGIN", "PSTATE", "ROUTES", "MORPH" })
             if (auto* c = xml->getChildByName (name)) pendingState->addChildElement (new juce::XmlElement (*c));
         if (pendingState->getChildByName ("PLUGIN") == nullptr) pendingState.reset();
     }

@@ -198,6 +198,9 @@
   1 MOD に 4 か所（ID m{n}a{t} が AMOUNT）、つなぎ先は LEARN（中のつまみを動かす＝audioProcessorParameterChanged）か一覧。
   つないでいる間は 64 サンプルごとに中のプラグインを回し、元の位置（人が動かしたら更新）＋ MOD×AMOUNT を setValue。
   保存は apvts＋STEPS＋PLUGIN（PluginDescription）＋PSTATE（base64）＋ROUTES（番号・名前・元の位置）。保存用の stateLock と音用の hostLock は別
+  v1.1.0: 通り道（Chain.h、JUCE なし、tools/test_chain.cpp）: 3 帯域 LR4（SPLIT LOW/HIGH、SEND LOW/MID/HIGH、ID bands）→ DRIVE → 中 → MIX（元の音はレイテンシー分 Delay）→ AUTO GAIN（ID autoGain）→ OUT。
+  Mod Host 自身のつまみも MOD の行き先（番号 internalBase=1<<20 ＋ k、保存は IROUTES）。MORPH（STORE A/B、違うつまみを morph で補間、切り替え式は 0.5 で、保存は MORPH の a/b）。
+  Analyzer.h: 入口（遅らせた元の音）と出口を M/S で FFT 4096、BANDS ページで帯域ごとの LEVEL 差・WIDTH（サイドの割合）の差とスペクトル
 
 - Plugin Link（MyPlugins/Shared/PluginLink.h・PluginLinkJuce.h）… 自作プラグイン同士の連携。
   ~/Library/Application Support/MyPlugins/PluginLink-v2.bin を mmap した共有メモリの掲示板（64 席・数値 24 個、atomic だけで読み書き、3 秒で不在、10 秒で席を回収）。

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
-project(ModHost VERSION 1.0.0)
+project(ModHost VERSION 1.1.0)
 
 option(COPY_AFTER_BUILD "Copy plugin to system folder after build" ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -45,6 +45,7 @@ target_compile_definitions(ModHost PUBLIC
 target_link_libraries(ModHost
     PRIVATE
         juce::juce_audio_utils
+        juce::juce_dsp
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags

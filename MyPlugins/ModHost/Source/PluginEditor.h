@@ -30,6 +30,26 @@ private:
     void updateVisibility();
     void makeHostedEditor();
     void updateSize();
+    void showPage (int);
+    void layoutBands (juce::Rectangle<int>);
+    void layoutMorph (juce::Rectangle<int>);
+    void paintBandsInfo (juce::Graphics&);
+    void paintMorphInfo (juce::Graphics&);
+
+    // BANDS ページのグラフ: 入口（灰色）と出口（色）のスペクトル、帯域の分け目（ドラッグ）、帯域クリックで SEND の ON/OFF
+    struct BandGraph : juce::Component
+    {
+        ModHostEditor& ed;
+        explicit BandGraph (ModHostEditor& e) : ed (e) {}
+        void paint (juce::Graphics&) override;
+        void mouseDown (const juce::MouseEvent&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
+        void mouseMove (const juce::MouseEvent&) override;
+        float xOf (float hz) const;
+        float hzOf (float x) const;
+        int dragging = -1;   // 0 = SPLIT LOW、1 = SPLIT HIGH
+    };
 
     // MOD の切り替えタブ（今の値を小さな棒で）
     struct Tab : juce::Component
@@ -76,6 +96,26 @@ private:
     juce::Label status;
     bool showUI = true;
     std::unique_ptr<juce::AudioProcessorEditor> hostedEditor;
+
+    // ページ（MOD / BANDS / MORPH）
+    int page = 0;
+    juce::TextButton pageButtons[3];
+    std::vector<juce::Component*> modComps, bandComps, morphComps;
+
+    // BANDS
+    BandGraph graph { *this };
+    juce::Slider drive, mixK, outK, sendS[3];
+    juce::Label driveL, mixL, outL;
+    juce::TextButton autoButton { "AUTO GAIN" }, bandsButton { "BANDS" };
+    std::unique_ptr<SA> driveAtt, mixAtt, outAtt, sendAtt[3];
+    std::unique_ptr<BA> autoAtt, bandsAtt;
+    juce::Rectangle<int> bandInfo, autoInfoArea;
+
+    // MORPH
+    juce::TextButton storeA { "STORE A" }, storeB { "STORE B" }, clearMorphButton { "CLEAR" };
+    juce::Slider morphS;
+    std::unique_ptr<SA> morphAtt;
+    juce::Rectangle<int> morphInfo;
 
     std::vector<std::unique_ptr<Tab>> tabs;
     Scope scope { *this };

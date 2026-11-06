@@ -41,10 +41,56 @@ Logic の Modulator は音源にしか効きませんが、Mod Host に入れた
 Mod Host の画面の右上にある「サイドチェーン」のメニューから、キックなどのトラックを選びます。
 MOD の TYPE を **SIDECHAIN** にすると、そのトラックの音で動きます。
 
+## 通り道（BANDS ページ）
+
+上の **MOD / BANDS / MORPH** ボタンで下の画面を切り替えます。BANDS ページでは、中のプラグインの前後をこう通します。
+
+入力 →（帯域に分ける）→ 送る分 × **DRIVE** → 中のプラグイン → **MIX** で元の音と混ぜる → **AUTO GAIN** → **OUT**
+
+| つまみ | 何をするか |
+|---|---|
+| **DRIVE** | 中のプラグインに入れる音量（-24〜+24 dB）。歪み系なら、ここを上げると深く歪む。元の音側は変わらない |
+| **MIX** | 中のプラグインを通った音と元の音の割合。MIX のない歪みでもパラレル（芯を残して歪みを足す）にできる |
+| **OUT** | 最後の音量 |
+| **AUTO GAIN** | 入口と出口の音量を比べて、出口を自動でそろえる（-24〜+12 dB、約 0.5 秒で追う）。「大きくなったから良く聞こえる」を防いで、音色だけで比べられる。入口が静かな間（リバーブの残りだけの所）は動かない |
+| **BANDS** | ON で LOW / MID / HIGH の 3 つに分け、帯域ごとに **SEND**（中のプラグインへ送る量）を決める。送らなかった分はそのまま通る |
+
+- グラフの **縦の線をドラッグ** で帯域の分け目（SPLIT LOW 40 Hz〜2 kHz / SPLIT HIGH 500 Hz〜16 kHz）を動かす
+- グラフの **帯域をクリック** で、その帯域の SEND を 0 % ⇔ 100 %（BANDS が OFF のときは、最初のクリックで ON）
+- 分け方は Linkwitz-Riley（足し合わせると元どおりになる分け方）。BANDS を ON にして SEND を全部 100 % にしても音は変わりません
+- 元の音は、中のプラグインの遅れ（レイテンシー）の分だけ遅らせて混ぜるので、ずれません
+
+### 前後の比較（見える化）
+
+帯域を分けるのは Mod Host なので、中のプラグインのグラフには帯域分けや MIX の影響が出ません。そこで Mod Host が、自分に入ってきた音と出ていく音を比べて見せます。
+
+- グラフ: **灰色 = 入口（IN）**、**オレンジ = 出口（OUT）** のスペクトル（見やすいように高音側を少し持ち上げて描いています）
+- 下の 3 つの箱: 帯域ごとに
+  - **LEVEL** … 出口が入口より何 dB 大きいか（オレンジ = 大きくなった、青 = 小さくなった）
+  - **WIDTH** … 広がり（サイドの割合 %）が入口 → 出口でどう変わったか
+- 数字は約 1 秒でならしてあります。帯域の分け目は SPLIT の位置。BANDS が OFF でも、その分け目で比べます
+
+## MORPH ページ（2 つの設定の間を行き来）
+
+1. 中のプラグインのつまみを好きな形（A）にして **STORE A**
+2. つまみを別の形（B）にして **STORE B**（MORPH は自動で B 側に）
+3. **MORPH** のバーを動かすと、A と B で違うつまみが全部いっしょに動きます
+   - 切り替え式のつまみ（ON/OFF・種類など）は真ん中で切り替わります
+   - MOD で動かすには、行き先に「◆ Mod Host: MORPH」を選ぶ（例: SAW UP・4 BARS でクリーン → ぐしゃぐしゃへ）
+- MORPH を使っている間、A と B で違うつまみは MORPH が決めます（手で回しても MORPH を動かすと戻ります）。**CLEAR** でやめる
+
+## Mod Host 自身のつまみも MOD で動かせる
+
+行の名前のところをクリック →「◆ Mod Host」から、DRIVE / MIX / OUT / MORPH / SEND LOW・MID・HIGH / SPLIT LOW・HIGH を選べます。
+- 例: ENV → DRIVE（強く弾いた所だけ深く歪む）、SIDECHAIN → MIX（キックの間だけリバーブを引っ込める）、LFO → SPLIT HIGH（歪む帯域が動く）
+
 ## おすすめ設定
 
-- **キックでリバーブをよける**: 中に ChromaVerb などを入れる → MOD 2 を SIDECHAIN、ATTACK 2 ms、RELEASE 250 ms、UNI → LEARN で MIX（Dry/Wet）→ AMOUNT -60 %
+- **キックでリバーブをよける**: 中に Nebula Reverb などを入れる → MOD 2 を SIDECHAIN、ATTACK 2 ms、RELEASE 250 ms、UNI → LEARN で MIX（Dry/Wet）→ AMOUNT -60 %
 - **ディレイのフィードバックを 4 小節で上げる**: MOD 1 を LFO、SHAPE = SAW UP、SYNC ON、4 BARS、UNI → フィードバックの元の位置を低めにして AMOUNT +60 %
+- **ベースを低音はそのままで歪ませる**: 中に Wool Fuzz → BANDS ON、SPLIT LOW 150 Hz、LOW の SEND 0 %、MIX 60 %、AUTO GAIN ON → DRIVE で歪みの深さを決める
+- **高い所だけ響かせる**: 中に Nebula Reverb → BANDS ON、LOW と MID の SEND 0 %、SPLIT HIGH 3 kHz（WIDTH の数字で広がった量が見える）
+- **クリーン → クランチを 4 小節で**: 中に Porch Drive → GAIN を低くして STORE A、上げて STORE B → MOD 1 を LFO・SAW UP・4 BARS・UNI、行き先「◆ Mod Host: MORPH」AMOUNT +100 %
 - **フィルターを 16 分で刻む**: MOD 4 を STEPS、1/16、STEPS 8、SMOOTH 10 % → カットオフに AMOUNT +70 %、段を描く
 - **ゆらゆらコーラス風**: MOD 3 を RANDOM、1/2、SMOOTH 100 %、BI → ピッチやディレイタイムに AMOUNT +10 %
 
@@ -56,3 +102,4 @@ MOD の TYPE を **SIDECHAIN** にすると、そのトラックの音で動き�
 - つないだつまみは約 1.3 ms（64 サンプル）ごとに動かしています。つないでいないときは中のプラグインをそのまま 1 回で通します
 - 中のプラグインの遅れ（レイテンシー）は、そのまま Logic に伝えます
 - 中に入れられるのは AU のエフェクト（Mod Host 自身は入れられません）
+- **Logic 純正のエフェクト（ChromaVerb、Pedalboard、Channel EQ など）は AU ではないので入れられません**。自作のプラグイン（Wool Fuzz、Porch Drive、Nebula Reverb など）、市販のプラグイン、Apple の AU（AUDistortion、AUDelay など）が入ります

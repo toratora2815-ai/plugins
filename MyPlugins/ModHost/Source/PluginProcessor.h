@@ -4,6 +4,8 @@
 #include "PresetBar.h"
 #include "ModEngine.h"
 #include "AuList.h"
+#include "Chain.h"
+#include "Analyzer.h"
 
 // Mod Host: 好きな AU エフェクトを中に読み込み、MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS）で
 // 中のプラグインのどのつまみでも自動で動かす入れ物。
@@ -86,6 +88,25 @@ public:
     float routeBase (int m, int t) const { return shownBase[m][t].load(); }
     float routeNow (int m, int t) const { return shownNow[m][t].load(); }
 
+    // ── Mod Host 自身のつまみ（MOD の行き先にもなる） ──
+    enum Internal { inDrive = 0, inMix, inOut, inMorph, inSendLow, inSendMid, inSendHigh, inSplitLow, inSplitHigh, numInternal };
+    static constexpr int internalBase = 1 << 20;    // つなぐ先の番号がこれ以上なら Mod Host 自身のつまみ
+    static bool isInternal (int idx) { return idx >= internalBase && idx < internalBase + numInternal; }
+    static const char* internalId (int k);
+    static juce::String internalName (int k);
+    // 今の値（MOD を足したあと。0〜1 と、実際の単位）
+    float internalNorm (int k) const { return internalShown[k].load(); }
+    float internalValue (int k) const { return internalParam[k]->convertFrom0to1 (internalShown[k].load()); }
+    float autoGainDb() const { return juce::Decibels::gainToDecibels (autoGainShown.load(), -60.0f); }
+
+    mh::Analyzer analyzer;   // 入口と出口の比較（画面が update() を呼ぶ）
+
+    // ── MORPH（中のプラグインのつまみ全部を A と B の間で動かす） ──
+    void storeMorph (int which);   // 0 = A、1 = B。今のつまみの位置を覚える
+    void clearMorph();
+    bool hasMorph (int which) const { return which == 0 ? hasA : hasB; }
+    int morphDiffCount() const { return morphCount.load(); }
+
     // STEPS の値（0〜1）
     float stepValue (int m, int k) const { return stepVals[m][k].load(); }
     void setStepValue (int m, int k, float v) { stepVals[m][k].store (juce::jlimit (0.0f, 1.0f, v)); }
@@ -102,8 +123,34 @@ private:
     void installHosted (std::unique_ptr<juce::AudioPluginInstance>);
     void prepareHosted (juce::AudioPluginInstance&);
     mh::Settings readSettings (int m) const;
-    void processHosted (juce::AudioBuffer<float>& main, int start, int n);
     std::unique_ptr<juce::XmlElement> routesToXml() const;
+
+    void rebuildMorphLocked();   // hostLock の中で
+    void restoreMorph (const juce::XmlElement&);
+    std::unique_ptr<juce::XmlElement> morphToXml() const;
+    void clearHostedTargets();
+
+    // 通り道
+    juce::RangedAudioParameter* internalParam[numInternal] {};
+    std::atomic<float> internalShown[numInternal];
+    std::atomic<float>* bandsParam = nullptr;
+    std::atomic<float>* autoGainParam = nullptr;
+    mh::Crossover3 xover;
+    mh::Delay dUn, dSent, dRaw;
+    mh::AutoGain autoGain;
+    juce::AudioBuffer<float> work;   // 送らなかった分・送った分・元の音（各 L/R）
+    int maxDelay = 96000;
+    float rampDrive = 1, rampMix = 1, rampOut = 1, rampAg = 1, rampSend[3] { 1, 1, 1 };
+    std::atomic<float> autoGainShown { 1.0f };
+
+    // MORPH（A / B は画面のスレッド、morphIdx などは hostLock の中で作り直す）
+    std::vector<float> storedA, storedB;
+    bool hasA = false, hasB = false;
+    std::atomic<int> morphCount { 0 };
+    std::vector<int> morphIdx;
+    std::vector<float> morphA, morphB;
+    std::vector<char> morphDisc, morphDriven;
+    std::vector<float> morphCur, morphLast;
 
     juce::AudioPluginFormatManager formats;
     std::unique_ptr<juce::AudioPluginInstance> hosted;   // 音のスレッドは hostLock を取ってから触る
