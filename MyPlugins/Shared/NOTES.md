@@ -20,4 +20,4 @@ Sample Sculptor は LINK 欄だけ（自然な相手なし）。Kind 3 は前は
 （kindNebula の名前は残っているが、VocalDuck を受けるのは Lumen Rooms / Elder Verb / Meld Verb）。
 Balance Scope の Reference を待つ処理は 1.3.1 で外した（namespace ref は PluginLink.h に残っているが、使っているものはない）。
 namespace tamer は今は Hush Field の並び。名前を変えると Shared を使う全部のビルドになるので、次に Shared を触るときに直す。
-Forge Strip / Forge Mixer は独自の種類 200 / 201（ForgeStrip/Source/ForgeLink.h）で、この一覧の外の独立した系統。新しい Kind はこれとぶつけない。
+Forge Strip / Forge Mixer は独自の種類 200 / 201（ForgeStrip/Source/ForgeLink.h）で、この一覧の外の独立した系統。Forge Mixer は 2026-11-06 に削除したが、200 / 201 は使い回さない。新しい Kind はこれとぶつけない。

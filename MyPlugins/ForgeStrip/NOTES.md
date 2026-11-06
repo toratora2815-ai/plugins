@@ -17,3 +17,4 @@ v1.2.1: 並び順を apvts.state の "order" から、非オートメーショ�
 これでプリセット・UNDO に並び順が入る。古い保存（order の印だけ）は setStateInformation で pos に直して読む（Swift で確認済み）
 同 1.2.1: DSP 検査係の指摘で、ToneTargets.h を 1/12 オクターブの dB 平均＋なめらかさの罰則で当てはめ直した（1.2.0 は 6.4k/8k がジグザグの過学習だった。1/12 で 1.39 → 0.33 dB）。SCULPTOR は基準どおり高域を素通し（SpectralBase::topHz 15600 ± topHalf 1000、全体パワーの計算にも同じ重み）。
 Vintage リリースは 1000 ms から先を √ で伸ばす。Spectral.h のフレームごとの std::vector をなくした。holdLeft を reset で 0 に
+2026-11-06: Forge Mixer（Frgm）を削除。Strip 側の受け取り（PluginProcessor.cpp の kindMixer、LINK 欄の「Forge Mixer を待っています」）はソースに残したまま（次に Strip を直すときに一緒に片付ける）

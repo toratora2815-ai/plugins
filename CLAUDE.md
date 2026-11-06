@@ -36,7 +36,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`, `Eldv`, `Ecdr`, `Frbx`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -96,9 +96,7 @@
 - Fire Box（FireBox）1.1.0 … 太く・大きくする全部入り（本人の持っている市販プラグインを測って、音の処理を同じ動きに合わせ込み）。IN / BASS / THICK / BODY / COMP⇄OTT / SOFT CLIP / CRUNCH / MIX / LOUD / OUT、UNITY・LIVE・192k・BYPASS。測定の道具は build/fuellab（コミットしない）。Plugin Link は Gain Stage で MATCH
   v1.1.0: OTT 作り直し（88 Hz の分割は Q の違う 2 段ずつ、dB 型検出器を持ち上げ用・下げ用に、OTT 時の MIX のドライも帯域分けを通す、量の表 29 段階）。FUEL との差 量24 dB で −33 dB
 - Mod Host（ModHost）1.1.0 … 好きな AU を中に読み込み、MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS / LINK）でつまみを動かす。3 帯域・DRIVE・MORPH・前後の解析
-- Forge Strip（ForgeStrip）1.2.1 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Forge Mixer から OUTPUT/PAN/WIDTH を受ける（独自の種類 200）
-- Forge Mixer（ForgeMixer）1.0.1 … Forge Strip 用のミキサー（音は素通し。つまみが LINK だけなのでプリセット・取り消し欄はなし＝例外）。同じ LINK の Strip を点で並べ（左右 = パン、上下 = 音量、大きさ = 幅）、ドラッグの指示を種類 201 で出す（最大 5 つ、放して 0.6 秒）。
-  Strip は 30 Hz のタイマーで自分の token の指示をつまみに入れる。ForgeStrip/Source/ForgeLink.h を読む
+- Forge Strip（ForgeStrip）1.2.1 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Plugin Link の相手だった Forge Mixer は削除（受け取る処理と独自の種類 200 / 201 はソースに残っている）
 
 ### 単体 Mac アプリ（.app）
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作
@@ -116,13 +114,14 @@
 
 ### Plugin Link（MyPlugins/Shared/PluginLink.h・PluginLinkJuce.h）
 自作プラグイン同士の連携（共有メモリの掲示板、LINK 1〜4、FROM で相手選び）。詳しい並び・今つながっているもの・空き番号は `MyPlugins/Shared/NOTES.md`。
-新しくつなぐときは Kind と送る数値の番号を PluginLink.h に足す。Kind 6・7（削除した Reference・Nebula）は空き番号のまま使い回さない。Forge は独自の 200 / 201
+新しくつなぐときは Kind と送る数値の番号を PluginLink.h に足す。Kind 6・7（削除した Reference・Nebula）は空き番号のまま使い回さない。Forge は独自の 200 / 201（Forge Mixer は削除）
 
 ### やめたもの（作り直さない。ソースは git の履歴にだけ残る）
 - Velvet Tamer（Vltm）… 2026-11-06。ややこしいので Hush Field に一本化
 - Hum Keys … 2026-11-06。その場で MIDI にする遅れ（低い声で 30〜90 ms）が仕組み上縮められず「疲れる」。クオンタイズ・手直しは Idea Catcher に移した
 - Hit Sculptor（Htsc）・Flipside（Flps）… 2026-11-06。本人の意図は「サンプル編集」だったので Sample Sculptor にまとめた
 - Third Time … 2026-11-06。「うっとうしい」
+- Forge Mixer（Frgm）… 2026-11-06。本人「消そっか」
 - Nebula Reverb（Nbrv）… 2026-11-06。Lumen Rooms と被るので
 - Reference（プラグイン、Rfrc）… 2026-11-06。Reference Monitor（アプリ）で足りる
 - Resume Card … 2026-11-06。「うっとうしい」

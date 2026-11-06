@@ -15,7 +15,6 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 | Horizon Spread | HorizonSpread | モノラルで崩れないステレオの広げ役 |
 | Hush Field | HushField | 耳に刺さる響きを鳴った瞬間だけ下げる（動的レゾナンス抑制） |
 | Forge Strip | ForgeStrip | EQ・コンプなど 11 モジュールのチャンネルストリップ |
-| Forge Mixer | ForgeMixer | Forge Strip のトラックを点で並べて動かすミキサー（音は素通し） |
 | Gain Stage | GainStage | トラックの入口の音量をワンクリックでそろえる |
 | Fader Pilot | FaderPilot | ボーカルの音量を自動でフェーダーを動かして揃える |
 | Balance Scope | BalanceScope | 帯域バランスとラウドネスの測定器。Plugin Link の配り役 |
