@@ -122,9 +122,14 @@ namespace echo
         float bias;     // 偶数次（非対称）
         float compThr, compRatio;   // 歪みの前のコンプ（入れた後の大きさで dB）
         // にじみ（オールパス）
-        float diffAmt;  // 0..1（0 = なし）
-        float diffSize; // ms（いちばん長い段）
-        float diffPre;  // ms（にじむ分だけ前に出す）
+        // にじみ（出口で 1 回だけ。左右別のオールパス 4 段: 係数と長さ ms。係数がすべて 0 ならなし）
+        float diffG[2][4], diffLen[2][4];
+        float minMs;     // これより短いエコーにはならない（0 = 制限なし）
+        float passTilt;  // 奇数回目に入る通り道（A）と偶数回目（B）の音量差 dB（A − B、split の残りの微調整）
+        BiqSpec split[3]; // A と B の音色の差（A − B）。A に +半分、B に −半分（棚・ピークは逆の dB でちょうど打ち消すので A×B は変わらない）
+        // 歪みの前に掛けて後で戻す EQ（周波数ごとの歪みやすさ）: 180 Hz ローシェルフ・900 Hz / 3.5 kHz ハイシェルフの dB、全体 dB
+        float emph[4];
+        float compAtt, compRel;   // 歪みの前のコンプの速さ（ms）
     };
 
     // ---------------- 遅延線（32 点の窓付き sinc 補間。高音が鈍らない） ----------------
@@ -272,11 +277,16 @@ namespace echo
         Shaper sh;
         float drive = 1, makeup = 1;
         float thr = 1e9f, slope = 0, env = 0, aAtt = 0.5f, aRel = 0.999f;
+        double rate = 48000;
         void prepare (const Halfband& h1, const Halfband& h2, double fs)
         {
             u1.prepare (h1); d1.prepare (h1); u2.prepare (h2); d2.prepare (h2);
-            aAtt = 1.0f - std::exp (-1.0f / (0.002f * (float) fs));
-            aRel = std::exp (-1.0f / (0.15f * (float) fs));
+            rate = fs; setTimes (2.0f, 150.0f);
+        }
+        void setTimes (float attMs, float relMs)
+        {
+            aAtt = 1.0f - std::exp (-1.0f / (std::max (0.05f, attMs) * 0.001f * (float) rate));
+            aRel = std::exp (-1.0f / (std::max (0.5f, relMs) * 0.001f * (float) rate));
         }
         void reset() { u1.reset(); u2.reset(); d1.reset(); d2.reset(); env = 0; }
         void set (float driveDb, float makeupDb, float k, float bias, float thrDb, float ratio)
@@ -318,12 +328,15 @@ namespace echo
         bool on = false;
         void prepare (double fs) { for (auto& x : d) x.prepare ((int) (fs * 0.2)); }
         void reset() { for (auto& x : d) x.reset(); }
-        void set (float amt, float sizeMs, double fs, int seed)
+        float gs[4] {};
+        void set (const float* gain, const float* lenMs, double fs)
         {
-            on = amt > 0.001f;
-            g = 0.75f * std::min (1.0f, amt);
-            static const float r[2][4] = { { 1.0f, 0.68f, 0.47f, 0.31f }, { 0.93f, 0.73f, 0.43f, 0.29f } };
-            for (int i = 0; i < 4; ++i) len[i] = std::max (1, (int) (sizeMs * 0.001 * fs * r[seed & 1][i]));
+            on = false;
+            for (int i = 0; i < 4; ++i)
+            {
+                gs[i] = gain[i]; on = on || gain[i] > 0.0005f;
+                len[i] = std::max (1, (int) std::lround (lenMs[i] * 0.001 * fs));
+            }
         }
         inline float process (float x)
         {
@@ -331,13 +344,12 @@ namespace echo
             for (int i = 0; i < 4; ++i)
             {
                 const float z = d[i].readInt (len[i]);
-                const float v = x + g * z;
+                const float v = x + gs[i] * z;
                 d[i].write (v);
-                x = z - g * v;
+                x = z - gs[i] * v;
             }
             return x;
         }
-        // 平均の遅れ（ms。前に出す量の目安）
     };
 
     // ---------------- 揺れ ----------------
@@ -426,14 +438,19 @@ namespace echo
     // ---------------- ループ 1 回分の処理 P ----------------
     struct Pass
     {
-        Saturator sat; Diffuser diff; Chain loop; Biquad hiCut;
-        void prepare (double fs, const Halfband& h1, const Halfband& h2) { sat.prepare (h1, h2, fs); diff.prepare (fs); }
-        void reset() { sat.reset(); diff.reset(); loop.reset(); hiCut.reset(); }
+        Saturator sat; Chain loop; Chain split; Biquad hiCut; Chain pre, post;
+        void prepare (double fs, const Halfband& h1, const Halfband& h2) { sat.prepare (h1, h2, fs); }
+        void reset() { sat.reset(); loop.reset(); split.reset(); hiCut.reset(); pre.reset(); post.reset(); }
+        void setEmphasis (const float* e, double fs)
+        {
+            const BiqSpec a[3] = { { 3, 180.0f, 0.7f, e[0] }, { 4, 900.0f, 0.7f, e[1] }, { 4, 3500.0f, 0.7f, e[2] } };
+            const BiqSpec b[3] = { { 3, 180.0f, 0.7f, -e[0] }, { 4, 900.0f, 0.7f, -e[1] }, { 4, 3500.0f, 0.7f, -e[2] } };
+            pre.set (a, 3, e[3], fs); post.set (b, 3, -e[3], fs);
+        }
         inline float process (float x)
         {
-            x = sat.process (x);
-            x = diff.process (x);
-            x = loop.process (x);
+            x = post.process (sat.process (pre.process (x)));
+            x = split.process (loop.process (x));
             x = hiCut.process (x);
             // くり返しが 100% を超えても、約 +6 dBFS で止める（測った参考と同じ天井）
             const float a = std::abs (x);
@@ -501,6 +518,7 @@ namespace echo
             {
                 A[c].prepare (maxS); B[c].prepare (maxS);
                 pa[c].prepare (fs, h1, h2); pb[c].prepare (fs, h1, h2);
+                outDiff[c].prepare (fs);
             }
             dryDelay.clear();
             configured = false;
@@ -510,7 +528,7 @@ namespace echo
         {
             for (int c = 0; c < 2; ++c)
             {
-                A[c].reset(); B[c].reset(); pa[c].reset(); pb[c].reset(); color[c].reset(); lowCut[c].reset(); lowCut2[c].reset();
+                A[c].reset(); B[c].reset(); pa[c].reset(); pb[c].reset(); color[c].reset(); colorSplit[c].reset(); lowCut[c].reset(); lowCut2[c].reset(); outDiff[c].reset();
                 tSm[c] = -1; tSm2[c] = -1;
             }
             mod.reset();
@@ -542,10 +560,24 @@ namespace echo
                         const float dIn = prof->satIn[si] + t * (prof->satIn[si + 1] - prof->satIn[si]);
                         const float dOut = prof->satOut[si] + t * (prof->satOut[si + 1] - prof->satOut[si]);
                         ps->sat.set (dIn, dOut, prof->hard, prof->bias, prof->compThr, prof->compRatio);
-                        ps->diff.set (prof->diffAmt, prof->diffSize, fs, c);
+                        ps->sat.setTimes (compAttOverride > 0 ? compAttOverride : prof->compAtt, compRelOverride > 0 ? compRelOverride : prof->compRel);
+                        ps->setEmphasis (prof->emph, fs);
                     }
                 }
-                if (styleChanged && configured) { for (int c = 0; c < 2; ++c) { pa[c].diff.reset(); pb[c].diff.reset(); } }
+                for (int c = 0; c < 2; ++c)
+                {
+                    outDiff[c].set (prof->diffG[c], prof->diffLen[c], fs);
+                    if (styleChanged && configured) outDiff[c].reset();
+                    // 奇数回目（A）と偶数回目（B）の音量差。1 回目は A を通るので、色で戻す
+                    pa[c].loop.set (prof->loop, prof->nLoop, prof->loopGain + 0.5f * prof->passTilt, fs);
+                    pb[c].loop.set (prof->loop, prof->nLoop, prof->loopGain - 0.5f * prof->passTilt, fs);
+                    color[c].set (prof->color, prof->nColor, prof->colorGain - 0.5f * prof->passTilt, fs);
+                    BiqSpec half[3], neg[3];
+                    for (int k = 0; k < 3; ++k) { half[k] = prof->split[k]; half[k].g *= 0.5f; neg[k] = prof->split[k]; neg[k].g *= -0.5f; }
+                    pa[c].split.set (half, 3, 0.0f, fs);
+                    pb[c].split.set (neg, 3, 0.0f, fs);
+                    colorSplit[c].set (neg, 3, 0.0f, fs);
+                }
             }
             configured = true;
             inGain = std::pow (10.0f, p.inputDb / 20.0f);
@@ -567,6 +599,7 @@ namespace echo
             nRep = n;
         }
         void setDuck (float g) { duck = g; }
+        float compAttOverride = 0, compRelOverride = 0;   // 合わせ込み用（0 = スタイルの値）
         const Params& get() const { return q; }
         const Profile& profile() const { return *prof; }
 
@@ -575,15 +608,16 @@ namespace echo
         {
             if (! configured) set (q);
             const double lat = Saturator::latency();
-            const double t1 = std::max (0.0, q.prime ? primeMs (q.time1Ms) : q.time1Ms) * 0.001 * fs;
-            const double t2 = std::max (0.0, q.prime ? primeMs (q.time2Ms) : q.time2Ms) * 0.001 * fs;
+            const double minT = prof->minMs;
+            const double t1 = std::max (minT, q.prime ? primeMs (q.time1Ms) : q.time1Ms) * 0.001 * fs;
+            const double t2 = std::max (minT, q.prime ? primeMs (q.time2Ms) : q.time2Ms) * 0.001 * fs;
             const double feel = q.feelMs * 0.001 * fs;
             const double ms = 0.001 * fs;
             const Profile& P = *prof;
             const float fb = std::max (0.0f, std::min (1.25f, q.feedback));
             const double maxD = maxDelaySec * fs - 8;
-            // 時間はなめらかに追う（テープのように音程が動く。約 0.12 s）
-            const double aT = 1.0 - std::exp (-1.0 / (0.12 * fs));
+            // 時間はなめらかに追う（テープのように音程が動く。参考を測って時定数 0.504 s の指数、全スタイル同じ）
+            const double aT = 1.0 - std::exp (-1.0 / (0.504 * fs));
             for (int c = 0; c < 2; ++c)
             {
                 const double tgt = (q.mode == 1 && c == 1) ? t2 : t1;
@@ -649,7 +683,7 @@ namespace echo
                 }
                 for (int c = 0; c < 2; ++c)
                 {
-                    float w = color[c].process (wet[c]);
+                    float w = outDiff[c].process (colorSplit[c].process (color[c].process (wet[c])));
                     w = lowCut2[c].process (lowCut[c].process (w));
                     wet[c] = w * duck;
                 }
@@ -672,7 +706,8 @@ namespace echo
         Halfband h1, h2;
         DelayLine A[2], B[2];
         Pass pa[2], pb[2];
-        Chain color[2];
+        Chain color[2], colorSplit[2];
+        Diffuser outDiff[2];
         Biquad lowCut[2], lowCut2[2];
         ModGen mod;
         double tSm[2] { -1, -1 }, tSm2[2] { -1, -1 }, rhythmSm = -1;

@@ -61,19 +61,8 @@ static void writeWav (const char* path, const std::vector<float>& L, const std::
 
 static double timeMs (double x) { return 0.100279 * (std::exp (11.9149 * x) - 1.0); }
 
-int main (int argc, char** argv)
+static echo::Params toParams (std::map<int, double>& v)
 {
-    if (argc < 4) { std::fprintf (stderr, "usage: render_echo in.wav out.wav tail id=value...\n"); return 1; }
-    std::vector<float> L, R; int sr = 48000;
-    if (! readWav (argv[1], L, R, sr)) { std::fprintf (stderr, "read error\n"); return 1; }
-    const double tail = std::atof (argv[3]);
-    std::map<int, double> v { { 8, 0.5 }, { 9, 0.5 }, { 10, 0.5 }, { 14, 0 }, { 20, 0.6565 }, { 26, 0.6565 }, { 27, 0 }, { 31, 0 }, { 33, 0.5 }, { 34, 0.5 },
-                              { 35, 0 }, { 36, 0 }, { 37, 0 }, { 39, 0 }, { 44, 0.5655 }, { 51, 7.0 / 15 }, { 52, 0 }, { 64, 1 }, { 124, 90.0 / 210 } };
-    for (int a = 4; a < argc; ++a)
-    {
-        const std::string s (argv[a]); const auto e = s.find ('=');
-        if (e != std::string::npos) v[std::atoi (s.substr (0, e).c_str())] = std::atof (s.substr (e + 1).c_str());
-    }
     const char* wob = std::getenv ("WOBBLE");
     echo::Params p;
     const double bpm = 30 + 210 * v[124];
@@ -94,15 +83,61 @@ int main (int argc, char** argv)
     p.decayDb = (float) (v[52] * 40);
     p.loopBeatsMs = 2 * 60000.0 / bpm;
     if (wob) p.wobble = (float) std::atof (wob);
+    return p;
 
+}
+
+int main (int argc, char** argv)
+{
+    if (argc < 4) { std::fprintf (stderr, "usage: render_echo in.wav out.wav tail id=value...\n"); return 1; }
+    std::vector<float> L, R; int sr = 48000;
+    if (! readWav (argv[1], L, R, sr)) { std::fprintf (stderr, "read error\n"); return 1; }
+    const double tail = std::atof (argv[3]);
+    std::map<int, double> v { { 8, 0.5 }, { 9, 0.5 }, { 10, 0.5 }, { 14, 0 }, { 20, 0.6565 }, { 26, 0.6565 }, { 27, 0 }, { 31, 0 }, { 33, 0.5 }, { 34, 0.5 },
+                              { 35, 0 }, { 36, 0 }, { 37, 0 }, { 39, 0 }, { 44, 0.5655 }, { 51, 7.0 / 15 }, { 52, 0 }, { 64, 1 }, { 124, 90.0 / 210 } };
+    for (int a = 4; a < argc; ++a)
+    {
+        const std::string s (argv[a]); const auto e = s.find ('=');
+        if (e != std::string::npos) v[std::atoi (s.substr (0, e).c_str())] = std::atof (s.substr (e + 1).c_str());
+    }
+    echo::Params p = toParams (v);
     echo::Engine eng;
     eng.prepare (sr);
+    if (const char* a = std::getenv ("ATT")) eng.compAttOverride = (float) std::atof (a);
+    if (const char* r = std::getenv ("REL")) eng.compRelOverride = (float) std::atof (r);
     eng.set (p);
     eng.reset();
     const size_t total = L.size() + (size_t) (tail * sr);
     L.resize (total, 0.0f); R.resize (total, 0.0f);
+    // 途中でつまみを変える: CHANGE="秒:id=値,id=値;秒:..."（参考のホストと同じ書き方）
+    std::vector<std::pair<size_t, std::string>> changes;
+    if (const char* ch = std::getenv ("CHANGE"))
+    {
+        std::string all (ch); size_t st = 0;
+        while (st < all.size())
+        {
+            size_t e = all.find (';', st); if (e == std::string::npos) e = all.size();
+            const std::string part = all.substr (st, e - st);
+            const size_t c = part.find (':');
+            changes.push_back ({ (size_t) (std::atof (part.substr (0, c).c_str()) * sr), part.substr (c + 1) });
+            st = e + 1;
+        }
+    }
     for (size_t i = 0; i < total; i += 512)
     {
+        for (auto& ch : changes)
+            if (ch.first >= i && ch.first < i + 512)
+            {
+                size_t st = 0; const auto& t = ch.second;
+                while (st < t.size())
+                {
+                    size_t e = t.find (',', st); if (e == std::string::npos) e = t.size();
+                    const std::string kv = t.substr (st, e - st); const size_t q = kv.find ('=');
+                    v[std::atoi (kv.substr (0, q).c_str())] = std::atof (kv.substr (q + 1).c_str());
+                    st = e + 1;
+                }
+                eng.set (toParams (v));
+            }
         const int n = (int) std::min<size_t> (512, total - i);
         eng.process (L.data() + i, R.data() + i, n);
     }
