@@ -92,7 +92,7 @@
 - Fire Box（FireBox）1.1.0 … 太く・大きくする全部入り（本人の持っている市販プラグインを測って、音の処理を同じ動きに合わせ込み）。IN / BASS / THICK / BODY / COMP⇄OTT / SOFT CLIP / CRUNCH / MIX / LOUD / OUT、UNITY・LIVE・192k・BYPASS。測定の道具は build/fuellab（コミットしない）。Plugin Link は Gain Stage で MATCH
   v1.1.0: OTT 作り直し（88 Hz の分割は Q の違う 2 段ずつ、dB 型検出器を持ち上げ用・下げ用に、OTT 時の MIX のドライも帯域分けを通す、量の表 29 段階）。FUEL との差 量24 dB で −33 dB
 - Mod Host（ModHost）1.1.0 … 好きな AU を中に読み込み、MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS / LINK）でつまみを動かす。3 帯域・DRIVE・MORPH・前後の解析
-- Forge Strip（ForgeStrip）1.2.0 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Forge Mixer から OUTPUT/PAN/WIDTH を受ける（独自の種類 200）
+- Forge Strip（ForgeStrip）1.2.1 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Forge Mixer から OUTPUT/PAN/WIDTH を受ける（独自の種類 200）
 - Forge Mixer（ForgeMixer）1.0.1 … Forge Strip 用のミキサー（音は素通し。つまみが LINK だけなのでプリセット・取り消し欄はなし＝例外）。同じ LINK の Strip を点で並べ（左右 = パン、上下 = 音量、大きさ = 幅）、ドラッグの指示を種類 201 で出す（最大 5 つ、放して 0.6 秒）。
   Strip は 30 Hz のタイマーで自分の token の指示をつまみに入れる。ForgeStrip/Source/ForgeLink.h を読む
 

@@ -143,9 +143,9 @@ struct CompCore
     {
         sr = s; peak.prepare ((int) std::round (0.0035 * sr));
         rmsBuf.assign ((size_t) std::max (1, (int) std::round (0.010 * sr)), 0.0f); rmsAcc = 0; rmsPos = 0;
-        g = 1.0f; u2 = 1.0f; slowDb = 0; makeA = makeB = 0; relFast = 1.0f;
+        g = 1.0f; u2 = 1.0f; slowDb = 0; makeA = makeB = 0; relFast = 1.0f; holdLeft = 0;
     }
-    void reset() { peak.reset(); std::fill (rmsBuf.begin(), rmsBuf.end(), 0.0f); rmsAcc = 0; g = 1.0f; u2 = 1.0f; slowDb = 0; makeA = makeB = 0; relFast = 1.0f; }
+    void reset() { peak.reset(); std::fill (rmsBuf.begin(), rmsBuf.end(), 0.0f); rmsAcc = 0; g = 1.0f; u2 = 1.0f; slowDb = 0; makeA = makeB = 0; relFast = 1.0f; holdLeft = 0; }
 
     // 静的なカーブ: 入力 x dB → 下げる量 dB（負なら持ち上げ）
     static float curve (float x, const CompBandSettings& b, bool vintage)
@@ -217,7 +217,11 @@ struct CompCore
             {
                 // 測定: リリースの時定数 = rc × RELEASE^rp（dB でならす）
                 float dbF = -gainToDb (g);
-                dbF = fastT + coefMs (vt.rc * std::pow (std::max (1.0f, b.release), vt.rp) * vt.kr, sr) * (dbF - fastT);
+                // 測ったのは 1000 ms まで。その先は伸び方を √ に抑える（5000 ms で約 5.7 s）
+                const float rel = std::max (1.0f, b.release);
+                float tau = vt.rc * std::pow (std::min (rel, 1000.0f), vt.rp) * vt.kr;
+                if (rel > 1000.0f) tau *= std::sqrt (rel / 1000.0f);
+                dbF = fastT + coefMs (tau, sr) * (dbF - fastT);
                 g = dbToGain (-dbF);
             }
             u2 = 1.0f / std::max (g, 1.0e-9f);

@@ -13,3 +13,7 @@ Forge Mixer 1.0.1: プリセット・取り消しの欄を外した（つまみ�
 v1.2.0: 差の残りを詰めた。SCULPTOR は帯域ごとの寄せ具合 sculptTune::adapt（平均 0.9 dB）と ToneTargets.h の再校正、Add Punch / Polish は ppTune（山の記憶→持ち上げ、0.5 / 0.9 dB）、
 Vintage は vintTune に hold・rc・rp（リリースが R^rp に比例、1.0 dB）、UNMASK は覆い隠しの広がりモデル（unmaskTune::T、相手の各帯域から上へ up0−upK·(差)、下へ down dB/帯域、21 通りで 0.86 dB）。
 HP の 20〜50 Hz（基準の −55 dB 付近のくせ）とエキサイター (1,1)（基準は音量で形が変わる）は合わせていない
+v1.2.1: 並び順を apvts.state の "order" から、非オートメーションの int パラメーター <pfx>_pos（0〜10、何番目か）11 個に移した。getOrder は pos で並べ替え（同じなら元の順）なので途中の値でも必ずそろう。
+これでプリセット・UNDO に並び順が入る。古い保存（order の印だけ）は setStateInformation で pos に直して読む（Swift で確認済み）
+同 1.2.1: DSP 検査係の指摘で、ToneTargets.h を 1/12 オクターブの dB 平均＋なめらかさの罰則で当てはめ直した（1.2.0 は 6.4k/8k がジグザグの過学習だった。1/12 で 1.39 → 0.33 dB）。SCULPTOR は基準どおり高域を素通し（SpectralBase::topHz 15600 ± topHalf 1000、全体パワーの計算にも同じ重み）。
+Vintage リリースは 1000 ms から先を √ で伸ばす。Spectral.h のフレームごとの std::vector をなくした。holdLeft を reset で 0 に

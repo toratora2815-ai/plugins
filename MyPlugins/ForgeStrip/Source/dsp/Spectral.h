@@ -56,10 +56,11 @@ public:
         nb = N / 2 + 1;
         binGain.assign ((size_t) nb, 1.0f);
         // 帯域 → ビンの対応（隣の帯域の中心との間を対数で線形補間）
-        binLo.resize ((size_t) nb); binT.resize ((size_t) nb);
+        binLo.resize ((size_t) nb); binT.resize ((size_t) nb); binTop.assign ((size_t) nb, 1.0f);
         for (int k = 0; k < nb; ++k)
         {
             const float f = std::max (1.0f, (float) k * (float) sr / (float) N);
+            if (topHz > 0.0f) binTop[(size_t) k] = topWeight (f);
             const float pk = 3.0f * std::log2 (f / 25.0f);
             const float c = clampv (pk, 0.0f, (float) kToneBands - 1.001f);
             binLo[(size_t) k] = (int) std::floor (c); binT[(size_t) k] = c - std::floor (c);
@@ -103,14 +104,16 @@ protected:
     virtual void decide (bool hasSc) = 0;
 
     double sr = 48000; int N = 1024, hop = 256, nb = 513;
+    float topHz = 0.0f, topHalf = 400.0f;   // topHz > 0 なら、その周波数（±topHalf で切り替え）より上は手を付けない（基準の SCULPTOR は 14.6〜16.6 kHz で素通しに切り替わる）
+    float topWeight (float f) const { return topHz > 0.0f ? clampv ((topHz + topHalf - f) / (2.0f * topHalf), 0.0f, 1.0f) : 1.0f; }
     std::vector<float> bandPow, scPow, gainsDb;
     float framesPerSec() const { return (float) (sr / hop); }
 
 private:
     void analyse (std::vector<float>* src, std::vector<float>& outBands, bool keepSpectrum)
     {
-        std::vector<double> acc2 (kToneBands, 0.0);
-        std::vector<double> cnt (kToneBands, 0.0);
+        double acc2[kToneBands] = {};   // 処理の中でメモリを取らない
+        double cnt[kToneBands] = {};
         for (int c = 0; c < 2; ++c)
         {
             auto* w = c == 0 ? work.data() : work2.data();
@@ -151,7 +154,7 @@ private:
         for (int k = 0; k < nb; ++k)
         {
             const int b = binLo[(size_t) k]; const float t = binT[(size_t) k];
-            binGain[(size_t) k] = dbToGain (gainsDb[(size_t) b] * (1.0f - t) + gainsDb[(size_t) b + 1] * t);
+            binGain[(size_t) k] = dbToGain ((gainsDb[(size_t) b] * (1.0f - t) + gainsDb[(size_t) b + 1] * t) * binTop[(size_t) k]);
         }
         for (int c = 0; c < 2; ++c)
         {
@@ -169,7 +172,7 @@ private:
     }
 
     FFT fft;
-    std::vector<float> win, binGain, binT;
+    std::vector<float> win, binGain, binT, binTop;
     std::vector<int> binLo;
     std::vector<float> in[2], sc[2], acc[2];
     std::vector<std::complex<float>> work, work2;
@@ -224,6 +227,7 @@ struct PunchPolish
 class SculptorModule : public SpectralBase
 {
 public:
+    SculptorModule() { topHz = 15600.0f; topHalf = 1000.0f; }
     void set (const SculptorSettings& s) { cfg = s; }
     // Add Punch / Add Polish のときだけ、STFT のあとで音量の動きを足す
     void postProcess (float* L, float* R, int n)
@@ -249,7 +253,7 @@ protected:
             total = std::max (total, smooth[(size_t) b]);
         }
         const bool active = cfg.target >= 0 && cfg.target < kNumToneTargets && cfg.amount > 0.0f && total > -75.0f;
-        std::vector<float> want (kToneBands, 0.0f);
+        float want[kToneBands] = {};
         if (active)
         {
             const auto& T = toneTarget (cfg.target);
@@ -269,7 +273,7 @@ protected:
             }
             // 全体のパワーは変えない（測定: 基準は出力のパワー平均が入力とほぼ同じ）
             double pin = 0, pout = 0;
-            for (int b = 0; b < kToneBands; ++b) { const double pw = std::pow (10.0, smooth[(size_t) b] / 10.0); pin += pw; pout += pw * std::pow (10.0, want[(size_t) b] / 10.0); }
+            for (int b = 0; b < kToneBands; ++b) { const double pw = std::pow (10.0, smooth[(size_t) b] / 10.0); pin += pw; pout += pw * std::pow (10.0, want[(size_t) b] * topWeight (25.0f * std::exp2 ((float) b / 3.0f)) / 10.0); }   // 素通しの所は下げていない
             const float off = pin > 0 ? (float) (10.0 * std::log10 (pout / pin)) : 0.0f;
             for (auto& w : want) w -= off;
         }
@@ -331,7 +335,7 @@ protected:
             mainS[(size_t) b] = bandPow[(size_t) b] + ma * (mainS[(size_t) b] - bandPow[(size_t) b]);
             scS[(size_t) b] = scPow[(size_t) b];
         }
-        std::vector<float> want (kToneBands, 0.0f);
+        float want[kToneBands] = {};
         if (hasSc && cfg.amount > 0)
         {
             // サイドチェーンが主信号をどれだけ上回るか（隣の帯域にも少し広げる）

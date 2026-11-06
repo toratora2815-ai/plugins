@@ -38,12 +38,16 @@ ForgeStripProcessor::ForgeStripProcessor()
                         .withInput  ("Sidechain", juce::AudioChannelSet::stereo(), false)),
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
-    for (int i = 0; i < fs::numModules; ++i) order[i] = i;
     token = (float) (1 + juce::Random::getSystemRandom().nextInt (8000000));
     startTimerHz (30);
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
             params[r->getParameterID().toStdString()] = apvts.getRawParameterValue (r->getParameterID());
+    for (int m = 0; m < fs::numModules; ++m)
+    {
+        posValue[m] = apvts.getRawParameterValue (fsid::J (fsid::id (m, "pos")));
+        posParam[m] = apvts.getParameter (fsid::J (fsid::id (m, "pos")));
+    }
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ForgeStripProcessor::createLayout()
@@ -85,6 +89,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout ForgeStripProcessor::createL
         const juce::String nm = fs::moduleName (m);
         addB (fsid::J (fsid::id (m, "on")), nm + " On", m == fs::ModEq || m == fs::ModComp1);
         addF (fsid::J (fsid::id (m, "mix")), nm + " Mix", { 0.0f, 100.0f, 0.1f }, 100.0f, pct);
+        // 並び順（何番目か）。プリセットと取り消しに入るようにパラメーターにしておく（オートメーションには出さない）
+        v.push_back (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { fsid::J (fsid::id (m, "pos")), 1 }, nm + " Position",
+                                                                0, fs::numModules - 1, m, juce::AudioParameterIntAttributes().withAutomatable (false)));
         if (fsid::multiband (m))
         {
             addC (fsid::J (fsid::id (m, "bands")), nm + " Bands", { "1", "2", "3" }, 0);
@@ -249,19 +256,24 @@ float ForgeStripProcessor::p (const std::string& id) const
     return it != params.end() ? it->second->load() : 0.0f;
 }
 
+// 並び順 = 各モジュールの「何番目か」で並べたもの（同じ番号なら元の順）。途中の値（取り消し中など）でも必ず 11 個そろう
 void ForgeStripProcessor::getOrder (int* o) const
 {
-    const juce::SpinLock::ScopedLockType l (orderLock);
-    for (int i = 0; i < fs::numModules; ++i) o[i] = order[i];
+    int key[fs::numModules];
+    for (int m = 0; m < fs::numModules; ++m) { o[m] = m; key[m] = (int) std::lround (posValue[m]->load()); }
+    for (int i = 1; i < fs::numModules; ++i)
+        for (int j = i; j > 0 && key[o[j]] < key[o[j - 1]]; --j) std::swap (o[j], o[j - 1]);
 }
 
 void ForgeStripProcessor::setOrder (const int* o)
 {
+    for (int i = 0; i < fs::numModules; ++i)
     {
-        const juce::SpinLock::ScopedLockType l (orderLock);
-        for (int i = 0; i < fs::numModules; ++i) order[i] = o[i];
+        auto* prm = posParam[o[i]];
+        const float v = prm->convertTo0to1 ((float) i);
+        if (std::abs (prm->getValue() - v) < 1.0e-6f) continue;
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (v); prm->endChangeGesture();
     }
-    apvts.state.setProperty ("order", juce::String (fs::orderToString (o)), nullptr);
 }
 
 fs::StripSettings ForgeStripProcessor::readSettings() const
@@ -502,8 +514,6 @@ void ForgeStripProcessor::handleAsyncUpdate()
 
 void ForgeStripProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    int o[fs::numModules]; getOrder (o);
-    apvts.state.setProperty ("order", juce::String (fs::orderToString (o)), nullptr);
     if (auto xml = apvts.copyState().createXml()) copyXmlToBinary (*xml, destData);
 }
 
@@ -512,11 +522,22 @@ void ForgeStripProcessor::setStateInformation (const void* data, int sizeInBytes
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
         {
-            apvts.replaceState (juce::ValueTree::fromXml (*xml));
-            int o[fs::numModules];
-            fs::orderFromString (apvts.state.getProperty ("order", "").toString().toStdString(), o);
-            const juce::SpinLock::ScopedLockType l (orderLock);
-            for (int i = 0; i < fs::numModules; ++i) order[i] = o[i];
+            auto tree = juce::ValueTree::fromXml (*xml);
+            // 1.2.0 までの保存（並び順が "order" という印だけ）→ 何番目かのパラメーターに直して読む
+            if (tree.hasProperty ("order") && ! tree.getChildWithProperty ("id", fsid::J (fsid::id (0, "pos"))).isValid())
+            {
+                int o[fs::numModules];
+                fs::orderFromString (tree.getProperty ("order").toString().toStdString(), o);
+                for (int i = 0; i < fs::numModules; ++i)
+                {
+                    juce::ValueTree c ("PARAM");
+                    c.setProperty ("id", fsid::J (fsid::id (o[i], "pos")), nullptr);
+                    c.setProperty ("value", i, nullptr);
+                    tree.appendChild (c, nullptr);
+                }
+            }
+            tree.removeProperty ("order", nullptr);
+            apvts.replaceState (tree);
         }
 }
 

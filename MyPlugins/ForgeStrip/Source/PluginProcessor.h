@@ -63,7 +63,7 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     myp::Presets myPresets { *this, apvts, "ForgeStrip" };
 
-    // 並び順（メッセージスレッドで変える）
+    // 並び順（パラメーター *_pos から作る。setOrder はメッセージスレッドで）
     void getOrder (int* o) const;
     void setOrder (const int* o);
 
@@ -94,8 +94,8 @@ private:
     fs::Strip eng;
     std::atomic<int> reportedLatency { -1 }, wantLatency { 0 };
     std::atomic<bool> scConnected { false };
-    mutable juce::SpinLock orderLock;
-    int order[fs::numModules];
+    std::atomic<float>* posValue[fs::numModules] {};
+    juce::RangedAudioParameter* posParam[fs::numModules] {};
     juce::AudioBuffer<float> scBuf, monoBuf;
     double sr = 48000;
 
