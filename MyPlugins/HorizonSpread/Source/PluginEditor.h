@@ -62,6 +62,7 @@ private:
     Choice shiftMode, motionSync;
     juce::ComboBox presetBox;
     plink::LinkBar linkBar { processor.apvts, juce::Colour (0xffffb86b), juce::Colour (0xff161c24), juce::Colour (0xffe9eef3) };
+    myp::PresetBar presetBar { processor.myPresets, juce::Colour (0xffffb86b), juce::Colour (0xff161c24), juce::Colour (0xffe9eef3) };
     juce::Slider duckSlider;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> duckAttachment;
     int shownProgram = -1;

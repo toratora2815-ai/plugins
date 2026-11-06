@@ -23,6 +23,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout PorchDriveProcessor::createL
                                       juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f));
     v.push_back (std::make_unique<P> (juce::ParameterID { "gain", 1 }, "Gain",
                                       juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 4.0f));
+    // Plugin Link（LINK の番号・MATCH）
+    v.push_back (plink::makeGroupParameter (9));
+    v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "linkMatch", 9 }, "Link Match Level", true));
     return { v.begin(), v.end() };
 }
 
@@ -148,6 +151,10 @@ void PorchDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
             d[n] = fizzLP[ch].lp (lo + hi * tg) * og;
         }
     }
+
+    // Plugin Link: 出口を Gain Stage の TARGET にそろえる（MATCH が ON で、同じ LINK に Gain Stage がいるとき）
+    match.process (link, apvts.getRawParameterValue ("linkMatch")->load() > 0.5f, buffer.getArrayOfWritePointers(),
+                   numCh, buffer.getNumSamples(), getSampleRate());
 }
 
 void PorchDriveProcessor::getStateInformation (juce::MemoryBlock& destData)

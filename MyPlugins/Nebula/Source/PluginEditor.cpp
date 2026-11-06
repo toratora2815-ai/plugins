@@ -36,8 +36,24 @@ NebulaEditor::NebulaEditor (NebulaProcessor& p) : AudioProcessorEditor (&p), pro
     freezeButton.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
     addAndMakeVisible (freezeButton);
     freezeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, "freeze", freezeButton);
+    addAndMakeVisible (linkBar);
+    addAndMakeVisible (presetBar);
+    duckSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    duckSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 18);
+    duckSlider.setTooltip ("Fader Pilot (same LINK, on the vocal): lower the reverb by this much while the voice is singing");
+    linkBar.addAndMakeVisible (duckSlider);
+    duckAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (processor.apvts, "linkDuck", duckSlider);
+    linkBar.extra = &duckSlider; linkBar.extraWidth = 150; linkBar.extraLabel = "VOCAL DUCK";
+    linkBar.setSources (processor.link, { plink::kindFaderPilot });
+    linkBar.status = [this] (bool& lit) -> juce::String
+    {
+        if (! processor.link.on()) return "Plugin Link OFF - same LINK as Fader Pilot to duck the reverb while singing";
+        if (! processor.duck.sawPilot()) return "waiting for Fader Pilot";
+        lit = processor.duck.nowDb() < -0.1f;
+        return lit ? "voice singing: reverb " + juce::String (processor.duck.nowDb(), 1) + " dB" : juce::String ("voice resting: full reverb");
+    };
 
-    setSize (640, 380);
+    setSize (640, 380 + footerH);
 }
 
 void NebulaEditor::paint (juce::Graphics& g)
@@ -54,7 +70,8 @@ void NebulaEditor::paint (juce::Graphics& g)
 
 void NebulaEditor::resized()
 {
-    auto area = getLocalBounds().reduced (14);
+    layoutFooter();
+    auto area = getLocalBounds().withTrimmedBottom (footerH).reduced (14);
     auto header = area.removeFromTop (46);
     freezeButton.setBounds (header.removeFromRight (110).reduced (4, 8));
 
@@ -69,5 +86,23 @@ void NebulaEditor::resized()
         auto col = row.removeFromLeft (w);
         knobs[i].label.setBounds (col.removeFromTop (20));
         knobs[i].slider.setBounds (col.reduced (4));
+    }
+}
+
+// 画面のいちばん下（Plugin Link と プリセット・取り消し）。幅が狭いときは 2 段
+void NebulaEditor::layoutFooter()
+{
+    auto f = getLocalBounds().removeFromBottom (footerH).reduced (8, 5);
+    if (footerH < 50)   // 1 段
+    {
+        presetBar.setBounds (f.removeFromRight (presetBar.preferredWidth()).withSizeKeepingCentre (presetBar.preferredWidth(), myp::PresetBar::height));
+        f.removeFromRight (6);
+        linkBar.setBounds (f.withSizeKeepingCentre (f.getWidth(), plink::LinkBar::height));
+    }
+    else
+    {
+        linkBar.setBounds (f.removeFromTop (plink::LinkBar::height));
+        f.removeFromTop (4);
+        presetBar.setBounds (f.removeFromTop (myp::PresetBar::height));
     }
 }

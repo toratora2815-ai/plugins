@@ -81,7 +81,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ModHostProcessor::createLayo
                                           A().withStringFromValueFunction (std::move (toText))));
     };
 
-    juce::StringArray types { "LFO", "ENV", "SIDECHAIN", "RANDOM", "STEPS" };
+    juce::StringArray types { "LFO", "ENV", "SIDECHAIN", "RANDOM", "STEPS", "LINK" };
     juce::StringArray shapes { "SINE", "TRIANGLE", "SAW UP", "SAW DOWN", "SQUARE" };
     juce::StringArray divs;
     for (int i = 0; i < mh::numDivs; ++i) divs.add (mh::divName (i));
@@ -108,6 +108,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout ModHostProcessor::createLayo
         for (int t = 0; t < mh::numTargets; ++t)
             addF (amountId (m, t), n + "Amount " + juce::String (t + 1), { -100.0f, 100.0f, 0.1f }, 0.0f, pct);
     }
+    // Plugin Link（LINK の番号）
+    v.push_back (plink::makeGroupParameter (9));
     return { v.begin(), v.end() };
 }
 
@@ -261,6 +263,19 @@ void ModHostProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     const int maxPiece = p != nullptr ? juce::jmin (anyRoute ? mh::chunk : maxBlock, scratch.getNumSamples()) : mh::chunk;
     float vals[mh::numMods] {};
 
+    // Plugin Link の値（LINK 型の MOD が使う）: Fader Pilot のフェーダー位置（-12〜+12 dB → 0〜1）、
+    // いなければ Balance Scope のオケの音量（-60〜0 dB → 0〜1）
+    float linkValue = 0.0f; int linkFrom = 0;
+    if (link.on())
+    {
+        plink::Peer lp;
+        if (link.ep().find (plink::kindFaderPilot, lp) && lp.valuesAgeMs < 1500)
+        { linkValue = juce::jlimit (0.0f, 1.0f, (lp.v[plink::fp::rideDb] + 12.0f) / 24.0f); linkFrom = 1; }
+        else if (link.ep().find (plink::kindBalanceScope, lp) && lp.valuesAgeMs < 1500)
+        { linkValue = juce::jlimit (0.0f, 1.0f, (lp.v[plink::bs::musicDb] + 60.0f) / 60.0f); linkFrom = 2; }
+    }
+    linkValueNow = linkValue; linkSourceNow = linkFrom;
+
     for (int start = 0; start < numSamples; start += maxPiece)
     {
         const int n = juce::jmin (maxPiece, numSamples - start);
@@ -276,6 +291,7 @@ void ModHostProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
             if (haveSide)
                 for (int c = 0; c < scNum && scFirst + c < buffer.getNumChannels(); ++c)
                     b.sidechainPeak = juce::jmax (b.sidechainPeak, buffer.getMagnitude (scFirst + c, start + done, k));
+            b.linkValue = linkValue;
             for (int m = 0; m < mh::numMods; ++m) vals[m] = mods[m].process (set[m], b, steps[m]);
         }
 

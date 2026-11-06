@@ -127,8 +127,9 @@ HorizonSpreadEditor::HorizonSpreadEditor (HorizonSpreadProcessor& p)
                    : juce::String ("Following Fader Pilot  (no narrowing right now)");
     };
     addAndMakeVisible (linkBar);
+    addAndMakeVisible (presetBar);
 
-    setSize (1180, 638);
+    setSize (1180, 672);
     showPage (true);
     startTimerHz (30);
 }
@@ -254,6 +255,8 @@ void HorizonSpreadEditor::placeKnob (Knob& k, juce::Rectangle<int> r)
 void HorizonSpreadEditor::resized()
 {
     auto area = getLocalBounds().reduced (14);
+    presetBar.setBounds (area.removeFromBottom (myp::PresetBar::height));
+    area.removeFromBottom (6);
     linkBar.setBounds (area.removeFromBottom (plink::LinkBar::height));
     area.removeFromBottom (8);
     auto header = area.removeFromTop (44);

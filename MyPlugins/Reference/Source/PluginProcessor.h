@@ -1,5 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
+#include "PluginLinkJuce.h"
+#include "PresetBar.h"
 #include "LoudnessMeter.h"
 #include "Spectrum.h"
 #include "FilePlayer.h"
@@ -48,6 +50,12 @@ public:
     bool isLoading() const { return loading.load(); }
 
     juce::AudioProcessorValueTreeState apvts;
+
+    myp::Presets myPresets { *this, apvts, "Reference" };   // 自分のプリセット・取り消し
+
+    plink::Link link { plink::kindReference, apvts };   // Plugin Link
+
+    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) link.setTrackName (*tp.name); }
     refdsp::LoudnessMeter mixMeter, refMeter;
     SpectrumAnalyser mixSpec, refSpec;
     FilePlayer player;

@@ -38,6 +38,18 @@ private:
     void loadFile (const juce::File&);
 
     ElderVerbProcessor& proc;
+
+    // 画面のいちばん下: Plugin Link と プリセット・取り消し
+
+    plink::LinkBar linkBar { proc.apvts, juce::Colour (0xffe0a060), juce::Colour (0xff2c241d), juce::Colour (0xffeadfd2) };
+
+    myp::PresetBar presetBar { proc.myPresets, juce::Colour (0xffe0a060), juce::Colour (0xff2c241d), juce::Colour (0xffeadfd2), true };
+
+    static constexpr int footerH = 40;
+
+    void layoutFooter();
+    juce::Slider duckSlider;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> duckAtt;
     ElderLook look;
 
     struct Knob

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
-project(HushField VERSION 1.0.0)
+project(HushField VERSION 1.1.0)
 
 option(COPY_AFTER_BUILD "Copy plugin to system folder after build" ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -50,3 +50,6 @@ target_link_libraries(HushField
 
 # FFT とベクトル計算（HushEngine.h が使う）
 target_link_libraries(HushField PRIVATE "-framework Accelerate")
+
+# 自作プラグイン共通の部品（Plugin Link・プリセット）
+target_include_directories(HushField PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../Shared)

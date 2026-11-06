@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include "PresetBar.h"
 #include "GainEngine.h"
 #include "PluginLinkJuce.h"
 
@@ -42,6 +43,8 @@ public:
     juce::String takeFlash() { auto s = flash; flash = {}; return s; }
 
     juce::AudioProcessorValueTreeState apvts;
+
+    myp::Presets myPresets { *this, apvts, "GainStage" };   // 自分のプリセット・取り消し
     gs::GainEngine engine;
 
     // Plugin Link（同じ LINK 番号の Balance Scope へ、入口で足した GAIN と TARGET を送る）

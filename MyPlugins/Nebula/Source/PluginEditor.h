@@ -20,6 +20,18 @@ private:
     };
 
     NebulaProcessor& processor;
+
+    // 画面のいちばん下: Plugin Link と プリセット・取り消し
+
+    plink::LinkBar linkBar { processor.apvts, juce::Colour (0xff8fb8ff), juce::Colour (0xff20243a), juce::Colour (0xffe6e9f5) };
+
+    myp::PresetBar presetBar { processor.myPresets, juce::Colour (0xff8fb8ff), juce::Colour (0xff20243a), juce::Colour (0xffe6e9f5) };
+
+    static constexpr int footerH = 72;
+
+    void layoutFooter();
+    juce::Slider duckSlider;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> duckAtt;
     std::array<Knob, 9> knobs;
     juce::TextButton freezeButton { "FREEZE" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> freezeAttachment;

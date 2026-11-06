@@ -385,7 +385,10 @@ void HushGraph::showMenu (int b)
 }
 
 // =====================================================================
-HushFieldEditor::HushFieldEditor (HushFieldProcessor& p) : AudioProcessorEditor (&p), processor (p)
+HushFieldEditor::HushFieldEditor (HushFieldProcessor& p)
+    : AudioProcessorEditor (&p), processor (p),
+      presetBar (p.myPresets, col::accent, col::panel, col::text),
+      linkBar (p.apvts, col::accent, col::panel, col::text)
 {
     setLookAndFeel (&look);
     addAndMakeVisible (graph);
@@ -451,9 +454,30 @@ HushFieldEditor::HushFieldEditor (HushFieldProcessor& p) : AudioProcessorEditor 
     status.setColour (juce::Label::textColourId, col::cut);
     status.setJustificationType (juce::Justification::centredRight);
 
+    addAndMakeVisible (presetBar);
+    addAndMakeVisible (linkBar);
+    setupToggle (linkFollow, "linkFollow", "FOLLOW");
+    linkFollow.button.setTooltip (juce::CharPointer_UTF8 ("Balance Scope が見つけた「出すぎの帯域」を、自動で強めに処理する"));
+    linkBar.addAndMakeVisible (linkFollow.button);
+    linkBar.extra = &linkFollow.button;
+    linkBar.extraWidth = 80;
+    linkBar.setSources (processor.link, { plink::kindBalanceScope });
+    linkBar.status = [this] (bool& lit) -> juce::String
+    {
+        if (! processor.link.on()) return "Plugin Link OFF  -  same LINK number as Balance Scope to connect";
+        juce::StringArray parts;
+        for (int i = 0; i < 2; ++i)
+            if (processor.linkBoostNow (i) > 0.05f)
+                parts.add ("+" + juce::String (processor.linkBoostNow (i), 1) + " at " + plink::hzText (processor.linkHzNow (i)));
+        lit = ! parts.isEmpty();
+        plink::Peer peer;
+        if (! processor.link.ep().find (plink::kindBalanceScope, peer)) return "waiting for Balance Scope";
+        return lit ? "Balance Scope: excess -> " + parts.joinIntoString (", ") : juce::String ("Balance Scope: nothing sticking out");
+    };
+
     setResizable (true, true);
-    setResizeLimits (900, 600, 1800, 1200);
-    setSize (1040, 660);
+    setResizeLimits (900, 640, 1800, 1240);
+    setSize (1040, 700);
     startTimerHz (30);
 }
 
@@ -543,6 +567,13 @@ void HushFieldEditor::paint (juce::Graphics& g)
 void HushFieldEditor::resized()
 {
     auto area = getLocalBounds().reduced (10);
+    {
+        auto foot = area.removeFromBottom (plink::LinkBar::height);
+        presetBar.setBounds (foot.removeFromRight (440).withSizeKeepingCentre (440, myp::PresetBar::height));
+        foot.removeFromRight (8);
+        linkBar.setBounds (foot);
+        area.removeFromBottom (8);
+    }
     topBar = area.removeFromTop (38);
     {
         auto t = topBar.withTrimmedLeft (200);

@@ -110,6 +110,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout MeldVerbProcessor::createLay
     addB ("smoothOn", "Smoothing", false);
     add ("smoothAmt", "Smoothing Amount", NRange (0, 100, 0.1f), 100, "%");
     add ("unmaskAmt", "Unmask Amount", NRange (0, 100, 0.1f), 70, "%");
+    // Plugin Link（LINK の番号・VOCAL DUCK）
+    ps.push_back (plink::makeGroupParameter (9));
+    ps.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "linkDuck", 9 }, "Link Vocal Duck", juce::NormalisableRange<float> (0.0f, 12.0f, 0.1f), 4.0f, juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return juce::String (x, 1) + " dB"; })));
     return { ps.begin(), ps.end() };
 }
 
@@ -214,6 +217,7 @@ void MeldVerbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     levels[1].store (std::max (levels[1].load() * 0.9f, buffer.getMagnitude (1, 0, n)));
 
     engine.set (readParams());
+    engine.setDuck (duck.next (link, apvts.getRawParameterValue ("linkDuck")->load(), n, getSampleRate()));
     if ((int) dryBuf.size() < n) { dryBuf.resize ((size_t) n); wetBuf.resize ((size_t) n); }
     // 長いブロックでも大丈夫なように 512 ずつ
     for (int pos = 0; pos < n; pos += 512)

@@ -68,9 +68,10 @@ FaderPilotEditor::FaderPilotEditor (FaderPilotProcessor& p)
         return t;
     };
     addAndMakeVisible (linkBar);
+    addAndMakeVisible (presetBar);
 
     points.reserve (shownPoints);
-    setSize (940, 618);
+    setSize (940, 652);
     startTimerHz (30);
 }
 
@@ -120,6 +121,8 @@ void FaderPilotEditor::placeKnob (Knob& k, juce::Rectangle<int> r)
 void FaderPilotEditor::resized()
 {
     auto area = getLocalBounds().reduced (14);
+    presetBar.setBounds (area.removeFromBottom (myp::PresetBar::height));
+    area.removeFromBottom (6);
     linkBar.setBounds (area.removeFromBottom (plink::LinkBar::height));
     area.removeFromBottom (8);
     auto header = area.removeFromTop (44);

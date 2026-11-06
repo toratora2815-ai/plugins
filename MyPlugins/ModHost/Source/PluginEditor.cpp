@@ -5,7 +5,7 @@ namespace
     const juce::Colour bg (0xff14171b), panelBg (0xff1b1f24), line (0xff2c333b), text (0xffe6ebef), dim (0xff8a949e);
     const juce::Colour accents[mh::numMods] = { juce::Colour (0xff4fd1e8), juce::Colour (0xffffa94d),
                                                 juce::Colour (0xffe36bd8), juce::Colour (0xffa6e35a) };
-    const char* typeNames[] = { "LFO", "ENV", "SIDECHAIN", "RANDOM", "STEPS" };
+    const char* typeNames[] = { "LFO", "ENV", "SIDECHAIN", "RANDOM", "STEPS", "LINK" };
     constexpr int topH = 44, panelH = 336, minW = 860;
 
     juce::Font font (float h, bool bold = false)
@@ -70,7 +70,7 @@ ModHostEditor::ModHostEditor (ModHostProcessor& p) : AudioProcessorEditor (p), p
         b->setColour (juce::ComboBox::outlineColourId, line);
         addAndMakeVisible (*b);
     }
-    typeBox.addItemList ({ "LFO", "ENV (input)", "SIDECHAIN", "RANDOM", "STEPS" }, 1);
+    typeBox.addItemList ({ "LFO", "ENV (input)", "SIDECHAIN", "RANDOM", "STEPS", "LINK (Fader Pilot / Balance Scope)" }, 1);
     shapeBox.addItemList ({ "SINE", "TRIANGLE", "SAW UP", "SAW DOWN", "SQUARE" }, 1);
     for (int i = 0; i < mh::numDivs; ++i) divBox.addItem (mh::divName (i), i + 1);
 
@@ -173,7 +173,18 @@ void ModHostEditor::updateSize()
     const int hh = hostedEditor != nullptr ? hostedEditor->getHeight() : 0;
     const int w = juce::jmax (minW, hw);
     const int h = topH + hh + panelH;
-    if (getWidth() != w || getHeight() != h) setSize (w, h);
+    addAndMakeVisible (linkBar);
+    addAndMakeVisible (presetBar);
+    linkBar.setSources (proc.link, { plink::kindFaderPilot, plink::kindBalanceScope });
+    linkBar.status = [this] (bool& lit) -> juce::String
+    {
+        if (! proc.link.on()) return "Plugin Link OFF - set a MOD to LINK to follow Fader Pilot / Balance Scope";
+        const int f = proc.linkSourceNow.load();
+        lit = f > 0;
+        if (f == 0) return "waiting for Fader Pilot or Balance Scope";
+        return juce::String (f == 1 ? "Fader Pilot ride" : "Balance Scope mix level") + " -> LINK = " + juce::String (juce::roundToInt (proc.linkValueNow.load() * 100.0f)) + " %";
+    };
+    if (getWidth() != w || getHeight() != h + footerH) setSize (w, h + footerH);
     else resized();
 }
 
@@ -289,9 +300,9 @@ void ModHostEditor::updateVisibility()
     auto show = [] (juce::Slider& s, juce::Label& l, bool v) { s.setVisible (v); l.setVisible (v); };
     show (rate, rateL, timed && ! sync);
     show (phase, phaseL, type == mh::typeLfo);
-    show (attack, attackL, type == mh::typeEnv || type == mh::typeSidechain);
-    show (release, releaseL, type == mh::typeEnv || type == mh::typeSidechain);
-    show (gain, gainL, type == mh::typeEnv || type == mh::typeSidechain);
+    show (attack, attackL, type == mh::typeEnv || type == mh::typeSidechain || type == mh::typeLink);
+    show (release, releaseL, type == mh::typeEnv || type == mh::typeSidechain || type == mh::typeLink);
+    show (gain, gainL, type == mh::typeEnv || type == mh::typeSidechain || type == mh::typeLink);
     show (smooth, smoothL, type == mh::typeRandom || type == mh::typeSteps);
     show (steps, stepsL, type == mh::typeSteps);
     stepsL.setText (sync ? "STEPS" : "STEPS", juce::dontSendNotification);
@@ -317,7 +328,7 @@ void ModHostEditor::Tab::paint (juce::Graphics& g)
     g.drawText ("MOD " + juce::String (index + 1), inner.removeFromLeft (52.0f), juce::Justification::centredLeft);
     const int type = (int) ed.proc.apvts.getRawParameterValue (ModHostProcessor::mid (index, "type"))->load();
     g.setFont (font (11.0f));
-    g.drawText (typeNames[juce::jlimit (0, 4, type)], inner.removeFromLeft (76.0f), juce::Justification::centredLeft);
+    g.drawText (typeNames[juce::jlimit (0, 5, type)], inner.removeFromLeft (76.0f), juce::Justification::centredLeft);
 
     // 今の値
     auto bar = inner.withSizeKeepingCentre (inner.getWidth(), 6.0f);
@@ -437,7 +448,8 @@ void ModHostEditor::paint (juce::Graphics& g)
 
 void ModHostEditor::resized()
 {
-    auto r = getLocalBounds();
+    layoutFooter();
+    auto r = getLocalBounds().withTrimmedBottom (footerH);
     topBar = r.removeFromTop (topH);
     panel = r.removeFromBottom (panelH);
     hostArea = r;
@@ -535,4 +547,22 @@ void ModHostEditor::timerCallback()
     for (auto& t : tabs) t->repaint();
     scope.repaint();
     repaint (panel);
+}
+
+// 画面のいちばん下（Plugin Link と プリセット・取り消し）。幅が狭いときは 2 段
+void ModHostEditor::layoutFooter()
+{
+    auto f = getLocalBounds().removeFromBottom (footerH).reduced (8, 5);
+    if (footerH < 50)   // 1 段
+    {
+        presetBar.setBounds (f.removeFromRight (presetBar.preferredWidth()).withSizeKeepingCentre (presetBar.preferredWidth(), myp::PresetBar::height));
+        f.removeFromRight (6);
+        linkBar.setBounds (f.withSizeKeepingCentre (f.getWidth(), plink::LinkBar::height));
+    }
+    else
+    {
+        linkBar.setBounds (f.removeFromTop (plink::LinkBar::height));
+        f.removeFromTop (4);
+        presetBar.setBounds (f.removeFromTop (myp::PresetBar::height));
+    }
 }

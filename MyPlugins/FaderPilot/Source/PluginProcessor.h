@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include "PresetBar.h"
 #include "RiderEngine.h"
 #include "PluginLinkJuce.h"
 
@@ -44,6 +45,8 @@ public:
     bool sidechainConnected() const { return scConnected.load(); }
 
     juce::AudioProcessorValueTreeState apvts;
+
+    myp::Presets myPresets { *this, apvts, "FaderPilot" };   // 自分のプリセット・取り消し
     fp::RiderEngine engine;
 
     // Plugin Link（同じ LINK 番号の Horizon Spread へフェーダーの位置を送る）

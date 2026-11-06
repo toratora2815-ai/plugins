@@ -1,5 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
+#include "PluginLinkJuce.h"
+#include "PresetBar.h"
 #include "ModEngine.h"
 #include "AuList.h"
 
@@ -41,6 +43,13 @@ public:
     static juce::String amountId (int m, int t) { return "m" + juce::String (m + 1) + "a" + juce::String (t + 1); }
 
     juce::AudioProcessorValueTreeState apvts;
+
+    myp::Presets myPresets { *this, apvts, "ModHost" };   // 自分のプリセット・取り消し
+
+    plink::Link link { plink::kindModHost, apvts };   // Plugin Link
+    std::atomic<float> linkValueNow { 0.0f }; std::atomic<int> linkSourceNow { 0 };   // 画面用（0 = なし、1 = Fader Pilot、2 = Balance Scope）
+
+    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) link.setTrackName (*tp.name); }
 
     // ── 中のプラグイン（呼ぶのは画面のスレッドから） ──
     std::vector<mh::AuEntry> scanEffects() const;

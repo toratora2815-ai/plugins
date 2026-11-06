@@ -177,6 +177,9 @@ APVTS::ParameterLayout LumenRoomsProcessor::createLayout()
     v.push_back (fp ("eqHsQ", "EQ High Q", { 0.2f, 2.0f, 0.01f }, 0.7f, "", 2));
     v.push_back (fp ("eqRoll", "EQ Roll-off", freqRange (500.0f, 18000.0f, 4000.0f), 18000.0f, "Hz", 0));
     v.push_back (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "eqSlope", 1 }, "EQ Slope", slopeNames(), 0));
+    // Plugin Link（LINK の番号・VOCAL DUCK）
+    v.push_back (plink::makeGroupParameter (9));
+    v.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "linkDuck", 9 }, "Link Vocal Duck", juce::NormalisableRange<float> (0.0f, 12.0f, 0.1f), 4.0f, juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return juce::String (x, 1) + " dB"; })));
     return { v.begin(), v.end() };
 }
 
@@ -325,7 +328,13 @@ void LumenRoomsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         inLevel[c].store (pk > old ? pk : old * 0.92f);
     }
     engine.setTail (readTail());
-    engine.setMix (readMix());
+    {
+        auto mx = readMix();
+        const float duckDb = 20.0f * std::log10 (duck.next (link, p ("linkDuck"), buffer.getNumSamples(), getSampleRate()));
+        if (mx.reflTrimDb > -99.0f) mx.reflTrimDb += duckDb;   // 響きの側（反射・テール）だけ下げる
+        if (mx.revTrimDb > -99.0f) mx.revTrimDb += duckDb;
+        engine.setMix (mx);
+    }
     engine.setProfiles (profiles.revGains ((int) p ("revColor")), profiles.erGains ((int) p ("erColor")));
 
     float* L = buffer.getWritePointer (0);

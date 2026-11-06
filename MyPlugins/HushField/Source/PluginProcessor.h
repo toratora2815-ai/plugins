@@ -1,6 +1,8 @@
 #pragma once
 #include <JuceHeader.h>
 #include "HushEngine.h"
+#include "PluginLinkJuce.h"
+#include "PresetBar.h"
 
 class HushFieldProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
 {
@@ -45,6 +47,13 @@ public:
     void copyAtoB();
 
     juce::AudioProcessorValueTreeState apvts;
+    myp::Presets myPresets { *this, apvts, "HushField" };
+
+    // Plugin Link: Balance Scope の「出すぎの帯域」を強めに処理する / 削っている量を Balance Scope へ
+    plink::Link link { plink::kindHushField, apvts };
+    void updateTrackProperties (const TrackProperties& p) override { if (p.name.has_value()) link.setTrackName (*p.name); }
+    float linkBoostNow (int i) const { return linkShown[i].load(); }
+    float linkHzNow (int i) const { return linkHz[i].load(); }
 
     const hf::HushEngine& engine() const { return eng; }
     hf::Settings currentSettings() const { return readSettings(); }
@@ -52,6 +61,11 @@ public:
 
 private:
     hf::Settings readSettings() const;
+    void applyLink (hf::Settings& s, int numSamples);
+    void publishReduction (int numSamples);
+    float linkGain[2] {}, linkLo[2] { -1.0f, -1.0f }, linkHi[2] {};
+    std::atomic<float> linkShown[2] {}, linkHz[2] {};
+    float bandRed[plink::tamer::numBands] {};
     void handleAsyncUpdate() override;
 
     hf::HushEngine eng;

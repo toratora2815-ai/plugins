@@ -33,6 +33,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout NebulaProcessor::createLayou
     v.push_back (std::make_unique<F> (juce::ParameterID { "width", 1 },    "Width",     R (0, 150, 0.1f), 100.0f, pct));
     v.push_back (std::make_unique<F> (juce::ParameterID { "lowcut", 1 },   "Low Cut",   low, 120.0f, hz));
     v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "freeze", 1 }, "Freeze", false));
+    // Plugin Link（LINK の番号・VOCAL DUCK）
+    v.push_back (plink::makeGroupParameter (9));
+    v.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "linkDuck", 9 }, "Link Vocal Duck", juce::NormalisableRange<float> (0.0f, 12.0f, 0.1f), 4.0f, juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return juce::String (x, 1) + " dB"; })));
     return { v.begin(), v.end() };
 }
 
@@ -67,6 +70,7 @@ void NebulaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     reverb.freeze     = p ("freeze") > 0.5f;
     reverb.update();
     mixSmoothed.setTargetValue (p ("mix") / 100.0f);
+    const float duckG = duck.next (link, p ("linkDuck"), buffer.getNumSamples(), getSampleRate());
 
     const int numIn  = getTotalNumInputChannels();
     const int numOut = getTotalNumOutputChannels();
@@ -85,7 +89,7 @@ void NebulaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
         const float m = mixSmoothed.getNextValue();
         const float dryG = std::cos (m * juce::MathConstants<float>::halfPi);
-        const float wetG = std::sin (m * juce::MathConstants<float>::halfPi);
+        const float wetG = std::sin (m * juce::MathConstants<float>::halfPi) * duckG;
 
         if (R != nullptr)
         {

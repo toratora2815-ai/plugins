@@ -59,6 +59,7 @@ namespace hf
         bool lowLatency = false, linearPhase = false;
         int bandSolo = -1;            // -1 = なし、0..7 = その帯域の範囲だけ聴く
         Band bands[numBands];
+        Band linkBands[2];            // Plugin Link で Balance Scope が送ってきた「出すぎの帯域」（画面のカーブとは別に足す）
     };
 
     // 測定に合わせて決めた数値（本物と同じテスト音を通し、最小二乗で合わせた。tools/hf_cli.cpp で T.名前=値 と上書きできる）
@@ -409,9 +410,9 @@ namespace hf
             {
                 const float hz = posToHz ((k + 0.5f) / K);
                 float c0 = 0.0f, c1 = 0.0f;
-                for (int b = 0; b < numBands; ++b)
+                for (int b = 0; b < numBands + 2; ++b)
                 {
-                    const auto& bd = s.bands[b];
+                    const auto& bd = b < numBands ? s.bands[b] : s.linkBands[b - numBands];
                     if (! bd.used || ! bd.enabled) continue;
                     const float r = bandResponse (bd, hz);
                     c0 += r * std::min (1.0f, 2.0f * (1.0f - bd.focus));

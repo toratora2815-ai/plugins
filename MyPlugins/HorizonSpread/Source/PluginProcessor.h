@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include "PresetBar.h"
 #include "SpreadEngine.h"
 #include "PluginLinkJuce.h"
 
@@ -36,6 +37,8 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
     juce::AudioProcessorValueTreeState apvts;
+
+    myp::Presets myPresets { *this, apvts, "HorizonSpread" };   // 自分のプリセット・取り消し
     hs::SpreadEngine engine;
 
     // Plugin Link（同じ LINK 番号の Fader Pilot がボーカルを上げている間、広がりを少し抑える）

@@ -747,6 +747,7 @@ public:
         if (force) { for (int i = 0; i < 3; ++i) level[i] = tgtLevel[i]; mixV = tgtMix; outV = tgtOut; preV = tgtPre; }
     }
     const Params& get() const { return params; }
+    void setDuck (float gain) { tgtDuck = gain; }   // Plugin Link: 歌っている間の響きの倍率
 
     // 1 ブロック分。wetMono / dryMono は画面表示用（nullptr なら使わない）
     void process (float* L, float* R, int n, float* dryMono = nullptr, float* wetMono = nullptr)
@@ -755,7 +756,7 @@ public:
         for (int i = 0; i < n; ++i)
         {
             for (int j = 0; j < 3; ++j) level[j] += (tgtLevel[j] - level[j]) * k;
-            mixV += (tgtMix - mixV) * k; outV += (tgtOut - outV) * k;
+            mixV += (tgtMix - mixV) * k; outV += (tgtOut - outV) * k; duckV += (tgtDuck - duckV) * k;
             preV += (tgtPre - preV) * 0.0008f;
             const float dl = L[i], dr = R[i];
             float xl = dl, xr = dr;
@@ -775,8 +776,8 @@ public:
             if (dryMono) dryMono[i] = 0.5f * (dl + dr);
             if (wetMono) wetMono[i] = 0.5f * (wl + wr);    // REVERB EQ の前（UNMASK の学習用）
             wl = revEqF[0].process (wl); wr = revEqF[1].process (wr);
-            L[i] = outV * ((1.0f - mixV) * dl + mixV * wl);
-            R[i] = outV * ((1.0f - mixV) * dr + mixV * wr);
+            L[i] = outV * ((1.0f - mixV) * dl + mixV * duckV * wl);
+            R[i] = outV * ((1.0f - mixV) * dr + mixV * duckV * wr);
         }
     }
 
@@ -794,6 +795,7 @@ private:
     SendSmoother smoother;
     TriEQ preEqF[2], revEqF[2];
     Delay pre[2];
+    float duckV = 1.0f, tgtDuck = 1.0f;
     float level[3] {}, tgtLevel[3] {}, mixV = 0.5f, tgtMix = 0.5f, outV = 1, tgtOut = 1, preV = 0, tgtPre = 0;
 };
 } // namespace meld

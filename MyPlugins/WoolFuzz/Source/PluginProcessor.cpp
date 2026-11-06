@@ -23,6 +23,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout WoolFuzzProcessor::createLay
     params.push_back (std::make_unique<P> (juce::ParameterID { "volume", 1 }, "Volume",
                                            juce::NormalisableRange<float> (-36.0f, 6.0f, 0.1f), -12.0f,
                                            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+    // Plugin Link（LINK の番号・MATCH）
+    params.push_back (plink::makeGroupParameter (9));
+    params.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "linkMatch", 9 }, "Link Match Level", true));
     return { params.begin(), params.end() };
 }
 
@@ -141,6 +144,10 @@ void WoolFuzzProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             d[n] = ((1.0f - t) * lo + t * hi) * g;
         }
     }
+
+    // Plugin Link: 出口を Gain Stage の TARGET にそろえる（MATCH が ON で、同じ LINK に Gain Stage がいるとき）
+    match.process (link, apvts.getRawParameterValue ("linkMatch")->load() > 0.5f, buffer.getArrayOfWritePointers(),
+                   numCh, buffer.getNumSamples(), getSampleRate());
 }
 
 void WoolFuzzProcessor::getStateInformation (juce::MemoryBlock& destData)

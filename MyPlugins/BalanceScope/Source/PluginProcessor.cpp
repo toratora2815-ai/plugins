@@ -78,6 +78,15 @@ void BalanceScopeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
             playing = pos->getIsPlaying();
+    // Plugin Link: 同じ LINK の Reference が参照曲を流している間は測らない（自分の曲の測定に混ぜない）
+    bool refOn = false;
+    if (link.on())
+    {
+        plink::Peer rp;
+        refOn = link.ep().find (plink::kindReference, rp) && rp.v[plink::ref::listeningRef] > 0.5f && rp.valuesAgeMs < 2000;
+    }
+    refPaused = refOn;
+    if (refOn) playing = false;
     hostPlaying = playing;
 
     const int numCh = juce::jmin (2, getTotalNumInputChannels());
@@ -100,7 +109,7 @@ void BalanceScopeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         if (++samplesSinceFFT >= hopSize)
         {
             samplesSinceFFT = 0;
-            analyseFrame();
+            if (! refOn) analyseFrame();
         }
     }
     if (! std::isfinite (musicMs)) { musicMs = 0.0; musicHp.z1 = musicHp.z2 = 0.0; }
@@ -207,7 +216,7 @@ void BalanceScopeProcessor::timerCallback()
     auto& ep = link.ep();
     info.peers = ep.countPeers();
     info.musicDb = musicLevel.load();
-    ep.find (plink::kindVelvetTamer, info.tamer);
+    ep.find (plink::kindHushField, info.tamer);
     ep.find (plink::kindGainStage, info.gain);
 
     getSnapshot (linkSnap);

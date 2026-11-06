@@ -50,3 +50,6 @@ target_link_libraries(Reference
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
+
+# 自作プラグイン共通の部品（Plugin Link・プリセット）
+target_include_directories(Reference PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../Shared)

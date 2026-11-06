@@ -45,6 +45,7 @@ private:
     Toggle autoRide, write, follow;
     juce::ComboBox presetBox;
     plink::LinkBar linkBar { processor.apvts, juce::Colour (0xffffc86b), juce::Colour (0xff182026), juce::Colour (0xffe8eef2) };
+    myp::PresetBar presetBar { processor.myPresets, juce::Colour (0xffffc86b), juce::Colour (0xff182026), juce::Colour (0xffe8eef2) };
     juce::Slider fader;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> faderAttachment;
 

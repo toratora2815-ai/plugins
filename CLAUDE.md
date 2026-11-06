@@ -23,7 +23,7 @@
     - ビルド結果は Artifacts と、Releases の `latest` に置かれる
   - `MyPlugins/<名前>/` … 各プラグイン（CMakeLists.txt, Source/, README.md）
 - 新しいプラグインを足しても build.yml を書き換える必要はない（自動で見つかる）
-- `MyPlugins/Shared/` … プラグイン共通の部品（今は Plugin Link）。CMakeLists に `../Shared` を足したものは、Shared を変えると一緒にビルドされる
+- `MyPlugins/Shared/` … プラグイン共通の部品（Plugin Link、PresetBar＝プリセット保存・取り消し）。CMakeLists に `../Shared` を足したものは、Shared を変えると一緒にビルドされる
 - 既存プラグインを変えていないときは再ビルド不要（無駄なビルドは走らせない／走ったら止めてよい）
 - Claude 側のブラウザは GitHub にログインしていない。ログインが必要な作業は、本人のいつもの Safari / Chrome で開くよう案内する
 
@@ -38,6 +38,13 @@
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
 - 渡す前に、コンパイルが通るかと DSP の数値テスト（発振しないか、歪み量、減衰時間など）を確認する
 - 各プラグインに日本語の README（つまみの説明、おすすめ設定）を付ける
+- **どのプラグインにも（今後作るものにも）必ず付ける**（2026-11-06 本人の指示）:
+  - 自分のプリセットの保存・読み込みと、取り消し・やり直し … `MyPlugins/Shared/PresetBar.h`。
+    プロセッサーに `myp::Presets myPresets { *this, apvts, "<名前>" };`（apvts より後）、エディターに `myp::PresetBar presetBar { processor.myPresets, 色3つ };`。
+    自前のプリセット画面があるもの（Lumen Rooms）は `PresetBar (…, true)` で取り消し・やり直しだけ
+  - Plugin Link … `plink::Link link { plink::kind<名前>, apvts };`、ID `linkGroup`（makeGroupParameter）、エディターに LinkBar。
+    PluginLink.h に Kind を足し、相性のいい相手と「何を送って何に使うか」を決める（プラグインを 1 つにまとめるのではなく、別々のまま連携）
+  - 画面のいちばん下に「LINK 欄＋プリセット・取り消し欄」（1 段 40 px か 2 段 72 px。LINK 欄に追加のつまみがあって幅 1000 未満なら 2 段）
 
 ## インストール手順（Logic）
 1. Actions の実行結果ページ下の「Artifacts」から「<名前>-macOS」をダウンロードして解凍
@@ -69,12 +76,7 @@
   SHIFT CLASSIC の L/R 選択、DYNAMIC（DYNAMICS タイル）。量のつまみはどのタイルでも右側に置く
   v1.3.0: Plugin Link で Fader Pilot がボーカルを上げている間 SPREAD を下げる（ID linkDuck、+6 dB・100% で半分。プリセットで変わらない）
   v1.3.1: FROM（相手選び）、Plugin Link v2
-- Velvet Tamer（VelvetTamer）… レゾナンス抑制（耳に痛い響きを鳴った瞬間だけ自動で下げる）。STFT で「まわりより飛び出た所」を検出。
-  DEPTH / SHARPNESS / SELECTIVITY / ATTACK / RELEASE / FOCUS LOW・HIGH / MIX / OUTPUT / DELTA / LINK。遅延 2048 サンプル（48k）。
-  v1.1.0: グラフ上で FOCUS をドラッグ、WEIGHT（7 点固定周波数の効きの強弱カーブ、ID weight0〜6）、プリセットメニュー
-  v1.2.0: LOW LATENCY（ID lowlatency、遅延 512 サンプル。エンジンを 2 つ用意して切り替え）、SIDECHAIN（ID sidechain、外部サイドチェーンの音で下げる帯域を決める）
-  v1.3.0: Plugin Link で Balance Scope の出すぎ帯域へ FOCUS を自動で（applyLinkFocus、約 0.8 秒で追う。つまみは動かさない）
-  v1.4.0: 2 つ目の FOCUS（Settings の lowHz2/highHz2/amount2）、DEPTH FOLLOW（ID linkDepth、出すぎ量で DEPTH ×0.85〜1.3）、帯域ごとの削り量を送る（16 帯域）
+- Velvet Tamer（VelvetTamer）… 【削除: 2026-11-06 本人の希望。ややこしいので Hush Field に一本化。ソースもリポジトリから消した（git の履歴には残る）。Mac の .component はゴミ箱へ。作り直さない】
 - Fader Pilot（FaderPilot）… ボーカルの音量を自動でフェーダーを上げ下げして揃える（遅延ゼロ）。TARGET / FLOOR / RANGE / SPEED / OUTPUT、
   AUTO RIDE（OFF で Ride パラメーター＝オートメーションをそのまま使う）、WRITE（再生中に Ride へ書き込み、Logic の Latch/Touch で記録）、
   FOLLOW MUSIC（サイドチェーンのオケの音量＋OFFSET を目標に）、プリセット8個
@@ -87,6 +89,8 @@
   順番: START/END 切り取り → PITCH（速さごと、エルミート補間、上げるときは FIR で折り返し防止）→ 形（HitEngine.h = 元 Hit Sculptor の ATTACK/SNAP/LENGTH/ROOM の DRY 側）
   → REVERSE SOUND → ROOM の WET（hs::Room、尾の分だけ長く）→ REVERSE SOUND+ROOM（吸い込む響き）→ DRIVE（4 倍、FIR）→ FADE IN/OUT → NORMALIZE(-0.3 dB)+GAIN。apvts.state の "file" に元ファイルの場所
   v1.1.0: Splice / Finder から落とす、EXPORT ボタン、RESULT の波形をつかんで Logic へ（WaveView::onDragOut）、同じ version なら同じファイルを使い回す（lastExportVersion）
+  v1.2.0: A/B（abMode、A = 元の START〜END を できた音の RMS にそろえて鳴らす matchGain）、STRETCH（timeStretch = WSOLA、窓 2048・±512 を 1/4 に間引いて探す、切り取りの直後）、
+  TONE: LOW CUT / HIGH CUT（バターワース 4 次、前からだけ）・WIDTH（M/S、DRIVE の後）
   （2026-11-06: その場で加工する Hit Sculptor と、逆再生の Flipside を作ったが、本人の意図は「サンプル編集」だったので、これにまとめて 2 つは消した）
 - Reference Monitor（ReferenceMonitor）… 聴き比べ用の単体 Mac アプリ（macOS 14.2 以降、プロセスタップで Logic とミュージックの音を受け取る）。
   v1.1.0: LISTEN AS（PHONE / LAPTOP / EARBUDS / BT SPEAKER / CAR / CLUB の聞こえ方、ピンクノイズで音量を自動補正）、
@@ -180,6 +184,7 @@
   soft/hard・DEPTH・DETAIL の量 → 帯ごとの ATTACK/RELEASE（低/高の TILT 倍率）→ LINK・MAX CUT → 最小位相 FIR（LINEAR PHASE は直線位相）をホップごとに作り FFT でたたみこみ・クロスフェード。
   遅延 2304（LINEAR PHASE 3456、LOW LATENCY 0＝直接たたみこみ）。帯域カーブ 8 本（ID b1〜b8 の used/on/shape/freq/q/gain/slope/focus）、STEREO L/R・M/S、SC、A/B、プリセット 8 個。
   合わせ込みの数値は Tuning（tools/hf_cli.cpp が測定用の CLI）
+  v1.1.0: Plugin Link（Balance Scope の出すぎ帯域を linkBands で足す、削り量を 16 帯域で送る）、プリセット保存・取り消し
 
 - Meld Verb（MeldVerb）… EARLY / PLATE / HALL の 3 つを三角形の BLEND パッドで混ぜるリバーブ。市販の同じ型のリバーブを AU で鳴らして測り、合わせ込んだオリジナル。
   エンジンは MeldEngine.h（JUCE なし）: Early（12 個の跳ね返りを TIME の中に並べ、SIZE＝にじみの長さのオールパス、ANGLE＝時間で大きく／小さく＋左右の割合、残りの小さな 4 本 FDN）、
@@ -199,9 +204,13 @@
   v2 で並びを変えたので v1（PluginLink-v1.bin）の古い版とはつながらない。席の並びを変えるときはファイル名と magic も変える。
   各プラグインに ID `linkGroup`（OFF/1〜4）と、画面いちばん下の LinkBar（LINK の選択＋今の様子）。トラック名は updateTrackProperties で伝える。
   FROM（相手選び、LinkBar::setSources）… apvts.state の "linkFrom" に「種類番号|トラック名」で保存、Endpoint::setPreferred で find がその相手を優先。
-  今つながっているもの: Balance Scope → Velvet Tamer（FOCUS 2 か所・DEPTH）、Balance Scope → Fader Pilot（オケの音量）、
-  Fader Pilot → Horizon Spread（SPREAD を下げる）、Velvet Tamer → Balance Scope（削り量の表示）、Gain Stage → Balance Scope（GAIN の表示）。
-  新しくつなぐときは Kind と送る数値の番号（namespace bs / fp / vt / gs のように）を PluginLink.h に足す
+  今つながっているもの: Balance Scope → Hush Field（出すぎの帯域にベルを足して強めに処理、FOLLOW）、Balance Scope → Fader Pilot（オケの音量）、
+  Fader Pilot → Horizon Spread（SPREAD を下げる）、Hush Field → Balance Scope（削り量の表示。並びは namespace tamer）、Gain Stage → Balance Scope（GAIN の表示）、
+  Fader Pilot → Nebula / Lumen Rooms / Elder Verb / Meld Verb（歌っている間リバーブを VOCAL DUCK dB 下げる。plink::VocalDuck、ID linkDuck）、
+  Gain Stage → Wool Fuzz / Porch Drive（出口を TARGET にそろえる。plink::LevelMatch、ID linkMatch。RMS モードのときだけ）、
+  Reference → Balance Scope（参照曲を聴いている間は測らない。ref::listeningRef）、Fader Pilot / Balance Scope → Mod Host（MOD の種類 LINK）。
+  Sample Sculptor は LINK 欄だけ（自然な相手なし）。Kind 3 は前は Velvet Tamer、今は Hush Field
+  新しくつなぐときは Kind と送る数値の番号（namespace bs / fp / tamer / gs / ref / out のように）を PluginLink.h に足す
 
 - Idea Catcher（IdeaCatcher）… 思いつきの鼻歌・口ドラムを録って、キーとテンポ入りの Logic プロジェクトにするメニューバー常駐アプリ（LSUIElement、Dock に出ない）。
   録音キー（Carbon の RegisterEventHotKey、最初は ⌃⌥I、アクセシビリティ不要）で録音／停止、黙って 4 秒でも止まる。マイクは録るときだけ開く。

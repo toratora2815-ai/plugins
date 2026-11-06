@@ -1,5 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
+#include "PluginLinkJuce.h"
+#include "PresetBar.h"
 
 // 1次フィルター（ローパス／ハイパス兼用）
 struct OnePole
@@ -41,6 +43,13 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     juce::AudioProcessorValueTreeState apvts;
+
+    myp::Presets myPresets { *this, apvts, "WoolFuzz" };   // 自分のプリセット・取り消し
+
+    plink::Link link { plink::kindWoolFuzz, apvts };   // Plugin Link
+    plink::LevelMatch match;   // 出口を Gain Stage の TARGET にそろえる
+
+    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) link.setTrackName (*tp.name); }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();

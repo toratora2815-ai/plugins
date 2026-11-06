@@ -33,10 +33,19 @@ namespace plink
         kindNone = 0,
         kindBalanceScope = 1,   // 送る: 出すぎの帯域
         kindFaderPilot = 2,     // 送る: フェーダーの位置
-        kindVelvetTamer = 3,    // 受ける: FOCUS をそこへ
+        kindHushField = 3,      // 受ける: 出すぎの帯域を強めに処理 / 送る: 削っている量（3 は前は Velvet Tamer。2026-11-06 に削除）
         kindHorizonSpread = 4,  // 受ける: 広がりを少し抑える
         kindGainStage = 5,      // 送る: 入口で足した GAIN
-        numKinds = 6
+        kindReference = 6,      // 送る: 参照曲を聴いているか
+        kindNebula = 7,         // 受ける: 歌の間リバーブを下げる（リバーブ 4 種とも同じ）
+        kindLumenRooms = 8,
+        kindElderVerb = 9,
+        kindMeldVerb = 10,
+        kindWoolFuzz = 11,      // 受ける: 出口を Gain Stage の TARGET にそろえる（ドライブ 2 種とも同じ）
+        kindPorchDrive = 12,
+        kindModHost = 13,       // 受ける: Link の数値を動かす元にする
+        kindSampleSculptor = 14,
+        numKinds = 15
     };
 
     inline const char* kindName (uint32_t k)
@@ -45,9 +54,18 @@ namespace plink
         {
             case kindBalanceScope:  return "Balance Scope";
             case kindFaderPilot:    return "Fader Pilot";
-            case kindVelvetTamer:   return "Velvet Tamer";
+            case kindHushField:     return "Hush Field";
             case kindHorizonSpread: return "Horizon Spread";
             case kindGainStage:     return "Gain Stage";
+            case kindReference:     return "Reference";
+            case kindNebula:        return "Nebula Reverb";
+            case kindLumenRooms:    return "Lumen Rooms";
+            case kindElderVerb:     return "Elder Verb";
+            case kindMeldVerb:      return "Meld Verb";
+            case kindWoolFuzz:      return "Wool Fuzz";
+            case kindPorchDrive:    return "Porch Drive";
+            case kindModHost:       return "Mod Host";
+            case kindSampleSculptor: return "Sample Sculptor";
             default:                return "?";
         }
     }
@@ -65,8 +83,8 @@ namespace plink
                musicDb = 9,    // dBFS（無音は -120）
                window = 10 };  // 0 = 全体の平均、1 = 直近 10 秒で判定
     }
-    // Velvet Tamer（いまどこをどれだけ削っているか。Balance Scope のグラフに重ねる）
-    namespace vt
+    // Hush Field（いまどこをどれだけ削っているか。Balance Scope のグラフに重ねる。前は Velvet Tamer が送っていた並び）
+    namespace tamer
     {
         constexpr int numBands = 16;                         // 100 Hz〜16 kHz を対数で 16 等分
         constexpr float bandLowHz = 100.0f, bandHighHz = 16000.0f;
@@ -86,6 +104,16 @@ namespace plink
                learned = 3,    // 1 = LEARN したことがある
                inDb = 4,       // 入口の音量（RMS、dB）
                outDb = 5 };    // 出口の音量（RMS、dB）
+    }
+    // Reference
+    namespace ref
+    {
+        enum { listeningRef = 0 };   // 1 = 参照曲を聴いている（Balance Scope はその間測らない）
+    }
+    // ドライブ・リバーブなど（出口の音量だけ送る）
+    namespace out
+    {
+        enum { levelDb = 0 };        // 出口の音量（RMS、dB）
     }
     // Fader Pilot
     namespace fp

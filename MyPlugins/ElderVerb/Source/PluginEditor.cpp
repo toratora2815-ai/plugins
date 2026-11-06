@@ -198,8 +198,24 @@ ElderVerbEditor::ElderVerbEditor (ElderVerbProcessor& p) : AudioProcessorEditor 
     nextBtn.onClick = [step] { step (1); };
     for (auto* b : { &presetBtn, &saveBtn, &prevBtn, &nextBtn }) addAndMakeVisible (*b);
     addAndMakeVisible (graph);
+    addAndMakeVisible (linkBar);
+    addAndMakeVisible (presetBar);
+    duckSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    duckSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 18);
+    duckSlider.setTooltip ("Fader Pilot (same LINK, on the vocal): lower the reverb by this much while the voice is singing");
+    linkBar.addAndMakeVisible (duckSlider);
+    duckAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "linkDuck", duckSlider);
+    linkBar.extra = &duckSlider; linkBar.extraWidth = 150; linkBar.extraLabel = "VOCAL DUCK";
+    linkBar.setSources (proc.link, { plink::kindFaderPilot });
+    linkBar.status = [this] (bool& lit) -> juce::String
+    {
+        if (! proc.link.on()) return "Plugin Link OFF - same LINK as Fader Pilot to duck the reverb while singing";
+        if (! proc.duck.sawPilot()) return "waiting for Fader Pilot";
+        lit = proc.duck.nowDb() < -0.1f;
+        return lit ? "voice singing: reverb " + juce::String (proc.duck.nowDb(), 1) + " dB" : juce::String ("voice resting: full reverb");
+    };
 
-    setSize (860, 520);
+    setSize (860, 520 + footerH);
     startTimerHz (20);
     timerCallback();
 }
@@ -227,7 +243,7 @@ void ElderVerbEditor::timerCallback()
 void ElderVerbEditor::paint (juce::Graphics& g)
 {
     g.fillAll (bg);
-    auto top = getLocalBounds().removeFromTop (56);
+    auto top = getLocalBounds().withTrimmedBottom (footerH).removeFromTop (56);
     g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2c241d), 0, 0, bg, 0, 56, false));
     g.fillRect (top);
     g.setColour (amber); g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
@@ -258,7 +274,8 @@ void ElderVerbEditor::paint (juce::Graphics& g)
 
 void ElderVerbEditor::resized()
 {
-    auto r = getLocalBounds();
+    layoutFooter();
+    auto r = getLocalBounds().withTrimmedBottom (footerH);
     auto top = r.removeFromTop (56).reduced (12, 12);
     top.removeFromLeft (200);
     top.removeFromRight (36);
@@ -386,4 +403,22 @@ void ElderVerbEditor::savePreset()
             }
         }
     }), true);
+}
+
+// 画面のいちばん下（Plugin Link と プリセット・取り消し）。幅が狭いときは 2 段
+void ElderVerbEditor::layoutFooter()
+{
+    auto f = getLocalBounds().removeFromBottom (footerH).reduced (8, 5);
+    if (footerH < 50)   // 1 段
+    {
+        presetBar.setBounds (f.removeFromRight (presetBar.preferredWidth()).withSizeKeepingCentre (presetBar.preferredWidth(), myp::PresetBar::height));
+        f.removeFromRight (6);
+        linkBar.setBounds (f.withSizeKeepingCentre (f.getWidth(), plink::LinkBar::height));
+    }
+    else
+    {
+        linkBar.setBounds (f.removeFromTop (plink::LinkBar::height));
+        f.removeFromTop (4);
+        presetBar.setBounds (f.removeFromTop (myp::PresetBar::height));
+    }
 }

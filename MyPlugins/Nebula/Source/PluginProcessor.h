@@ -1,5 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
+#include "PluginLinkJuce.h"
+#include "PresetBar.h"
 #include "ReverbEngine.h"
 
 class NebulaProcessor : public juce::AudioProcessor
@@ -32,6 +34,13 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     juce::AudioProcessorValueTreeState apvts;
+
+    myp::Presets myPresets { *this, apvts, "Nebula" };   // 自分のプリセット・取り消し
+
+    plink::Link link { plink::kindNebula, apvts };   // Plugin Link
+    plink::VocalDuck duck;   // Fader Pilot が歌っている間リバーブを下げる
+
+    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) link.setTrackName (*tp.name); }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();

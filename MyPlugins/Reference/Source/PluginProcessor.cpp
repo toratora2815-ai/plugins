@@ -42,6 +42,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout ReferenceProcessor::createLa
                                                          AudioParameterFloatAttributes().withLabel ("dB")));
     v.push_back (std::make_unique<AudioParameterBool>   (ParameterID { "loop", 1 }, "Loop", true));
     v.push_back (std::make_unique<AudioParameterBool>   (ParameterID { "follow", 1 }, "Follow DAW", false));
+    // Plugin Link（LINK の番号）
+    v.push_back (plink::makeGroupParameter (9));
     return { v.begin(), v.end() };
 }
 
@@ -105,6 +107,14 @@ void ReferenceProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const int n = buffer.getNumSamples();
     for (int off = 0; off < n; off += kChunk)
         processChunk (L + off, R + off, juce::jmin (kChunk, n - off), mono);
+
+    // Plugin Link: 参照曲を聴いているか（同じ LINK の Balance Scope はその間測らない）
+    if (link.on())
+    {
+        link.ep().publish (plink::ref::listeningRef, pAb->load() > 0.5f ? 1.0f : 0.0f);
+        link.ep().stamp();
+        link.ep().heartbeat();
+    }
 }
 
 void ReferenceProcessor::processChunk (float* L, float* R, int n, bool mono)

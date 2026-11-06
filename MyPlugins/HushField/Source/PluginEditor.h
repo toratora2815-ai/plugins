@@ -95,6 +95,9 @@ private:
     juce::ComboBox presetBox, qualityBox, rangeBox;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> qualityAtt;
     juce::Label status;
+    myp::PresetBar presetBar;
+    plink::LinkBar linkBar;
+    Toggle linkFollow;
 
     juce::Rectangle<int> leftPanel, stereoPanel, tiltPanel, outPanel, topBar;
 

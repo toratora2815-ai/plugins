@@ -67,6 +67,18 @@ private:
     void setLevelsFromPad (float dbE, float dbP, float dbH);
 
     MeldVerbProcessor& processor;
+
+    // 画面のいちばん下: Plugin Link と プリセット・取り消し
+
+    plink::LinkBar linkBar { processor.apvts, juce::Colour (0xfff2b35b), juce::Colour (0xff181c24), juce::Colour (0xffe6e9ef) };
+
+    myp::PresetBar presetBar { processor.myPresets, juce::Colour (0xfff2b35b), juce::Colour (0xff181c24), juce::Colour (0xffe6e9ef) };
+
+    static constexpr int footerH = 40;
+
+    void layoutFooter();
+    juce::Slider duckSlider;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> duckAtt;
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<std::unique_ptr<Toggle>> toggles;
     std::vector<std::unique_ptr<Combo>> combos;

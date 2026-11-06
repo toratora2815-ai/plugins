@@ -147,7 +147,23 @@ MeldVerbEditor::MeldVerbEditor (MeldVerbProcessor& p)
 
     showTab (2);
     showEqTab (1);
-    setSize (1040, 730);
+    addAndMakeVisible (linkBar);
+    addAndMakeVisible (presetBar);
+    duckSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    duckSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 18);
+    duckSlider.setTooltip ("Fader Pilot (same LINK, on the vocal): lower the reverb by this much while the voice is singing");
+    linkBar.addAndMakeVisible (duckSlider);
+    duckAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (processor.apvts, "linkDuck", duckSlider);
+    linkBar.extra = &duckSlider; linkBar.extraWidth = 150; linkBar.extraLabel = "VOCAL DUCK";
+    linkBar.setSources (processor.link, { plink::kindFaderPilot });
+    linkBar.status = [this] (bool& lit) -> juce::String
+    {
+        if (! processor.link.on()) return "Plugin Link OFF - same LINK as Fader Pilot to duck the reverb while singing";
+        if (! processor.duck.sawPilot()) return "waiting for Fader Pilot";
+        lit = processor.duck.nowDb() < -0.1f;
+        return lit ? "voice singing: reverb " + juce::String (processor.duck.nowDb(), 1) + " dB" : juce::String ("voice resting: full reverb");
+    };
+    setSize (1040, 730 + footerH);
     startTimerHz (30);
 }
 
@@ -261,7 +277,8 @@ void MeldVerbEditor::showEqTab (int t)
 //==============================================================================
 void MeldVerbEditor::resized()
 {
-    auto r = getLocalBounds().reduced (12);
+    layoutFooter();
+    auto r = getLocalBounds().withTrimmedBottom (footerH).reduced (12);
     headerArea = r.removeFromTop (40);
     r.removeFromTop (8);
     auto top = r.removeFromTop (430);
@@ -683,4 +700,22 @@ void MeldVerbEditor::timerCallback()
     repaint (smoothMeterArea.expanded (2));
     if (! pad.dragging) pad.repaint();
     decay.repaint();
+}
+
+// 画面のいちばん下（Plugin Link と プリセット・取り消し）。幅が狭いときは 2 段
+void MeldVerbEditor::layoutFooter()
+{
+    auto f = getLocalBounds().removeFromBottom (footerH).reduced (8, 5);
+    if (footerH < 50)   // 1 段
+    {
+        presetBar.setBounds (f.removeFromRight (presetBar.preferredWidth()).withSizeKeepingCentre (presetBar.preferredWidth(), myp::PresetBar::height));
+        f.removeFromRight (6);
+        linkBar.setBounds (f.withSizeKeepingCentre (f.getWidth(), plink::LinkBar::height));
+    }
+    else
+    {
+        linkBar.setBounds (f.removeFromTop (plink::LinkBar::height));
+        f.removeFromTop (4);
+        presetBar.setBounds (f.removeFromTop (myp::PresetBar::height));
+    }
 }

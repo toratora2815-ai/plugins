@@ -1,5 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
+#include "PluginLinkJuce.h"
+#include "PresetBar.h"
 #include "ElderEngine.h"
 
 class ElderVerbProcessor : public juce::AudioProcessor
@@ -33,6 +35,10 @@ public:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     juce::AudioProcessorValueTreeState apvts;
+    myp::Presets myPresets { *this, apvts, "ElderVerb" };   // 自分のプリセット・取り消し
+    plink::Link link { plink::kindElderVerb, apvts };   // Plugin Link
+    plink::VocalDuck duck;   // Fader Pilot が歌っている間リバーブを下げる
+    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) link.setTrackName (*tp.name); }
 
     static const juce::StringArray& modeNames();
     static const juce::StringArray& colorNames();

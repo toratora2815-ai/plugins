@@ -60,6 +60,16 @@ private:
     };
 
     ModHostProcessor& proc;
+
+    // 画面のいちばん下: Plugin Link と プリセット・取り消し
+
+    plink::LinkBar linkBar { proc.apvts, juce::Colour (0xff4fd1e8), juce::Colour (0xff252b32), juce::Colour (0xffe6eaee) };
+
+    myp::PresetBar presetBar { proc.myPresets, juce::Colour (0xff4fd1e8), juce::Colour (0xff252b32), juce::Colour (0xffe6eaee) };
+
+    static constexpr int footerH = 40;
+
+    void layoutFooter();
     int sel = 0;
 
     juce::TextButton pluginButton, uiButton;

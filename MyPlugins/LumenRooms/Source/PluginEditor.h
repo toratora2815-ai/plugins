@@ -87,6 +87,18 @@ private:
     void addFolderToMenu (juce::PopupMenu&, const juce::File&, std::vector<juce::File>&, int depth);
 
     LumenRoomsProcessor& proc;
+
+    // 画面のいちばん下: Plugin Link と プリセット・取り消し
+
+    plink::LinkBar linkBar { proc.apvts, juce::Colour (0xff4fd1c5), juce::Colour (0xff12161c), juce::Colour (0xffdfe3ea) };
+
+    myp::PresetBar presetBar { proc.myPresets, juce::Colour (0xff4fd1c5), juce::Colour (0xff12161c), juce::Colour (0xffdfe3ea), true };
+
+    static constexpr int footerH = 40;
+
+    void layoutFooter();
+    juce::Slider duckSlider;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> duckAtt;
     LumenLook look;
     std::map<juce::String, std::unique_ptr<Knob>> knobs;
     std::map<juce::String, std::unique_ptr<Choice>> choices;

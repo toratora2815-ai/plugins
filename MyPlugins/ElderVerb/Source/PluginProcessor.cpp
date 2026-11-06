@@ -66,6 +66,9 @@ APVTS::ParameterLayout ElderVerbProcessor::createLayout()
     l.add (knob ("lowCut", "Low Cut", 0.0f, [] (float v) { return v <= 0.002f ? juce::String ("Off") : hzText (Maps::lowCutHz (v)); }));
     l.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "mode", 1 }, "Reverb Mode", modeNames(), 0));
     l.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "color", 1 }, "Color", colorNames(), 0));
+    // Plugin Link
+    l.add (plink::makeGroupParameter (9));
+    l.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "linkDuck", 9 }, "Link Vocal Duck", juce::NormalisableRange<float> (0.0f, 12.0f, 0.1f), 4.0f, juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return juce::String (x, 1) + " dB"; })));
     return l;
 }
 
@@ -122,6 +125,7 @@ void ElderVerbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (firstBlock || std::memcmp (&p, &lastParams, sizeof (p)) != 0) { engine.setParams (p); lastParams = p; }
 
     const float m = apvts.getRawParameterValue ("mix")->load();
+    const float duckG = duck.next (link, apvts.getRawParameterValue ("linkDuck")->load(), n, getSampleRate());
     dryGain.setTargetValue (std::cos (m * juce::MathConstants<float>::halfPi));
     wetGain.setTargetValue (std::sin (m * juce::MathConstants<float>::halfPi));
     if (firstBlock) { dryGain.setCurrentAndTargetValue (dryGain.getTargetValue()); wetGain.setCurrentAndTargetValue (wetGain.getTargetValue()); firstBlock = false; }
@@ -134,7 +138,7 @@ void ElderVerbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const auto* wl = wetBuf.getReadPointer (0); const auto* wr = wetBuf.getReadPointer (1);
     for (int i = 0; i < n; ++i)
     {
-        const float d = dryGain.getNextValue(), w = wetGain.getNextValue();
+        const float d = dryGain.getNextValue(), w = wetGain.getNextValue() * duckG;
         L[i] = d * L[i] + w * wl[i];
         R[i] = d * R[i] + w * wr[i];
         pk[0] = std::max (pk[0], std::abs (L[i])); pk[1] = std::max (pk[1], std::abs (R[i]));

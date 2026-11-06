@@ -14,7 +14,7 @@ constexpr int numTargets = 4;   // 1 つの MOD からつなげる先
 constexpr int maxSteps = 16;
 constexpr int chunk = 64;       // この長さごとに値を作り、中のプラグインのつまみを動かす
 
-enum Type  { typeLfo = 0, typeEnv, typeSidechain, typeRandom, typeSteps, numTypes };
+enum Type  { typeLfo = 0, typeEnv, typeSidechain, typeRandom, typeSteps, typeLink, numTypes };   // typeLink = Plugin Link の数値
 enum Shape { shapeSine = 0, shapeTriangle, shapeSawUp, shapeSawDown, shapeSquare, numShapes };
 
 // テンポ同期の長さ（4 分音符いくつ分か。小節は拍子から）
@@ -60,6 +60,7 @@ struct Block
     double barQuarters = 4.0;
     float inputPeak = 0.0f;     // この区切りのメイン入力の最大値（直線）
     float sidechainPeak = 0.0f; // サイドチェーンの最大値
+    float linkValue = 0.0f;     // Plugin Link から来た値（0〜1。Fader Pilot のフェーダー位置など）
 };
 
 inline uint32_t hash32 (uint32_t x)
@@ -131,6 +132,17 @@ public:
                 env += (x - env) * a;
                 const float db = 20.0f * std::log10 (std::max (1.0e-6f, env)) + s.gainDb;
                 out = std::clamp ((db + 48.0f) / 48.0f, 0.0f, 1.0f);   // -48 dB → 0、0 dB → 1
+                unipolarNative = true;
+                break;
+            }
+            case typeLink:
+            {
+                // ATTACK / RELEASE でならすだけ（GAIN は感度：+ で大きく振れる）
+                const float x = std::clamp (b.linkValue, 0.0f, 1.0f);
+                const float tau = (x > env ? s.attackMs : s.releaseMs) * 0.001f;
+                const float a = 1.0f - std::exp (-(float) dt / std::max (1.0e-4f, tau));
+                env += (x - env) * a;
+                out = std::clamp (0.5f + (env - 0.5f) * std::pow (10.0f, s.gainDb / 20.0f), 0.0f, 1.0f);
                 unipolarNative = true;
                 break;
             }

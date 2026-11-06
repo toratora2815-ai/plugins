@@ -275,8 +275,24 @@ LumenRoomsEditor::LumenRoomsEditor (LumenRoomsProcessor& p) : AudioProcessorEdit
     srcAll.onClick = [this] { proc.liveSource.store (0); };
     srcRefl.onClick = [this] { proc.liveSource.store (1); };
     srcRev.onClick = [this] { proc.liveSource.store (2); };
+    addAndMakeVisible (linkBar);
+    addAndMakeVisible (presetBar);
+    duckSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    duckSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 18);
+    duckSlider.setTooltip ("Fader Pilot (same LINK, on the vocal): lower the reverb by this much while the voice is singing");
+    linkBar.addAndMakeVisible (duckSlider);
+    duckAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "linkDuck", duckSlider);
+    linkBar.extra = &duckSlider; linkBar.extraWidth = 150; linkBar.extraLabel = "VOCAL DUCK";
+    linkBar.setSources (proc.link, { plink::kindFaderPilot });
+    linkBar.status = [this] (bool& lit) -> juce::String
+    {
+        if (! proc.link.on()) return "Plugin Link OFF - same LINK as Fader Pilot to duck the reverb while singing";
+        if (! proc.duck.sawPilot()) return "waiting for Fader Pilot";
+        lit = proc.duck.nowDb() < -0.1f;
+        return lit ? "voice singing: reverb " + juce::String (proc.duck.nowDb(), 1) + " dB" : juce::String ("voice resting: full reverb");
+    };
 
-    setSize (W, H);
+    setSize (W, H + footerH);
     showPage (juce::jlimit (0, 2, juce::SystemStats::getEnvironmentVariable ("LUMEN_PAGE", "0").getIntValue()));
     worker.request (currentVisualParams());
     startTimerHz (30);
@@ -345,6 +361,7 @@ juce::Rectangle<int> LumenRoomsEditor::cardContent (const juce::String& title) c
 
 void LumenRoomsEditor::resized()
 {
+    layoutFooter();
     // 上の帯
     const int hy = 15, hh = 28;
     for (int i = 0; i < 3; ++i) tabs[i].setBounds (222 + i * 78, hy, 72, hh);
@@ -1106,4 +1123,22 @@ void LumenRoomsEditor::toggleBrowser()
     browser->setBounds (16, 62, W - 32, 400);
     browser->toFront (true);
     browser->focusSearch();
+}
+
+// 画面のいちばん下（Plugin Link と プリセット・取り消し）。幅が狭いときは 2 段
+void LumenRoomsEditor::layoutFooter()
+{
+    auto f = getLocalBounds().removeFromBottom (footerH).reduced (8, 5);
+    if (footerH < 50)   // 1 段
+    {
+        presetBar.setBounds (f.removeFromRight (presetBar.preferredWidth()).withSizeKeepingCentre (presetBar.preferredWidth(), myp::PresetBar::height));
+        f.removeFromRight (6);
+        linkBar.setBounds (f.withSizeKeepingCentre (f.getWidth(), plink::LinkBar::height));
+    }
+    else
+    {
+        linkBar.setBounds (f.removeFromTop (plink::LinkBar::height));
+        f.removeFromTop (4);
+        presetBar.setBounds (f.removeFromTop (myp::PresetBar::height));
+    }
 }

@@ -164,8 +164,16 @@ ReferenceEditor::ReferenceEditor (ReferenceProcessor& p)
     updateSourceVisibility();
 
     setResizable (true, true);
-    setResizeLimits (860, 560, 1800, 1100);
-    setSize (980, 640);
+    setResizeLimits (860, 560 + footerH, 1800, 1100 + footerH);
+    addAndMakeVisible (linkBar);
+    addAndMakeVisible (presetBar);
+    linkBar.status = [this] (bool& lit) -> juce::String
+    {
+        if (! proc.link.on()) return "Plugin Link OFF - same LINK as Balance Scope: it pauses while you listen to REF";
+        lit = proc.apvts.getRawParameterValue ("ab")->load() > 0.5f;
+        return lit ? juce::String ("listening to REF - Balance Scope pauses") : juce::String ("listening to MIX");
+    };
+    setSize (980, 640 + footerH);
     startTimerHz (25);
 }
 
@@ -532,7 +540,8 @@ void ReferenceEditor::drawMeters (juce::Graphics& g, juce::Rectangle<float> area
 
 void ReferenceEditor::resized()
 {
-    auto area = getLocalBounds().reduced (12);
+    layoutFooter();
+    auto area = getLocalBounds().withTrimmedBottom (footerH).reduced (12);
 
     headerArea = area.removeFromTop (34);
     {
@@ -581,5 +590,23 @@ void ReferenceEditor::resized()
         bandSel.setBounds   (col (240, bandLabel));
         stereoSel.setBounds (col (200, stereoLabel));
         trimSlider.setBounds (col (juce::jmax (120, b.getWidth()), trimLabel));
+    }
+}
+
+// 画面のいちばん下（Plugin Link と プリセット・取り消し）。幅が狭いときは 2 段
+void ReferenceEditor::layoutFooter()
+{
+    auto f = getLocalBounds().removeFromBottom (footerH).reduced (8, 5);
+    if (footerH < 50)   // 1 段
+    {
+        presetBar.setBounds (f.removeFromRight (presetBar.preferredWidth()).withSizeKeepingCentre (presetBar.preferredWidth(), myp::PresetBar::height));
+        f.removeFromRight (6);
+        linkBar.setBounds (f.withSizeKeepingCentre (f.getWidth(), plink::LinkBar::height));
+    }
+    else
+    {
+        linkBar.setBounds (f.removeFromTop (plink::LinkBar::height));
+        f.removeFromTop (4);
+        presetBar.setBounds (f.removeFromTop (myp::PresetBar::height));
     }
 }

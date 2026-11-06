@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include "PresetBar.h"
 #include "LoudnessMeter.h"
 #include "Targets.h"
 #include "BandMath.h"
@@ -59,8 +60,10 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
-    // Plugin Link（同じ LINK 番号の Velvet Tamer へ「出すぎの帯域」、Fader Pilot へオケの音量を送る。
-    // Velvet Tamer の削り量と Gain Stage の GAIN を受け取って表示する）
+    myp::Presets myPresets { *this, apvts, "BalanceScope" };   // 自分のプリセット・取り消し
+
+    // Plugin Link（同じ LINK 番号の Hush Field へ「出すぎの帯域」、Fader Pilot へオケの音量を送る。
+    // Hush Field の削り量と Gain Stage の GAIN を受け取って表示する）
     void updateTrackProperties (const TrackProperties& p) override { if (p.name.has_value()) link.setTrackName (*p.name); }
     struct LinkInfo
     {
@@ -71,6 +74,7 @@ public:
         plink::Peer tamer, gain;   // found = 見つかった
     };
     LinkInfo getLinkInfo() const;
+    std::atomic<bool> refPaused { false };   // Reference が参照曲を流していて、測るのを止めている
     plink::Link link { plink::kindBalanceScope, apvts };
 
 private:

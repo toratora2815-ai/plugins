@@ -63,8 +63,9 @@ GainStageEditor::GainStageEditor (GainStageProcessor& p) : AudioProcessorEditor 
              + " linked plugin" + (n > 1 ? "s" : "");
     };
     addAndMakeVisible (linkBar);
+    addAndMakeVisible (presetBar);
 
-    setSize (600, 444);
+    setSize (600, 478);
     startTimerHz (30);
 }
 
@@ -83,6 +84,8 @@ void GainStageEditor::setupToggle (Toggle& t, const char* id, const juce::String
 void GainStageEditor::resized()
 {
     auto b = getLocalBounds().reduced (16);
+    presetBar.setBounds (b.removeFromBottom (myp::PresetBar::height));
+    b.removeFromBottom (6);
     linkBar.setBounds (b.removeFromBottom (plink::LinkBar::height));
     b.removeFromBottom (10);
     b.removeFromTop (40);   // タイトル

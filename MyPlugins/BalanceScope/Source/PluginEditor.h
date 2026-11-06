@@ -53,6 +53,7 @@ private:
     juce::ComboBox windowBox;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> windowAttachment;
     plink::LinkBar linkBar { processor.apvts, juce::Colour (0xffff8fb0), juce::Colour (0xff1a1f26), juce::Colour (0xfff2f2f2) };
+    myp::PresetBar presetBar { processor.myPresets, juce::Colour (0xffff8fb0), juce::Colour (0xff1a1f26), juce::Colour (0xfff2f2f2) };
     juce::String flashText;
     int flashTicks = 0;
 

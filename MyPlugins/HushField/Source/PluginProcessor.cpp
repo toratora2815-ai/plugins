@@ -114,6 +114,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout HushFieldProcessor::createLa
         addF (bandId (b, "slope"), n + "Slope", { 0.0f, 10.0f, 0.1f }, 5.0f, one);
         addF (bandId (b, "focus"), n + "Focus", { 0.0f, 100.0f, 1.0f }, 50.0f, focusText);
     }
+    // v1.1: Plugin Link
+    v.push_back (plink::makeGroupParameter (2));
+    v.push_back (std::make_unique<B> (juce::ParameterID { "linkFollow", 2 }, "Link Follow", true));
     return { v.begin(), v.end() };
 }
 
@@ -202,7 +205,76 @@ void HushFieldProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             numSc = scBuf.getNumChannels();
         }
     scConnected = numSc > 0;
-    eng.process (main.getArrayOfWritePointers(), main.getNumChannels(), sc, numSc, main.getNumSamples(), s);
+    auto s2 = s;
+    applyLink (s2, main.getNumSamples());
+    eng.process (main.getArrayOfWritePointers(), main.getNumChannels(), sc, numSc, main.getNumSamples(), s2);
+    publishReduction (main.getNumSamples());
+}
+
+// Balance Scope が「出すぎ」を送ってきている間、その帯域にベルを足して強めに処理する（画面のカーブはそのまま）。
+// 強さ = 出すぎの量に応じて +2〜+8、約 0.8 秒でなめらかに出入りする。2 か所目は 1 か所目より控えめ
+void HushFieldProcessor::applyLink (hf::Settings& s, int numSamples)
+{
+    float want[2] = { 0.0f, 0.0f }, lo[2] = { 0, 0 }, hi[2] = { 0, 0 };
+    if (link.on() && apvts.getRawParameterValue ("linkFollow")->load() > 0.5f)
+    {
+        plink::Peer p;
+        if (link.ep().find (plink::kindBalanceScope, p) && p.v[plink::bs::valid] > 0.5f && p.valuesAgeMs < 5000)
+        {
+            const int idx[2][3] = { { plink::bs::excessDb, plink::bs::lowHz, plink::bs::highHz },
+                                    { plink::bs::excess2Db, plink::bs::low2Hz, plink::bs::high2Hz } };
+            for (int i = 0; i < 2; ++i)
+            {
+                const float ex = p.v[idx[i][0]], l = p.v[idx[i][1]], h = p.v[idx[i][2]];
+                if (ex >= 0.5f && l >= 20.0f && h > l)
+                {
+                    want[i] = juce::jlimit (2.0f, 8.0f, 2.0f + 1.5f * ex) * (i == 0 ? 1.0f : 0.7f);
+                    lo[i] = l; hi[i] = juce::jmin (20000.0f, h);
+                }
+            }
+        }
+    }
+    const float a = 1.0f - std::exp (-(float) numSamples / (float) (0.8 * getSampleRate() + 1.0));
+    for (int i = 0; i < 2; ++i)
+    {
+        if (want[i] > 0.0f) { if (linkLo[i] < 0.0f || linkGain[i] < 0.05f) { linkLo[i] = lo[i]; linkHi[i] = hi[i]; }
+                              linkLo[i] += (lo[i] - linkLo[i]) * a; linkHi[i] += (hi[i] - linkHi[i]) * a; }
+        linkGain[i] += (want[i] - linkGain[i]) * a;
+        if (linkGain[i] < 0.02f) linkGain[i] = 0.0f;
+        auto& b = s.linkBands[i];
+        b.used = linkGain[i] > 0.0f && linkLo[i] > 0.0f;
+        b.enabled = true;
+        b.shape = hf::Bell;
+        b.hz = std::sqrt (juce::jmax (20.0f, linkLo[i]) * juce::jmax (21.0f, linkHi[i]));
+        const float oct = juce::jmax (0.3f, std::log2 (juce::jmax (21.0f, linkHi[i]) / juce::jmax (20.0f, linkLo[i])));
+        b.q = juce::jlimit (0.2f, 4.0f, 1.4f / oct);     // ベルの幅（オクターブ）≈ 1.4 / Q
+        b.gain = std::round (linkGain[i] * 8.0f) / 8.0f;  // 細かく変わりすぎないように
+        b.focus = 0.5f;
+        linkShown[i] = b.used ? linkGain[i] : 0.0f;
+        linkHz[i] = b.hz;
+    }
+}
+
+// 削っている量を 16 帯域（100 Hz〜16 kHz）にまとめ、約 0.5 秒でならして掲示板へ
+void HushFieldProcessor::publishReduction (int numSamples)
+{
+    if (! link.on()) return;
+    const float a = 1.0f - std::exp (-(float) numSamples / (float) (0.5 * getSampleRate() + 1.0));
+    auto& ep = link.ep();
+    float maxRed = 0.0f;
+    for (int i = 0; i < plink::tamer::numBands; ++i)
+    {
+        const int from = juce::jlimit (0, hf::HushEngine::displayPoints - 1, (int) (hf::hzToPos (plink::tamer::bandEdgeHz (i)) * hf::HushEngine::displayPoints));
+        const int to = juce::jlimit (from, hf::HushEngine::displayPoints - 1, (int) (hf::hzToPos (plink::tamer::bandEdgeHz (i + 1)) * hf::HushEngine::displayPoints) - 1);
+        float m = 0.0f;
+        for (int k = from; k <= to; ++k) m = juce::jmax (m, eng.shownReduction (k));
+        maxRed = juce::jmax (maxRed, m);
+        bandRed[i] += (-m - bandRed[i]) * a;
+        ep.publish (plink::tamer::band0 + i, bandRed[i]);
+    }
+    ep.publish (plink::tamer::maxReductionDb, -maxRed);
+    ep.stamp();
+    ep.heartbeat();
 }
 
 // ---------------- 状態の保存（A/B のもう片方も一緒に） ----------------

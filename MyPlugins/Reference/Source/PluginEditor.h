@@ -55,6 +55,16 @@ private:
     void drawMeters (juce::Graphics&, juce::Rectangle<float>);
 
     ReferenceProcessor& proc;
+
+    // 画面のいちばん下: Plugin Link と プリセット・取り消し
+
+    plink::LinkBar linkBar { proc.apvts, juce::Colour (0xff6fd6c9), juce::Colour (0xff1b2026), juce::Colour (0xffe6eaee) };
+
+    myp::PresetBar presetBar { proc.myPresets, juce::Colour (0xff6fd6c9), juce::Colour (0xff1b2026), juce::Colour (0xffe6eaee) };
+
+    static constexpr int footerH = 40;
+
+    void layoutFooter();
     juce::LookAndFeel_V4 lnf;
 
     Segmented sourceSel, abSel, levelSel, bandSel, stereoSel;
