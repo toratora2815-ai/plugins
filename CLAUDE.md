@@ -73,7 +73,7 @@
 ### 迷ったときの早見
 - リバーブ: Lumen Rooms = 細かく作り込む部屋・ホール、長い響き / Elder Verb = 昔のデジタル機材の色付き / Meld Verb = ボーカルやミックスで自動で引っ込む実用リバーブ
 - 聴き比べ: Reference Monitor = 他人の曲と / Mix Time Machine = 自分の前のバウンスと（マスタリング段階で使う） / Balance Scope = トラックに挿す測定器・Plugin Link の配り役
-- 鼻歌: Idea Catcher = 思いつきを捕まえる（本命） / Hum Keys = Logic の前でその場で MIDI に（機能は足さない。まとめるかは本人と相談中）
+- 鼻歌: Idea Catcher = 思いつきを捕まえる（本命） / Hum Keys = Logic の前でその場で MIDI に（機能は足さない。本人がまだ使っていないので、試してから Idea Catcher にまとめるか決める）
 - 参照曲まわりの新機能は Reference Monitor にだけ足す（Balance Scope の REF と二重にしない）。Mod Host は「中のプラグインのつまみを動かす」役。帯域・歪み・自動ゲインはこれ以上足さない（Forge Strip の仕事）
 
 ### プラグイン（AU）
