@@ -330,6 +330,25 @@ namespace numdeck
     void KeyTap::openApp (const std::string& path)
     {
         NSString* p = [ns (path) stringByStandardizingPath];
+
+        // Num Deck 自身のタイル: ほかのアプリには触らず、Num Deck の画面を隠す・出すだけ
+        // （全画面の LINE などの上で押しても、そのアプリのまま。Finder などに切り替わらない）
+        if ([[[NSBundle mainBundle].bundlePath stringByStandardizingPath] isEqualToString: p])
+        {
+            bool visible = false;
+            for (NSWindow* w in [NSApp windows])
+                if (w.isVisible && w.level < NSStatusWindowLevel && w.frame.size.width > 200) visible = true;
+            if (! [NSApp isHidden] && visible)
+                [NSApp hide: nil];
+            else
+            {
+                [NSApp unhide: nil];
+                for (NSWindow* w in [NSApp windows])
+                    if (w.frame.size.width > 200 && w.level < NSStatusWindowLevel) [w orderFrontRegardless];
+            }
+            return;
+        }
+
         // 全画面の左右分割に入っている → 分割を解いて、そのアプリだけを全画面に
         if (win::unsplitToFullScreen (p)) return;
 
