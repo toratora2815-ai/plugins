@@ -102,6 +102,8 @@ private:
     juce::TextButton kindBtn, keyDownBtn, keyUpBtn, modeBtn, bpmMinus, bpmPlus, bpmHalf, bpmDouble, quantBtn,
                      logicBtn, dubBtn, finderBtn, hotkeyBtn, inputBtn, countBtn, moreBtn, tapBtn;
     juce::ToggleButton autoOpenBtn, autoStopBtn, loginBtn, prerollBtn;
+    juce::TextButton humMinus, humPlus, tempoReset;
+    juce::Label tempoLabel;   // 曲のテンポ（クリックで数字を打てる）
 
     juce::Rectangle<int> header, recArea, recCircle, card, roll, actions, dragMidi, dragWav, recentArea, footer;
 

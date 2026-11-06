@@ -309,8 +309,10 @@ inline Result analyse (std::vector<float> x, double fs, const DrumVoice& dv, con
 struct MidiOptions
 {
     int key = 0; bool minor = false;
-    double bpm = 100;
-    int quantize = 0;   // 0 = しない, 1 = 16 分, 2 = 8 分
+    double bpm = 100;       // 鼻歌のテンポ（秒 → 拍に直すのに使う）
+    double outBpm = 0;      // 曲のテンポ（MIDI に書く）。0 = 鼻歌と同じ。拍の位置はそのままで、速さだけ変わる
+    int quantize = 0;
+    double tempoOut() const { return outBpm > 0 ? outBpm : bpm; }   // 0 = しない, 1 = 16 分, 2 = 8 分
 };
 
 inline const char* keyName (int k)
@@ -419,7 +421,7 @@ inline std::vector<uint8_t> buildMidiFile (const std::vector<Layer>& layers, con
     f.insert (f.end(), { 'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 1, (uint8_t) (nTracks >> 8), (uint8_t) nTracks, (uint8_t) (ppq >> 8), (uint8_t) (ppq & 0xff) });
 
     // 0 番トラック: テンポ・拍子・キー（＋キーの名前のマーカー。Logic のマーカーにも出る）
-    const uint32_t us = (uint32_t) std::lround (60000000.0 / std::clamp (o.bpm, 20.0, 400.0));
+    const uint32_t us = (uint32_t) std::lround (60000000.0 / std::clamp (o.tempoOut(), 20.0, 400.0));
     const std::string keyText = std::string ("Key ") + keyName (o.key) + (o.minor ? "m" : "");
     track ({ { 0, 0, meta (3, "Idea Catcher") },
              { 0, 1, { 0xFF, 0x51, 0x03, (uint8_t) (us >> 16), (uint8_t) (us >> 8), (uint8_t) us } },

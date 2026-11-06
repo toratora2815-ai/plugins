@@ -8,7 +8,7 @@ const juce::Colour bg (0xff0e1117), panel (0xff171c26), panel2 (0xff1f2633), lin
                    textC (0xffe8ecf3), dim (0xff8a94a6), amber (0xffffc24b), red (0xffff4d5e), cyan (0xff4fd6e8),
                    green (0xff5fe08f), violet (0xffb58cff);
 
-constexpr int W = 460, H = 808;
+constexpr int W = 460, H = 846;
 constexpr double maxSeconds = 300.0;     // 1 回の録音は 5 分まで
 constexpr double ringSeconds = 32.0;     // さかのぼり録音で覚えておく長さ（使うのは 30 秒まで）
 constexpr double autoStopSeconds = 4.0;  // 黙ってこれだけたったら止める
@@ -144,21 +144,21 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
     po.filenameSuffix = ".settings";
     props = std::make_unique<juce::PropertiesFile> (po);
 
-    for (auto* b : { &kindBtn, &keyDownBtn, &keyUpBtn, &modeBtn, &bpmMinus, &bpmPlus, &bpmHalf, &bpmDouble,
-                     &quantBtn, &dubBtn, &finderBtn, &hotkeyBtn, &inputBtn, &countBtn, &moreBtn, &tapBtn })
+    for (auto* b : { &kindBtn, &keyDownBtn, &keyUpBtn, &modeBtn, &bpmMinus, &bpmPlus, &bpmHalf, &bpmDouble, &humMinus, &humPlus, &tempoReset,
+                     &quantBtn, &dubBtn, &logicBtn, &hotkeyBtn, &inputBtn, &countBtn, &moreBtn, &tapBtn })
     {
         styleButton (*b);
         addAndMakeVisible (*b);
     }
-    styleButton (logicBtn, true);
-    addAndMakeVisible (logicBtn);
+    styleButton (finderBtn, true);
+    addAndMakeVisible (finderBtn);
     for (auto* t : { &autoOpenBtn, &autoStopBtn, &loginBtn, &prerollBtn })
     {
         styleToggle (*t);
         addAndMakeVisible (*t);
     }
 
-    logicBtn.setButtonText (u8 ("Logic で開く")); inputBtn.setButtonText (u8 ("入力…"));
+    logicBtn.setButtonText ("Logic"); inputBtn.setButtonText (u8 ("入力…"));
     autoOpenBtn.setButtonText (u8 ("止めたら Logic で開く")); autoStopBtn.setButtonText (u8 ("黙って 4 秒で止める"));
     loginBtn.setButtonText (u8 ("ログイン時に起動"));
     prerollBtn.setButtonText (u8 ("さかのぼり録音（直前 30 秒も残す）"));
@@ -172,10 +172,42 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
     keyDownBtn.onClick = [this] { editOptions ([] (auto& o) { o.key = (o.key + 11) % 12; }); };
     keyUpBtn.onClick   = [this] { editOptions ([] (auto& o) { o.key = (o.key + 1) % 12; }); };
     modeBtn.onClick    = [this] { editOptions ([] (auto& o) { o.minor = ! o.minor; }); };
-    bpmMinus.onClick   = [this] { editOptions ([] (auto& o) { o.bpm = std::max (40.0, o.bpm - 1); }); };
-    bpmPlus.onClick    = [this] { editOptions ([] (auto& o) { o.bpm = std::min (240.0, o.bpm + 1); }); };
-    bpmHalf.onClick    = [this] { editOptions ([] (auto& o) { o.bpm = std::max (40.0, std::round (o.bpm / 2)); }); };
-    bpmDouble.onClick  = [this] { editOptions ([] (auto& o) { o.bpm = std::min (240.0, o.bpm * 2); }); };
+    // 曲のテンポ（MIDI の速さだけ変わる。音の拍の位置はそのまま）
+    bpmMinus.onClick   = [this] { editOptions ([] (auto& o) { o.outBpm = std::max (30.0, std::round (o.tempoOut()) - 1); }); };
+    bpmPlus.onClick    = [this] { editOptions ([] (auto& o) { o.outBpm = std::min (300.0, std::round (o.tempoOut()) + 1); }); };
+    tempoReset.onClick = [this] { editOptions ([] (auto& o) { o.outBpm = 0; }); };
+    // 鼻歌のテンポ（何秒を 1 拍とみなすか。判定が倍・半分にずれたとき・少しずれたとき）
+    auto humEdit = [this] (std::function<double (double)> f)
+    {
+        editOptions ([f] (auto& o)
+        {
+            const bool follow = o.outBpm <= 0;
+            o.bpm = std::clamp (f (o.bpm), 30.0, 300.0);
+            if (follow) o.outBpm = 0;
+        });
+    };
+    humMinus.onClick   = [humEdit] { humEdit ([] (double b) { return b - 1; }); };
+    humPlus.onClick    = [humEdit] { humEdit ([] (double b) { return b + 1; }); };
+    bpmHalf.onClick    = [humEdit] { humEdit ([] (double b) { return std::round (b / 2); }); };
+    bpmDouble.onClick  = [humEdit] { humEdit ([] (double b) { return b * 2; }); };
+    humMinus.setButtonText (u8 ("−")); humPlus.setButtonText ("+");
+    tempoReset.setButtonText (u8 ("元の速さ"));
+    tempoLabel.setEditable (true, true, false);
+    tempoLabel.setJustificationType (juce::Justification::centred);
+    tempoLabel.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+    tempoLabel.setColour (juce::Label::textColourId, textC);
+    tempoLabel.setColour (juce::Label::backgroundColourId, panel2.withAlpha (0.6f));
+    tempoLabel.setColour (juce::Label::textWhenEditingColourId, textC);
+    tempoLabel.setColour (juce::Label::backgroundWhenEditingColourId, panel2);
+    tempoLabel.setColour (juce::Label::outlineWhenEditingColourId, amber);
+    tempoLabel.setTooltip (u8 ("クリックして数字を打つと、曲のテンポを変えられます"));
+    tempoLabel.onTextChange = [this]
+    {
+        const double v = tempoLabel.getText().retainCharacters ("0123456789.").getDoubleValue();
+        if (v >= 30 && v <= 300) editOptions ([v] (auto& o) { o.outBpm = std::abs (v - o.bpm) < 0.01 ? 0.0 : v; });
+        else refreshButtons();
+    };
+    addAndMakeVisible (tempoLabel);
     kindBtn.onClick    = [this]
     {
         if (! cur.valid || cur.layers.empty()) return;
@@ -205,7 +237,12 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
         });
     };
 
-    autoOpenBtn.setToggleState (props->getBoolValue ("autoOpen", true), juce::dontSendNotification);
+    if (! props->containsKey ("v13"))   // 1.3.0: Logic は自動で開かない（MIDI を作るだけ）が標準に
+    {
+        props->setValue ("autoOpen", false);
+        props->setValue ("v13", true);
+    }
+    autoOpenBtn.setToggleState (props->getBoolValue ("autoOpen", false), juce::dontSendNotification);
     autoStopBtn.setToggleState (props->getBoolValue ("autoStop", true), juce::dontSendNotification);
     prerollBtn.setToggleState (props->getBoolValue ("preroll", false), juce::dontSendNotification);
     autoOpenBtn.onClick = [this] { props->setValue ("autoOpen", autoOpenBtn.getToggleState()); };
@@ -238,8 +275,8 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
         mac::setNotificationHandler ([this] (const std::string& id)
         {
             const juce::File f (juce::String::fromUTF8 (id.c_str()));
-            if (cur.valid && f == cur.folder) openLastInLogic();
-            else showMe (true);
+            if (! (cur.valid && f == cur.folder) && f.isDirectory()) loadIdea (f);
+            showMe (true);
         });
         refreshMenu();
         if (! mac::logicInstalled()) message = u8 ("Logic Pro が見つかりません（MIDI はふつうのアプリで開きます）");
@@ -806,7 +843,7 @@ void MainComponent::finishAnalysis (idea::Result r, std::vector<float> samples, 
 
     const auto& L = cur.layers.back();
     const auto summary = (cur.layers.back().kind != idea::kDrums || hasMelodyLayer() ? shortKey (cur.o.key, cur.o.minor) + u8 (" · ") : juce::String())
-                       + juce::String ((int) std::lround (cur.o.bpm)) + u8 (" BPM · ")
+                       + juce::String ((int) std::lround (cur.o.tempoOut())) + u8 (" BPM · ")
                        + juce::String ((int) idea::includedNotes (L.r, L.kind).size()) + u8 (" 音")
                        + (cur.layers.size() > 1 ? u8 (" · 重ね ") + juce::String ((int) cur.layers.size()) : juce::String());
     if (autoOpenBtn.getToggleState() && cur.mid.existsAsFile())
@@ -816,9 +853,9 @@ void MainComponent::finishAnalysis (idea::Result r, std::vector<float> samples, 
     }
     else
     {
-        flashHud (u8 ("できました  ") + summary, u8 ("メニューバーの電球か、通知から Logic で開けます"), green, 5.0);
+        flashHud (u8 ("MIDI ができました  ") + summary, u8 ("~/Music/Idea Catcher に保存。テンポは画面で変えられます"), green, 5.0);
         if (live && ! (juce::Process::isForegroundProcess() && isWindowVisible && isWindowVisible()))
-            mac::notify ("Idea Catcher", (u8 ("アイデアができました: ") + summary + u8 ("。クリックで Logic で開きます")).toStdString(),
+            mac::notify ("Idea Catcher", (u8 ("MIDI ができました: ") + summary + u8 ("。クリックで画面を出します")).toStdString(),
                          cur.folder.getFullPathName().toStdString());
     }
 }
@@ -878,6 +915,7 @@ void MainComponent::loadIdea (const juce::File& folder)
     base.folder = folder;
     base.o.key = key; base.o.minor = minor;
     base.o.bpm = obj != nullptr ? (double) obj->getProperty ("bpm") : 100.0;
+    base.o.outBpm = obj != nullptr && obj->hasProperty ("outBpm") ? (double) obj->getProperty ("outBpm") : 0.0;
     base.o.quantize = obj != nullptr ? (int) obj->getProperty ("quantize") : 0;
     const bool hasSaved = obj != nullptr;
 
@@ -953,7 +991,7 @@ void MainComponent::writeMidi()
     // Logic のプロジェクト名にもなる
     const auto stamp = cur.folder.getFileName().substring (5, 16);   // "11-05 15.30"
     const auto name = juce::File::createLegalFileName ("Idea " + stamp + " " + shortKey (cur.o.key, cur.o.minor)
-                                                        + " " + juce::String ((int) std::lround (cur.o.bpm)) + "bpm");
+                                                        + " " + juce::String ((int) std::lround (cur.o.tempoOut())) + "bpm");
     cur.mid = cur.folder.getChildFile (name + ".mid");
     const auto bytes = idea::buildMidiFile (cur.layers, cur.o);
     cur.mid.replaceWithData (bytes.data(), bytes.size());
@@ -966,6 +1004,7 @@ void MainComponent::saveInfo()
     o->setProperty ("key", cur.o.key);
     o->setProperty ("minor", cur.o.minor);
     o->setProperty ("bpm", cur.o.bpm);
+    o->setProperty ("outBpm", cur.o.outBpm);
     o->setProperty ("kind", cur.layers.empty() ? 0 : cur.layers[0].kind);
     o->setProperty ("quantize", cur.o.quantize);
     double secs = 0; int notes = 0;
@@ -1075,11 +1114,17 @@ void MainComponent::refreshRecent()
 void MainComponent::refreshButtons()
 {
     const bool show = cur.valid && state != Analysing;
-    for (auto* b : { &kindBtn, &keyDownBtn, &keyUpBtn, &modeBtn, &bpmMinus, &bpmPlus, &bpmHalf, &bpmDouble, &quantBtn, &logicBtn, &dubBtn })
+    for (juce::Component* b : { (juce::Component*) &kindBtn, (juce::Component*) &keyDownBtn, (juce::Component*) &keyUpBtn, (juce::Component*) &modeBtn,
+                                (juce::Component*) &bpmMinus, (juce::Component*) &bpmPlus, (juce::Component*) &bpmHalf, (juce::Component*) &bpmDouble,
+                                (juce::Component*) &humMinus, (juce::Component*) &humPlus, (juce::Component*) &tempoLabel,
+                                (juce::Component*) &quantBtn, (juce::Component*) &logicBtn, (juce::Component*) &dubBtn })
         b->setVisible (show);
+    tempoReset.setVisible (show && cur.o.outBpm > 0 && std::abs (cur.o.outBpm - cur.o.bpm) > 0.01);
+    if (! tempoLabel.isBeingEdited())
+        tempoLabel.setText (juce::String ((int) std::lround (cur.o.tempoOut())) + " BPM", juce::dontSendNotification);
     dubBtn.setEnabled (state == Done);
     tapBtn.setVisible (state == Recording && ses.mode != Overdub && ! ses.countIn);
-    finderBtn.setButtonText (cur.valid ? "Finder" : u8 ("保存フォルダ"));
+    finderBtn.setButtonText (cur.valid ? u8 ("MIDI を Finder で表示") : u8 ("保存フォルダ"));
     if (cur.valid && ! cur.layers.empty())
         kindBtn.setButtonText ((cur.layers.size() > 1 ? u8 ("重ね ") + juce::String ((int) cur.layers.size()) + ": " : juce::String())
                                + u8 (kindName (cur.layers.back().kind)));
@@ -1212,7 +1257,7 @@ void MainComponent::resized()
     recCircle = recArea.withSizeKeepingCentre (84, 84).withX (recArea.getX() + 14);
     tapBtn.setBounds (recArea.getRight() - 70, recArea.getBottom() - 40, 56, 28);
     r.removeFromTop (12);
-    card = r.removeFromTop (262);
+    card = r.removeFromTop (300);
     r.removeFromTop (12);
     actions = r.removeFromTop (40);
     r.removeFromTop (8);
@@ -1233,11 +1278,20 @@ void MainComponent::resized()
         modeBtn.setBounds (a.removeFromLeft (84));
     }
     {
-        auto a = row (30);
+        auto a = row (30);   // 曲のテンポ
         a.removeFromLeft (64);
         bpmMinus.setBounds (a.removeFromLeft (30));
-        a.removeFromLeft (120);
+        tempoLabel.setBounds (a.removeFromLeft (120).reduced (6, 0));
         bpmPlus.setBounds (a.removeFromLeft (30));
+        a.removeFromLeft (8);
+        tempoReset.setBounds (a.removeFromLeft (84));
+    }
+    {
+        auto a = row (30);   // 鼻歌のテンポ
+        a.removeFromLeft (64);
+        humMinus.setBounds (a.removeFromLeft (30));
+        a.removeFromLeft (120);
+        humPlus.setBounds (a.removeFromLeft (30));
         a.removeFromLeft (8);
         bpmHalf.setBounds (a.removeFromLeft (40));
         a.removeFromLeft (4);
@@ -1252,11 +1306,11 @@ void MainComponent::resized()
     roll = c.removeFromTop (100);
 
     auto ac = actions;
-    finderBtn.setBounds (ac.removeFromRight (80));
+    logicBtn.setBounds (ac.removeFromRight (70));
     ac.removeFromRight (8);
     dubBtn.setBounds (ac.removeFromRight (120));
     ac.removeFromRight (8);
-    logicBtn.setBounds (ac);
+    finderBtn.setBounds (ac);
     dragMidi = drags.removeFromLeft (drags.getWidth() / 2 - 4);
     dragWav = drags.removeFromRight (dragMidi.getWidth());
 
@@ -1396,7 +1450,28 @@ void MainComponent::paint (juce::Graphics& g)
         const bool keyUsed = hasMelodyLayer();
         label (c.removeFromTop (30), "KEY", keyUsed ? shortKey (cur.o.key, cur.o.minor) : u8 ("（ドラムだけ）"));
         c.removeFromTop (8);
-        label (c.removeFromTop (30), "TEMPO", juce::String ((int) std::lround (cur.o.bpm)) + " BPM");
+        {
+            auto tr = c.removeFromTop (30);
+            g.setColour (dim);
+            g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
+            g.drawText ("TEMPO", tr.removeFromLeft (64), juce::Justification::centredLeft);
+            if (! tempoReset.isVisible())
+            {
+                g.setFont (juce::FontOptions (11.0f));
+                g.drawText (u8 ("数字を押して打てる"), tr.withTrimmedLeft (30 + 120 + 30 + 8), juce::Justification::centredLeft);
+            }
+        }
+        c.removeFromTop (8);
+        {
+            auto hr = c.removeFromTop (30);
+            g.setColour (dim);
+            g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
+            g.drawText (u8 ("鼻歌"), hr.removeFromLeft (64), juce::Justification::centredLeft);
+            hr.removeFromLeft (30);
+            g.setColour (dim.brighter (0.3f));
+            g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+            g.drawText (juce::String ((int) std::lround (cur.o.bpm)) + " BPM", hr.removeFromLeft (120), juce::Justification::centred);
+        }
 
         // 小さいピアノロール（レイヤーごとに色を変える）
         auto rr = roll.toFloat();
@@ -1506,7 +1581,7 @@ void MainComponent::paint (juce::Graphics& g)
             const int nl = o->getProperty ("layers").isArray() ? o->getProperty ("layers").getArray()->size() : 1;
             desc = u8 (kindName ((int) o->getProperty ("kind"))) + (nl > 1 ? u8 ("＋") + juce::String (nl - 1) : juce::String()) + "  "
                  + ((int) o->getProperty ("kind") == idea::kDrums && nl < 2 ? juce::String() : shortKey ((int) o->getProperty ("key"), (bool) o->getProperty ("minor")) + "  ")
-                 + juce::String ((int) std::lround ((double) o->getProperty ("bpm"))) + u8 (" BPM  ·  ")
+                 + juce::String ((int) std::lround ((double) o->getProperty ("outBpm") > 0 ? (double) o->getProperty ("outBpm") : (double) o->getProperty ("bpm"))) + u8 (" BPM  ·  ")
                  + juce::String ((double) o->getProperty ("seconds"), 1) + u8 (" 秒");
         }
         g.setColour (isCur ? amber : textC);
