@@ -46,6 +46,8 @@ public:
             if (auto* peer = mainWindow->getPeer())
                 mac::showWindow (peer->getNativeHandle(), floating, focus);
         };
+        // 動いているときにアイコンから開かれたら、画面を出す
+        mac::onReopen ([this] { if (mainWindow != nullptr) mainWindow->content->showMe (true); });
         // 初めて起動したとき（とログイン時以外で開いたとき）は画面を出す
         if (! args.contains ("--background")) comp->showMe (true);
     }

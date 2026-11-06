@@ -219,7 +219,7 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
     logicBtn.onClick   = [this] { openLastInLogic(); };
     dubBtn.onClick     = [this] { showDubMenu(); };
     tapBtn.onClick     = [this] { tap(); };
-    finderBtn.onClick  = [this] { if (cur.valid) (cur.mid.existsAsFile() ? cur.mid : cur.folder).revealToUser(); else ideasRoot().revealToUser(); };
+    finderBtn.onClick  = [this] { revealMidi(); };
     inputBtn.onClick   = [this] { showInputSettings(); };
     countBtn.onClick   = [this] { showCountMenu(); };
     moreBtn.onClick    = [this] { showMoreMenu(); };
@@ -275,8 +275,8 @@ MainComponent::MainComponent (bool isLive) : live (isLive)
         mac::setNotificationHandler ([this] (const std::string& id)
         {
             const juce::File f (juce::String::fromUTF8 (id.c_str()));
-            if (! (cur.valid && f == cur.folder) && f.isDirectory()) loadIdea (f);
-            showMe (true);
+            if (cur.valid && f == cur.folder) revealMidi();
+            else if (f.isDirectory()) { loadIdea (f); showMe (true); }
         });
         refreshMenu();
         if (! mac::logicInstalled()) message = u8 ("Logic Pro が見つかりません（MIDI はふつうのアプリで開きます）");
@@ -325,6 +325,7 @@ void MainComponent::refreshMenu()
     if (! busy && prerollBtn.getToggleState()) items.push_back ({ "直前を残す（さかのぼり）", 6 });
     if (! busy && cur.valid) items.push_back ({ "このアイデアに重ねて録る", 5 });
     items.push_back ({ "画面を出す", 2 });
+    if (cur.valid) items.push_back ({ "できた MIDI を Finder で表示", 8 });
     if (cur.valid) items.push_back ({ "このアイデアを Logic で開く", 3 });
     items.push_back ({ "保存フォルダを開く", 4 });
     items.push_back ({ "", 0 });
@@ -340,6 +341,7 @@ void MainComponent::refreshMenu()
             case 5: command ("overdub"); break;
             case 6: command ("catch"); break;
             case 7: tap(); break;
+            case 8: revealMidi(); break;
             case 9: juce::JUCEApplication::getInstance()->systemRequestedQuit(); break;
             default: break;
         }
@@ -827,6 +829,7 @@ void MainComponent::finishAnalysis (idea::Result r, std::vector<float> samples, 
     else
     {
         next.folder = ideasRoot().getChildFile (juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H.%M.%S"));
+        next.keepCopy = true;
         next.folder.createDirectory();
         const auto wav = next.folder.getChildFile (layerFileName (0));   // 元の声もとっておく
         writeWav (wav, samples, fs);
@@ -853,9 +856,10 @@ void MainComponent::finishAnalysis (idea::Result r, std::vector<float> samples, 
     }
     else
     {
-        flashHud (u8 ("MIDI ができました  ") + summary, u8 ("~/Music/Idea Catcher に保存。テンポは画面で変えられます"), green, 5.0);
+        const auto where = cur.copy.existsAsFile() ? (props->getIntValue ("copyTo", 1) == 2 ? u8 ("デスクトップ") : u8 ("ダウンロード")) : u8 ("ミュージック → Idea Catcher");
+        flashHud (u8 ("MIDI ができました  ") + summary, where + u8 (" に保存。テンポは画面で変えられます"), green, 5.0);
         if (live && ! (juce::Process::isForegroundProcess() && isWindowVisible && isWindowVisible()))
-            mac::notify ("Idea Catcher", (u8 ("MIDI ができました: ") + summary + u8 ("。クリックで画面を出します")).toStdString(),
+            mac::notify ("Idea Catcher", (u8 ("MIDI ができました: ") + summary + u8 ("。") + where + u8 (" に保存しました（クリックで Finder に表示）")).toStdString(),
                          cur.folder.getFullPathName().toStdString());
     }
 }
@@ -916,6 +920,11 @@ void MainComponent::loadIdea (const juce::File& folder)
     base.o.key = key; base.o.minor = minor;
     base.o.bpm = obj != nullptr ? (double) obj->getProperty ("bpm") : 100.0;
     base.o.outBpm = obj != nullptr && obj->hasProperty ("outBpm") ? (double) obj->getProperty ("outBpm") : 0.0;
+    if (obj != nullptr && obj->hasProperty ("copy"))
+    {
+        base.copy = juce::File (obj->getProperty ("copy").toString());
+        base.keepCopy = base.copy.existsAsFile();   // 動かしたり消したりしたものは、もう作り直さない
+    }
     base.o.quantize = obj != nullptr ? (int) obj->getProperty ("quantize") : 0;
     const bool hasSaved = obj != nullptr;
 
@@ -995,6 +1004,29 @@ void MainComponent::writeMidi()
     cur.mid = cur.folder.getChildFile (name + ".mid");
     const auto bytes = idea::buildMidiFile (cur.layers, cur.o);
     cur.mid.replaceWithData (bytes.data(), bytes.size());
+
+    // 見つけやすいよう、ダウンロード（設定で変えられる）にもコピーを置く。名前が変わったら前のコピーは消す
+    const auto dest = copyFolder();
+    if (cur.keepCopy && dest != juce::File())
+    {
+        const auto to = dest.getChildFile (cur.mid.getFileName());
+        if (cur.copy.existsAsFile() && cur.copy != to) cur.copy.deleteFile();
+        cur.mid.copyFileTo (to);
+        cur.copy = to;
+    }
+}
+
+juce::File MainComponent::copyFolder() const
+{
+    const int c = props->getIntValue ("copyTo", 1);
+    return c == 1 ? juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads")
+         : c == 2 ? juce::File::getSpecialLocation (juce::File::userDesktopDirectory) : juce::File();
+}
+
+void MainComponent::revealMidi()
+{
+    if (! cur.valid) { ideasRoot().createDirectory(); ideasRoot().revealToUser(); return; }
+    (cur.copy.existsAsFile() ? cur.copy : cur.mid.existsAsFile() ? cur.mid : cur.folder).revealToUser();
 }
 
 void MainComponent::saveInfo()
@@ -1005,6 +1037,7 @@ void MainComponent::saveInfo()
     o->setProperty ("minor", cur.o.minor);
     o->setProperty ("bpm", cur.o.bpm);
     o->setProperty ("outBpm", cur.o.outBpm);
+    if (cur.copy != juce::File()) o->setProperty ("copy", cur.copy.getFullPathName());
     o->setProperty ("kind", cur.layers.empty() ? 0 : cur.layers[0].kind);
     o->setProperty ("quantize", cur.o.quantize);
     double secs = 0; int notes = 0;
@@ -1169,12 +1202,18 @@ void MainComponent::showMoreMenu()
     m.addItem (4, u8 ("マイクは Mac 本体に固定（") + (mic.isNotEmpty() ? mic : u8 ("本体のマイクなし")) + u8 ("）"),
                mic.isNotEmpty(), props->getBoolValue ("builtInMic", true));
     m.addSeparator();
+    const int ct = props->getIntValue ("copyTo", 1);
+    m.addItem (20, u8 ("MIDI のコピーを置く場所: ダウンロード"), true, ct == 1);
+    m.addItem (22, u8 ("MIDI のコピーを置く場所: デスクトップ"), true, ct == 2);
+    m.addItem (21, u8 ("MIDI のコピーを置かない（ミュージック → Idea Catcher だけ）"), true, ct == 0);
+    m.addSeparator();
     const int nz = props->getIntValue ("noise", 1);
     m.addItem (10, u8 ("ノイズ除去: なし"), true, nz == 0);
     m.addItem (11, u8 ("ノイズ除去: ふつう"), true, nz == 1);
     m.addItem (12, u8 ("ノイズ除去: 強め（テンポがずれることも）"), true, nz == 2);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (moreBtn), [this] (int r)
     {
+        if (r >= 20) { props->setValue ("copyTo", r == 20 ? 1 : r == 22 ? 2 : 0); return; }
         if (r >= 10) { props->setValue ("noise", r - 10); return; }
         if (r == 4)
         {

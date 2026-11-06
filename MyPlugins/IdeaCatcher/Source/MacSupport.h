@@ -37,6 +37,9 @@ namespace mac
     // ウィンドウを、全画面のアプリの上にも出せるようにして前へ（focus = キーボードもこちらへ）
     void showWindow (void* nsView, bool floating, bool focus);
 
+    // もう動いているときに、アプリのアイコン（Finder・Dock・Spotlight）から開かれたら呼ぶ
+    void onReopen (std::function<void()> fn);
+
     // HUD 用: マウスを通す・どのデスクトップでも・全画面の上にも出る小さな窓にする
     void makeOverlay (void* nsView);
     // メニューバーの下の真ん中（x, y はスクリーン座標・左上原点）

@@ -6,6 +6,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreAudio/CoreAudio.h>
 #include <unistd.h>
+#import <objc/runtime.h>
 #include "MacSupport.h"
 
 @interface IdeaStatusTarget : NSObject
@@ -251,6 +252,26 @@ namespace mac
         }
         else
             [w orderFrontRegardless];
+    }
+
+    //==========================================================================
+    // JUCE のアプリの代理役（NSApp の delegate）は「もう一度開く」を受けないので、あとから足す
+    static std::function<void()> reopenFn;
+    static BOOL ideaShouldHandleReopen (id, SEL, NSApplication*, BOOL)
+    {
+        if (reopenFn) reopenFn();
+        return NO;
+    }
+
+    void onReopen (std::function<void()> fn)
+    {
+        reopenFn = std::move (fn);
+        id d = [NSApp delegate];
+        if (d == nil) return;
+        Class c = object_getClass (d);
+        SEL sel = @selector (applicationShouldHandleReopen:hasVisibleWindows:);
+        if (! class_addMethod (c, sel, (IMP) ideaShouldHandleReopen, "c@:@c"))
+            class_replaceMethod (c, sel, (IMP) ideaShouldHandleReopen, "c@:@c");
     }
 
     //==========================================================================

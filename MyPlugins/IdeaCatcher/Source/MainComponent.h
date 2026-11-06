@@ -85,6 +85,8 @@ private:
     {
         bool valid = false;
         juce::File folder, mid;
+        juce::File copy;          // ダウンロードなどに置いた MIDI のコピー
+        bool keepCopy = false;    // コピーを置き続けるか（新しく録ったもの・前にコピーを置いて今も残っているもの）
         std::vector<idea::Layer> layers;
         juce::Array<juce::File> wavs;
         std::vector<int> snapKey, snapMinor;   // ノートを合わせたキー（読み直しで同じ結果にする）
@@ -129,6 +131,8 @@ private:
     void writeMidi();
     void saveInfo();
     juce::File writeLogicVoice();
+    juce::File copyFolder() const;
+    void revealMidi();
     void refreshRecent();
     void refreshButtons();
     void refreshMenu();

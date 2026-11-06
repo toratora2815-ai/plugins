@@ -199,6 +199,9 @@
   録り終えて解析する前にかけ、保存する声にも入る。静かな所と声の差が 12 dB 未満なら何もしない）
   v1.3.0: Logic は自動で開かない（autoOpen 標準 OFF、設定 v13 で一度だけ OFF に。黄色いボタンは「MIDI を Finder で表示」、通知クリックは画面を出す）。
   テンポを 2 つに: MidiOptions.bpm = 鼻歌のテンポ（秒→拍）、outBpm = 曲のテンポ（MIDI に書く。0 = 同じ、tempoOut()）。TEMPO の数字は juce::Label で打てる、info.json の "outBpm"
+  v1.3.1: アイコンから開くと画面を出す（mac::onReopen が NSApp の delegate に applicationShouldHandleReopen を class_addMethod で足す。JUCE は受けない）。
+  MIDI のコピーをダウンロードにも置く（設定 copyTo 1=ダウンロード / 2=デスクトップ / 0=置かない、info.json の "copy"。名前が変わったら前のコピーは消す。
+  動かした・消したコピーは読み直しで作り直さない）。通知クリックとメニュー「できた MIDI を Finder で表示」でそのコピーを Finder に
 
 - Sound Sketch（SoundSketch）… 口マネで手元のサンプルを探す単体 Mac アプリ。SketchEngine.h（JUCE なし）で 1 音 48 個の特徴（音量の形・重心の動き・平らさ・帯域・長さ・立ち上がり・重心の傾き）、
   声の重心は voiceToLibrary（log2 Hz を 1.46 倍 − 5.37）で広げてから比べる。Library.h が裏でフォルダを読み ~/Library/Application Support/Sound Sketch/index.bin に保存。
