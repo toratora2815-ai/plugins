@@ -227,7 +227,8 @@ public:
     inline void process (float& l, float& r, float amount)
     {
         const float outL = bufL[(size_t) pos], outR = bufR[(size_t) pos];
-        const float g = gPrev + (gCur - gPrev) * ((float) pos / (float) blk);
+        // ためた 1 ms は、その 1 ms から決めたゲインで出す（測定どおり。音の出だしがそのまま +1.9 dB になる）
+        const float g = gCur;
         bufL[(size_t) pos] = l; bufR[(size_t) pos] = r;
         acc += 0.5 * ((double) l * l + (double) r * r);
         l = outL * g; r = outR * g;
@@ -238,10 +239,11 @@ public:
             ef = af * ef + (1 - af) * pb;
             es = as * es + (1 - as) * pb;
             const double ratio = 10.0 * std::log10 ((ef + 1e-14) / (es + 1e-14));
-            const double t = std::clamp (tune.base + tune.slope * ratio, tune.lo, tune.hi);
+            // しばらく何も鳴っていない（遅い包絡がほぼ 0）ときは「次の音は出だし」として上限にしておく（測定: 無音のあとの 1 発は +1.9 dB）
+            const double t = es < 1e-10 ? tune.hi : std::clamp (tune.base + tune.slope * ratio, tune.lo, tune.hi);
             gDb = ag * gDb + (1 - ag) * t;
             lastDb = (float) gDb * amount;
-            gPrev = gCur; gCur = std::pow (10.0f, lastDb / 20.0f);   // 次のかたまり（今ためた音）は前の値から今の値へなめらかに
+            gPrev = gCur; gCur = std::pow (10.0f, lastDb / 20.0f);   // 次の 1 ms（今ためた音）はこのゲインで出す
         }
     }
     float currentDb() const { return lastDb; }

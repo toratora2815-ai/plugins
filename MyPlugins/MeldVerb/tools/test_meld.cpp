@@ -100,9 +100,12 @@ int main()
     }
     // SMOOTHING: 単発の音は +1.9 dB、続く音は約 -3 dB
     {
+        // 長い無音のあとの 1 発: 実際に出てくる音の大きさで確かめる（1 ms 遅れて出る）
         SendSmoother s; s.prepare (48000);
-        float l = 1, r = 0; s.process (l, r, 1); for (int i = 0; i < 100; ++i) { float a = 0, c = 0; s.process (a, c, 1); }
-        const float hitDb = s.currentDb();
+        for (int i = 0; i < 48000; ++i) { float a = 0, c = 0; s.process (a, c, 1); }
+        float outPeak = 0;
+        for (int i = 0; i < 200; ++i) { float a = i == 0 ? 1.0f : 0.0f, c = 0; s.process (a, c, 1); outPeak = std::max (outPeak, std::abs (a)); }
+        const float hitDb = 20.0f * std::log10 (outPeak);
         SendSmoother s2; s2.prepare (48000); std::mt19937 g (3); std::uniform_real_distribution<float> u (-1, 1);
         for (int i = 0; i < 48000 * 4; ++i) { float a = 0.3f * u (g), c = 0.3f * u (g); s2.process (a, c, 1); }
         char b[200]; std::snprintf (b, sizeof b, "smoothing: hit %.1f dB (target +1.9), sustained %.1f dB (target about -3)", hitDb, s2.currentDb());
