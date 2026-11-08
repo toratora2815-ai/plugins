@@ -166,6 +166,11 @@ private:
     std::unique_ptr<CA> stringModeAtt;
     std::unique_ptr<BA> tuneAtt, levelAtt;
     juce::Label stringLabel { {}, "String choice" };
+    juce::ToggleButton strum { "STRUM" };
+    juce::ComboBox upStrings;
+    juce::Label upLabel { {}, "Up-stroke strings" };
+    std::unique_ptr<BA> strumAtt;
+    std::unique_ptr<CA> upAtt;
     std::vector<std::unique_ptr<juce::Slider>> knobs;
     std::vector<std::unique_ptr<juce::Label>> labels;
     std::vector<std::unique_ptr<SA>> knobAtt;

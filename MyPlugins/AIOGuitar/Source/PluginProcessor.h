@@ -5,6 +5,7 @@
 #include "Pedals.h"
 #include "KitVoice.h"
 #include "Score.h"
+#include "Strum.h"
 #include "PluginLinkJuce.h"
 #include "PresetBar.h"
 
@@ -85,6 +86,9 @@ public:
     std::atomic<bool>   fxSleeping { false };   // UI: effects and amp are resting (nothing playing)
     std::atomic<int>    hostNum { 4 }, hostDen { 4 };
 
+    // tests only: told about every note that starts (note, string, take direction, sample clock)
+    std::function<void (int note, int string, int strumUp, juce::int64 clock)> testNoteLog;
+
     juce::AudioProcessorValueTreeState apvts;
     juce::MidiKeyboardState keyboardState;
     myp::Presets myPresets { *this, apvts, "AIOGuitar" };
@@ -111,6 +115,8 @@ private:
     GuitarSynth synth { voiceParams };
     FXChain chain;
     PedalBoard pedals;
+    Strummer strum;
+    Strummer::Settings strumSet;
     int quietSamples = 0;
     float lastOutPeak = 1.0f;
     FXParams fx;

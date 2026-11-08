@@ -47,6 +47,15 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
 - 古い FXChain のゲート・コンプ・ドライブはパラメーターごと外した（fx.compOn=false など固定）。内蔵プリセットもペダルで作り直し
 - CPU（48k・256、1 コア）: ペダル OFF 0.63 %、両方 ON 1.4 %、休止 0.05 %。DSP 検査「渡してよい」
 
+## STRUM（2026-11-08 本人の提案 GO、mix-engineer の形）
+- Strum.h の Strummer: 同じサンプル位置の 2 音以上 = 和音。predictStrings で弦を予測して、ダウン = 6→1、アップ = 1→上 N 本（UP STRINGS 3/4/全部、標準 4）。
+  1 本目は格子の位置、残りを k×SPEED（標準 7 ms、アップは 0.7 倍、強いほど少し速い）＋Humanize ±1.5 ms だけ遅らせる（遅れの申告は増えない）。強さは 1 本ごと −1 dB、アップは −2.5 dB
+- 向き: SCORE の Override.strum > Logic の D1/D#1（38/39、ラッチしない、Note.logicStrum に取り込む）> AUTO（Score::autoStrumDir: 表拍ダウン・裏アップ、和音が 16 分の裏にある小節は 16 分の振り。ApplyTable.bar16）
+- MIDI のタイミングは書き換えない（mix-engineer: 50 ms の和音の窓・奏法の照合・クオンタイズを壊すため）。遅らせた音は origPpq で Logic の位置として取り込む。アップで鳴らさない弦も onDroppedNoteOn で取り込む
+- ダウンはダウンの録音、アップはアップの録音（nextStrumUp）。ブラッシングで全弦 choke。停止で allNotesOff(0, true)、停止・ジャンプでキューを flush
+- パラメーター strumOn（標準 ON）/ strumSpeed / upStrings。SCORE の和音の上に ↓↑（クリックで AUTO→↓→↑→AUTO）。書き出しで D1/D#1
+- 録音ガイド（もう 1 つの提案）は mix-engineer「形を変えれば価値あり・後回し」で保留
+
 ## テスト
 `-DAIO_BUILD_RENDER_TEST=ON` で RenderTest。疑似 DI（±20 セント、±6 dB、弦の硬さ指定可）で切り分け・弦・音程・音量・連打・choke・ミュート・状態を確認。
 `RenderTest <出力> [弦の硬さ 0〜0.0004]`

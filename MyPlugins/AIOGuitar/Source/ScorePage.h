@@ -126,7 +126,7 @@ public:
             juce::String label;
             if (brush || s < 1)
             {
-                box = { x0, (float) brushLane().getY() + 4.0f, juce::jmax (14.0f, x1 - x0), (float) brushLane().getHeight() - 8.0f };
+                box = { x0, (float) brushLane().getY() + 15.0f, juce::jmax (14.0f, x1 - x0), (float) brushLane().getHeight() - 17.0f };
                 label = brush ? juce::String (n.note == Kit::kBrushDownNote ? "v" : "^") : "?" + juce::MidiMessage::getMidiNoteName (n.note, true, true, 3);
             }
             else
@@ -151,6 +151,31 @@ public:
                 g.setColour (o.art >= 0 ? plugin : accent);
                 g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
                 g.drawText (glyph (art), juce::Rectangle<float> (x0, box.getY() - 13.0f, 60.0f, 12.0f), juce::Justification::centredLeft);
+            }
+        }
+
+        // strum direction above every chord: grey = AUTO (from the beat), orange = set here, gold = Logic's D1 / D#1
+        markers.clear();
+        {
+            const auto b16 = sc.bar16Flags();
+            for (size_t i = 0; i + 1 < sc.notes.size(); ++i)
+            {
+                const auto& n = sc.notes[i];
+                if (std::abs (sc.notes[i + 1].tick - n.tick) > 2 || (i > 0 && std::abs (sc.notes[i - 1].tick - n.tick) <= 2)) continue;
+                const float x = xOf ((double) n.tick / Score::kTicks);
+                if (x < (float) area.getX() - 10.0f || x > (float) area.getRight()) continue;
+                const int dir = sc.strumDirFor (n, b16);
+                bool fromPlugin = false, fromLogic = false;
+                for (size_t k = i; k < sc.notes.size() && std::abs (sc.notes[k].tick - n.tick) <= 2; ++k)
+                {
+                    fromPlugin = fromPlugin || sc.overrideFor (sc.notes[k]).strum >= 0;
+                    fromLogic  = fromLogic  || sc.notes[k].logicStrum >= 0;
+                }
+                auto r = juce::Rectangle<float> (x - 1.0f, (float) brushLane().getY() + 1.0f, 16.0f, 14.0f);
+                g.setColour (fromPlugin ? plugin : (fromLogic ? accent : dim.withAlpha (0.7f)));
+                g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+                g.drawText (dir == 1 ? jp (u8"↑") : jp (u8"↓"), r, juce::Justification::centredLeft);
+                markers.push_back ({ r.expanded (3.0f, 2.0f), n.tick });
             }
         }
 
@@ -184,6 +209,27 @@ public:
     void mouseDown (const juce::MouseEvent& e) override
     {
         grabKeyboardFocus();
+        for (auto& [r, tick] : markers)   // click a chord's arrow: AUTO -> down -> up -> AUTO
+            if (r.contains (e.position))
+            {
+                auto& sc = proc.getScore();
+                const Score::Note* first = nullptr;
+                for (auto& n : sc.notes) if (std::abs (n.tick - tick) <= 2) { first = &n; break; }
+                if (first == nullptr) return;
+                const int manual = sc.manualStrum (*first);
+                const int next = manual < 0 ? 0 : (manual == 0 ? 1 : -1);
+                proc.pushUndo();
+                for (auto& n : sc.notes)
+                    if (std::abs (n.tick - tick) <= 2)
+                    {
+                        auto o = sc.overrideFor (n);
+                        o.strum = next;
+                        sc.setOverride (n, o);
+                    }
+                proc.scoreEdited();
+                repaint();
+                return;
+            }
         auto* hit = noteAt (e.position);
         if (hit != nullptr)
         {
@@ -311,6 +357,7 @@ private:
     float dragStartY = 0.0f;
     int dragTarget = -1, auditioning = -1, auditionString = 0;
     juce::Point<float> bandStart;
+    std::vector<std::pair<juce::Rectangle<float>, juce::int64>> markers;   // chord arrows (painted positions)
     juce::Rectangle<float> band;
 };
 
@@ -582,7 +629,7 @@ private:
         else
             info = juce::String ((int) sc.notes.size()) + jp (u8" 音") + "   "
                  + (pending > 0 ? jp (u8"Logic にまだ入っていない指定 ") + juce::String (pending) + jp (u8" 個（オレンジ）") : jp (u8"プラグインでの指定なし"))
-                 + jp (u8"   ｜ クリックで選択、ダブルクリックで試聴、⌘+ホイールで拡大");
+                 + jp (u8"   ｜ クリックで選択、ダブルクリックで試聴、和音の ↓↑ をクリックでストロークの向き、⌘+ホイールで拡大");
         repaint();
     }
 

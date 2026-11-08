@@ -24,15 +24,28 @@ struct Note
     int channel = 1;
     int logicArt = artNormal;   // articulation Logic sent (keyswitch / articulation set)
     int autoString = 0;         // string the plugin chose by itself
+    int logicStrum = -1;        // strum direction Logic sent (D1 / D#1 keyswitch): -1 none, 0 down, 1 up
     juce::uint32 seenPass = 0;  // capture pass that last saw this note
 };
+
+constexpr int kStrumDownKey = 38, kStrumUpKey = 39;   // D1 / D#1 (Logic naming): one chord only, no latch
+inline bool isStrumKey (int note) { return note == kStrumDownKey || note == kStrumUpKey; }
+
+// AUTO strum direction from the position: on the beat = down, between = up.
+// A bar that has chords on 16th off-beats is played as 16ths (8th positions down, 16th off-beats up).
+inline int autoStrumDir (double ppq, bool bar16)
+{
+    const long long n16 = std::llround (ppq * 4.0);
+    if (bar16) return (n16 % 2 == 0) ? 0 : 1;
+    return (n16 % 4 == 0) ? 0 : 1;
+}
 
 // What the user set in the plugin for one note (-1 = leave as Logic has it)
 struct Override
 {
-    int art = -1, string = -1;
-    bool isEmpty() const { return art < 0 && string < 0; }
-    bool operator== (const Override& o) const { return art == o.art && string == o.string; }
+    int art = -1, string = -1, strum = -1;   // strum: 0 down, 1 up (set on every note of the chord)
+    bool isEmpty() const { return art < 0 && string < 0 && strum < 0; }
+    bool operator== (const Override& o) const { return art == o.art && string == o.string && strum == o.strum; }
 };
 
 using Key = std::pair<juce::int64, int>;   // tick, pitch
@@ -47,9 +60,17 @@ struct ApplyTable
         int note, velocity;
         int effArt, effString;   // what the score says (preview / PLAY IN SYNC)
         int ovArt, ovString;     // plugin settings only (-1 = none) (FOLLOW LOGIC)
+        int effStrum, ovStrum;   // strum direction set by hand (Logic's or the plugin's), plugin's only; -1 = auto / none
     };
     std::vector<Entry> entries;   // sorted by tick
     juce::int64 maxLength = 0, lastEnd = 0;   // longest note, end of the last note
+    juce::int64 barTicks = kTicks * 4;
+    std::vector<juce::uint8> bar16;           // per bar: chords on 16th off-beats -> strum in 16ths
+    bool barIs16 (juce::int64 tick) const
+    {
+        const auto b = tick / juce::jmax ((juce::int64) 1, barTicks);
+        return b >= 0 && b < (juce::int64) bar16.size() && bar16[(size_t) b] != 0;
+    }
 
     // during host playback only plugin overrides apply; during preview everything does
     const Entry* find (juce::int64 tick, int note) const
@@ -69,7 +90,7 @@ struct CaptureEvent
 {
     enum Type : int { noteOn, noteOff, passStart, passEnd } type = noteOn;
     double ppq = 0.0;
-    int note = 0, velocity = 0, channel = 1, logicArt = 0, autoString = 0;
+    int note = 0, velocity = 0, channel = 1, logicArt = 0, autoString = 0, logicStrum = -1;
 };
 
 class CaptureFifo
@@ -128,8 +149,10 @@ public:
                     n = findNote (t, e.note);
                     changed = true;
                 }
-                if (n->velocity != e.velocity || n->logicArt != e.logicArt || n->channel != e.channel || n->autoString != e.autoString)
+                if (n->velocity != e.velocity || n->logicArt != e.logicArt || n->channel != e.channel || n->autoString != e.autoString
+                    || n->logicStrum != e.logicStrum)
                     changed = true;
+                n->logicStrum = e.logicStrum;
                 n->tick = t;   // follow small moves in Logic
                 n->velocity = e.velocity; n->channel = e.channel; n->logicArt = e.logicArt; n->autoString = e.autoString;
                 n->seenPass = pass;
@@ -161,6 +184,7 @@ public:
         Override o = it->second;
         const auto key = it->first;
         if (o.art >= 0 && o.art == n.logicArt) o.art = -1;
+        if (o.strum >= 0 && o.strum == n.logicStrum) o.strum = -1;
         if (o.string >= 1 && stringMode == 1 && n.channel == o.string) o.string = -1;
         overrides.erase (it);
         if (! o.isEmpty()) overrides[{ n.tick, n.note }] = o;   // re-key to the note's current tick
@@ -208,11 +232,47 @@ public:
     }
     int effectiveArt (const Note& n) const    { auto o = overrideFor (n); return o.art >= 0 ? o.art : n.logicArt; }
     int effectiveString (const Note& n) const { auto o = overrideFor (n); return o.string >= 1 ? o.string : n.autoString; }
+    // strum direction set by hand (plugin, else Logic's D1/D#1); -1 = AUTO from the position
+    int manualStrum (const Note& n) const     { auto o = overrideFor (n); return o.strum >= 0 ? o.strum : n.logicStrum; }
+
+    juce::int64 barTicks() const { return (juce::int64) kTicks * numerator * 4 / juce::jmax (1, denominator); }
+
+    // chords = 2 or more notes starting together
+    bool isChordAt (juce::int64 tick) const
+    {
+        int k = 0;
+        for (auto& n : notes) if (std::abs (n.tick - tick) <= 2 && ++k >= 2) return true;
+        return false;
+    }
+    std::vector<juce::uint8> bar16Flags() const
+    {
+        std::vector<juce::uint8> f;
+        const auto bt = juce::jmax ((juce::int64) 1, barTicks());
+        for (size_t i = 0; i < notes.size(); ++i)
+        {
+            if (! (i + 1 < notes.size() && std::abs (notes[i + 1].tick - notes[i].tick) <= 2)) continue;   // chords only
+            const long long n16 = std::llround ((double) notes[i].tick * 4.0 / kTicks);
+            if (n16 % 2 == 0) continue;
+            const auto b = (size_t) (notes[i].tick / bt);
+            if (f.size() <= b) f.resize (b + 1, 0);
+            f[b] = 1;
+        }
+        return f;
+    }
+    // the direction the chord at this note is strummed (manual, else AUTO)
+    int strumDirFor (const Note& n, const std::vector<juce::uint8>& b16) const
+    {
+        for (auto& m : notes)
+            if (std::abs (m.tick - n.tick) <= 2) { const int d = manualStrum (m); if (d >= 0) return d; }
+        const auto b = (size_t) (n.tick / juce::jmax ((juce::int64) 1, barTicks()));
+        return autoStrumDir ((double) n.tick / kTicks, b < b16.size() && b16[b] != 0);
+    }
 
     void setOverride (const Note& n, Override o)
     {
         if (o.art == n.logicArt) o.art = -1;
         if (o.string == n.autoString) o.string = -1;
+        if (o.strum == n.logicStrum) o.strum = -1;
         if (o.isEmpty()) overrides.erase ({ n.tick, n.note });
         else overrides[{ n.tick, n.note }] = o;
         changed = true;
@@ -241,10 +301,13 @@ public:
         for (auto& n : notes)
         {
             const auto o = overrideFor (n);
-            t->entries.push_back ({ n.tick, n.length, n.note, n.velocity, effectiveArt (n), effectiveString (n), o.art, o.string });
+            t->entries.push_back ({ n.tick, n.length, n.note, n.velocity, effectiveArt (n), effectiveString (n), o.art, o.string,
+                                    manualStrum (n), o.strum });
             t->maxLength = juce::jmax (t->maxLength, n.length);
             t->lastEnd = juce::jmax (t->lastEnd, n.tick + n.length);
         }
+        t->barTicks = barTicks();
+        t->bar16 = bar16Flags();
         return t;
     }
 
@@ -263,10 +326,23 @@ public:
         seq.addEvent (juce::MidiMessage::tempoMetaEvent ((int) (60000000.0 / bpm)), 0);
         seq.addEvent (juce::MidiMessage::timeSignatureMetaEvent (numerator, denominator), 0);
         int latched = artNormal;
+        juce::int64 lastStrumTick = -1;
         for (auto& n : notes)
         {
             const double t = (double) (n.tick - start);
             const int art = effectiveArt (n);
+            if (n.tick != lastStrumTick && isChordAt (n.tick))
+            {
+                int dir = -1;
+                for (auto& m : notes) if (std::abs (m.tick - n.tick) <= 2 && manualStrum (m) >= 0) { dir = manualStrum (m); break; }
+                if (dir >= 0)
+                {
+                    const int key = dir == 1 ? kStrumUpKey : kStrumDownKey;
+                    seq.addEvent (juce::MidiMessage::noteOn (stringMode == 1 ? juce::jlimit (1, 6, effectiveString (n)) : n.channel, key, (juce::uint8) 100), juce::jmax (0.0, t - 3));
+                    seq.addEvent (juce::MidiMessage::noteOff (stringMode == 1 ? juce::jlimit (1, 6, effectiveString (n)) : n.channel, key), juce::jmax (0.0, t - 1));
+                }
+                lastStrumTick = n.tick;
+            }
             const int ch = stringMode == 1 ? juce::jlimit (1, 6, effectiveString (n)) : n.channel;
             if (art != latched || art != artNormal)
             {
@@ -295,13 +371,15 @@ public:
         {
             auto seq = *mf.getTrack (tr);
             seq.updateMatchedPairs();
-            int latched = artNormal;
+            int latched = artNormal, pendingStrum = -1;
+            double pendingStrumTime = -1.0e9;
             for (int i = 0; i < seq.getNumEvents(); ++i)
             {
                 const auto* ev = seq.getEventPointer (i);
                 const auto& m = ev->message;
-                if (m.isTempoMetaEvent() && m.getTimeStamp() == 0) bpm = 60.0 / m.getTempoSecondsPerQuarterNote();
+                if (m.isTempoMetaEvent() && m.getTimeStamp() <= 0.0) bpm = 60.0 / m.getTempoSecondsPerQuarterNote();
                 if (! m.isNoteOn()) continue;
+                if (isStrumKey (m.getNoteNumber())) { pendingStrum = m.getNoteNumber() == kStrumUpKey ? 1 : 0; pendingStrumTime = -1.0; continue; }
                 if (GuitarSynthKeyswitch (m.getNoteNumber())) { latched = m.getNoteNumber() - kKeyswitchLow; continue; }
                 Note n;
                 n.tick = (juce::int64) std::llround (m.getTimeStamp() * kTicks / tpq) + barOffset * barTicks;
@@ -309,6 +387,12 @@ public:
                 n.velocity = m.getVelocity();
                 n.channel = m.getChannel();
                 n.logicArt = latched;
+                if (pendingStrum >= 0)
+                {
+                    if (pendingStrumTime < 0.0) pendingStrumTime = m.getTimeStamp();   // the chord right after the keyswitch
+                    if (std::abs (m.getTimeStamp() - pendingStrumTime) <= 2.0 * tpq / kTicks) n.logicStrum = pendingStrum;
+                    else pendingStrum = -1;
+                }
                 const double off = ev->noteOffObject != nullptr ? ev->noteOffObject->message.getTimeStamp() : m.getTimeStamp() + tpq / 2;
                 n.length = juce::jmax ((juce::int64) 1, (juce::int64) std::llround ((off - m.getTimeStamp()) * kTicks / tpq));
                 notes.push_back (n);
@@ -331,9 +415,10 @@ public:
         {
             mos.writeInt64 (n.tick); mos.writeInt64 (n.length);
             mos.writeByte ((char) n.note); mos.writeByte ((char) n.velocity); mos.writeByte ((char) n.channel);
-            mos.writeByte ((char) n.logicArt); mos.writeByte ((char) n.autoString);
+            mos.writeByte ((char) n.logicArt); mos.writeByte ((char) n.autoString); mos.writeByte ((char) (n.logicStrum + 1));
         }
         t.setProperty ("notes", mos.getMemoryBlock(), nullptr);
+        t.setProperty ("noteBytes", 22, nullptr);
         for (auto& [k, o] : overrides)
         {
             juce::ValueTree c ("OV");
@@ -341,6 +426,7 @@ public:
             c.setProperty ("n", k.second, nullptr);
             c.setProperty ("a", o.art, nullptr);
             c.setProperty ("s", o.string, nullptr);
+            c.setProperty ("st", o.strum, nullptr);
             t.appendChild (c, nullptr);
         }
         return t;
@@ -356,18 +442,20 @@ public:
         if (const auto* mb = t.getProperty ("notes").getBinaryData())
         {
             juce::MemoryInputStream in (*mb, false);
-            while (in.getNumBytesRemaining() >= 21)
+            const int recBytes = (int) t.getProperty ("noteBytes", 21);
+            while (in.getNumBytesRemaining() >= recBytes)
             {
                 Note n;
                 n.tick = in.readInt64(); n.length = in.readInt64();
                 n.note = (juce::uint8) in.readByte(); n.velocity = (juce::uint8) in.readByte(); n.channel = (juce::uint8) in.readByte();
                 n.logicArt = (juce::uint8) in.readByte(); n.autoString = (juce::uint8) in.readByte();
+                if (recBytes >= 22) n.logicStrum = juce::jlimit (-1, 1, (int) (juce::uint8) in.readByte() - 1);
                 notes.push_back (n);
             }
         }
         for (auto c : t)
             if (c.hasType ("OV"))
-                overrides[{ (juce::int64) c.getProperty ("t"), (int) c.getProperty ("n") }] = { (int) c.getProperty ("a", -1), (int) c.getProperty ("s", -1) };
+                overrides[{ (juce::int64) c.getProperty ("t"), (int) c.getProperty ("n") }] = { (int) c.getProperty ("a", -1), (int) c.getProperty ("s", -1), (int) c.getProperty ("st", -1) };
         sort();
         changed = true;
     }

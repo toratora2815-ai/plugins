@@ -73,6 +73,13 @@ public:
                 if ((vel > 0.62f && hasHard) || ! hasSoft) slot = hasHard ? Kit::slotHard : Kit::slotMute;
             }
             n = Kit::candidates (*kit, slot, midiNote, string, cand, 8);
+            // strummed: down-strokes use the down takes, up-strokes the up takes (when recorded)
+            if (params.nextStrumUp >= 0 && n > 1)
+            {
+                int m = 0, keep[8];
+                for (int i = 0; i < n; ++i) if (kit->samples[(size_t) cand[i]].up == (params.nextStrumUp == 1)) keep[m++] = cand[i];
+                if (m > 0) { for (int i = 0; i < m; ++i) cand[i] = keep[i]; n = m; }
+            }
         }
         if (n == 0) { clearCurrentNote(); return; }
 

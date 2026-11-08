@@ -696,8 +696,21 @@ PlaySettings::PlaySettings (AIOGuitarProcessor& p, juce::Colour c) : colour (c)
     tune.setTooltip (jp (u8"録音の音程のずれを 1 音ずつ測って直す"));
     level.setTooltip (jp (u8"録音ごとの音量差をそろえる"));
 
-    const std::pair<const char*, const char*> ks[] { { "kitVelSens", "Velocity" }, { "kitHuman", "Humanize" }, { "gtMute", "Palm Mute" },
-                                                     { "gtRelease", "Release" }, { "gtVolume", "Volume" } };
+    strum.setColour (juce::ToggleButton::tickColourId, colour);
+    strum.setTooltip (jp (u8"和音を弦の順にずらして鳴らす（表拍はダウン、裏はアップ。SCORE で和音ごとに変えられる）"));
+    addAndMakeVisible (strum);
+    strumAtt = std::make_unique<BA> (p.apvts, "strumOn", strum);
+    if (auto* ch = dynamic_cast<juce::AudioParameterChoice*> (p.apvts.getParameter ("upStrings")))
+        upStrings.addItemList (ch->choices, 1);
+    addAndMakeVisible (upStrings);
+    upAtt = std::make_unique<CA> (p.apvts, "upStrings", upStrings);
+    upStrings.setTooltip (jp (u8"アップストロークで鳴らす弦の数（上から）。外した低い弦は前の音が鳴ったまま"));
+    upLabel.setFont (juce::FontOptions (12.0f));
+    upLabel.setColour (juce::Label::textColourId, Pal::dim);
+    addAndMakeVisible (upLabel);
+
+    const std::pair<const char*, const char*> ks[] { { "strumSpeed", "Strum Speed" }, { "kitVelSens", "Velocity" }, { "kitHuman", "Humanize" },
+                                                     { "gtMute", "Palm Mute" }, { "gtRelease", "Release" }, { "gtVolume", "Volume" } };
     for (auto& [id, text] : ks)
     {
         auto k = makeKnob (p.apvts, id, colour);
@@ -724,7 +737,13 @@ void PlaySettings::resized()
     tune.setBounds (row.removeFromLeft (row.getWidth() / 2 - 2));
     row.removeFromLeft (4);
     level.setBounds (row);
-    r.removeFromLeft (10);
+    r.removeFromLeft (14);
+    auto mid = r.removeFromLeft (150);
+    strum.setBounds (mid.removeFromTop (26).withWidth (110));
+    mid.removeFromTop (6);
+    upLabel.setBounds (mid.removeFromTop (16));
+    upStrings.setBounds (mid.removeFromTop (24));
+    r.removeFromLeft (8);
     const int w = r.getWidth() / (int) knobs.size();
     for (size_t i = 0; i < knobs.size(); ++i)
     {

@@ -495,6 +495,7 @@ int main (int argc, char** argv)
         auto riff = [] { return std::vector<Ev> { { 0.01, juce::MidiMessage::noteOn (1, 45, 0.8f) }, { 0.01, juce::MidiMessage::noteOn (1, 52, 0.8f) },
                                                   { 1.6, juce::MidiMessage::noteOff (1, 45) }, { 1.6, juce::MidiMessage::noteOff (1, 52) } }; };
         setP (proc, "revMix", 0.0f);
+        setP (proc, "strumOn", 0);   // these compare pedal sounds, not strums
         auto clean = render (proc, riff(), 2.0, sr);
         setP (proc, "pdOn", 1); setP (proc, "pdGain", 6);
         render (proc, {}, 0.05, sr);
@@ -541,7 +542,9 @@ int main (int argc, char** argv)
                 }
                 return out;
             };
+            setP (proc, "kitHuman", 0.0f);   // both takes identical apart from the switch
             auto ref = run (false), sw = run (true);
+            setP (proc, "kitHuman", 0.5f);
             auto bend = [&] (const juce::AudioBuffer<float>& b, double t0, double t1)
             {
                 float m = 0;
@@ -589,6 +592,162 @@ int main (int argc, char** argv)
             check (rest < off * 0.2, "resting costs almost nothing");
         }
         setP (proc, "revMix", 0.12f);
+        setP (proc, "strumOn", 1);
+    }
+
+    // ================= STRUM =================
+    std::cout << "== strum ==" << std::endl;
+    {
+        FakeHead head;
+        proc.setPlayHead (&head);
+        setP (proc, "revMix", 0.0f); setP (proc, "ampOn", 0); setP (proc, "cabOn", 0);
+        setP (proc, "kitHuman", 0.0f); setP (proc, "scoreMode", 0); setP (proc, "strumOn", 1); setP (proc, "strumSpeed", 7.0f);
+        auto& sc = proc.getScore();
+        const int chord[] { 40, 47, 52, 56, 59, 64 };   // open E major, strings 6..1
+        auto chordAt = [&] (double beat, double len)
+        {
+            std::vector<BeatEv> ev;
+            for (int nn : chord) { ev.push_back ({ beat, juce::MidiMessage::noteOn (1, nn, (juce::uint8) 100) }); ev.push_back ({ beat + len, juce::MidiMessage::noteOff (1, nn) }); }
+            return ev;
+        };
+        // envelope (1 ms RMS) and when it gets to 10 % / 90 % of its peak in the first 120 ms after `t`
+        auto spread = [&] (const juce::AudioBuffer<float>& b, double t)
+        {
+            const int a = (int) (t * sr), w = (int) (0.001 * sr);
+            std::vector<float> env;
+            for (int i = a; i < a + (int) (0.12 * sr); i += w) env.push_back (b.getRMSLevel (0, i, w));
+            const float pk = *std::max_element (env.begin(), env.end());
+            int i10 = 0, i90 = 0;
+            while (i10 < (int) env.size() && env[(size_t) i10] < 0.1f * pk) ++i10;
+            while (i90 < (int) env.size() && env[(size_t) i90] < 0.9f * pk) ++i90;
+            return (double) (i90 - i10);   // ms
+        };
+        // which note started when (sample clock) and with which take direction
+        struct Hit { int note, string, up; juce::int64 at; };
+        std::vector<Hit> hits;
+        proc.testNoteLog = [&] (int note, int string, int up, juce::int64 at) { hits.push_back ({ note, string, up, at }); };
+        auto orderOf = [&] (juce::String& txt)
+        {
+            std::vector<Hit> h = hits;
+            std::sort (h.begin(), h.end(), [] (const Hit& a, const Hit& b) { return a.at < b.at; });
+            txt.clear();
+            for (auto& x : h) txt << x.string << (x.up == 1 ? "^" : (x.up == 0 ? "v" : "")) << "@" << juce::String ((x.at - h.front().at) / sr * 1000.0, 1) << " ";
+            return h;
+        };
+        auto isDown = [] (const std::vector<Hit>& h) { if (h.size() < 2) return false; for (size_t i = 1; i < h.size(); ++i) if (h[i].string >= h[i - 1].string) return false; return true; };
+        auto isUp   = [] (const std::vector<Hit>& h) { if (h.size() < 2) return false; for (size_t i = 1; i < h.size(); ++i) if (h[i].string <= h[i - 1].string) return false; return true; };
+        auto takesMatch = [] (const std::vector<Hit>& h, int dir) { for (auto& x : h) if (x.up != dir) return false; return true; };
+
+        sc.clear(); proc.scoreEdited();
+        juce::AudioBuffer<float> b0 (2, 256); juce::MidiBuffer none0; proc.processBlock (b0, none0);
+        hits.clear();
+        auto down = renderHost (proc, head, chordAt (1.0, 1.5), 0.0, 4.0, sr);   // beat 1: AUTO = down
+        const double sDown = spread (down, 0.5);
+        juce::String downTxt; auto downHits = orderOf (downTxt);
+        setP (proc, "strumOn", 0);
+        auto block = renderHost (proc, head, chordAt (1.0, 1.5), 0.0, 4.0, sr);
+        const double sBlock = spread (block, 0.5);
+        setP (proc, "strumOn", 1);
+        check (sDown > sBlock + 15.0, "strum spreads the chord: rise " + juce::String (sDown, 0) + " ms (block chord " + juce::String (sBlock, 0) + " ms)");
+        check (downHits.size() == 6 && isDown (downHits) && takesMatch (downHits, 0), "down-stroke on the beat: strings 6 -> 1, down takes (" + downTxt + ")");
+        const double span = downHits.size() == 6 ? (downHits.back().at - downHits.front().at) / sr * 1000.0 : 0.0;
+        check (span > 25.0 && span < 45.0, "down-stroke across 6 strings takes " + juce::String (span, 1) + " ms (7 ms a string)");
+
+        hits.clear();
+        auto up = renderHost (proc, head, chordAt (1.5, 1.0), 0.0, 4.0, sr);   // beat 1.5 (the "and"): AUTO = up
+        juce::String upTxt; auto upHits = orderOf (upTxt);
+        check (upHits.size() == 4 && isUp (upHits) && takesMatch (upHits, 1), "up-stroke on the 'and': strings 1 -> 4 only, up takes (" + upTxt + ")");
+        // only the top 4 strings: no low E (82 Hz) in an up-stroke
+        auto band = [&] (const juce::AudioBuffer<float>& b, double t0, double f)
+        {
+            juce::dsp::IIR::Filter<float> bp;
+            bp.coefficients = juce::dsp::IIR::Coefficients<float>::makeBandPass (sr, f, 8.0);
+            double e = 0;
+            for (int i = (int) (t0 * sr); i < (int) ((t0 + 0.3) * sr); ++i) { const float y = bp.processSample (b.getSample (0, i)); e += y * y; }
+            return 10.0 * std::log10 (e + 1e-20);
+        };
+        check (band (up, 0.8, 82.4) < band (down, 0.55, 82.4) - 15.0, "up-stroke plays the top 4 strings only (low E "
+               + juce::String (band (up, 0.8, 82.4) - band (down, 0.55, 82.4), 1) + " dB vs down)");
+
+        // the score still has Logic's timing (only the sound is spread): both chords in one playback
+        {
+            auto both = chordAt (1.0, 0.4);
+            for (auto& e : chordAt (1.5, 1.0)) both.push_back (e);
+            renderHost (proc, head, both, 0.0, 4.0, sr);
+        }
+        bool onGrid = sc.notes.size() >= 6;
+        for (auto& nt : sc.notes) onGrid = onGrid && (std::abs ((double) nt.tick / Score::kTicks - 1.0) < 0.002 || std::abs ((double) nt.tick / Score::kTicks - 1.5) < 0.002);
+        check (onGrid && sc.notes.size() == 12, "SCORE keeps Logic's timing and every note (" + juce::String ((int) sc.notes.size()) + " / 12 notes on beats 1 / 1.5)");
+
+        // SCORE: flip the beat-1 chord to up by hand -> the next playback strums it up
+        sc.clear(); proc.scoreEdited();
+        renderHost (proc, head, chordAt (1.0, 1.5), 0.0, 4.0, sr);
+        proc.pushUndo();
+        for (auto& nt : sc.notes) { Score::Override o = sc.overrideFor (nt); o.strum = 1; sc.setOverride (nt, o); }
+        proc.scoreEdited();
+        juce::AudioBuffer<float> b1 (2, 256); juce::MidiBuffer none1; proc.processBlock (b1, none1);
+        hits.clear();
+        renderHost (proc, head, chordAt (1.0, 1.5), 0.0, 4.0, sr);
+        juce::String flTxt; auto flHits = orderOf (flTxt);
+        check (isUp (flHits) && takesMatch (flHits, 1), "SCORE up-arrow on a down-beat chord: played as an up-stroke (" + flTxt + ")");
+
+        // dragged back to Logic: D#1 before the chord, read back as Logic's direction
+        {
+            int firstBar = 0;
+            auto mf = sc.exportMidi (0, firstBar);
+            auto f = outDir.getChildFile ("strum.mid");
+            f.deleteFile(); { juce::FileOutputStream fos (f); mf.writeTo (fos); }
+            Score::Model m2;
+            m2.importMidi (f, firstBar - 1);
+            bool ok = m2.notes.size() == sc.notes.size();
+            for (auto& nt : m2.notes) ok = ok && nt.logicStrum == 1;
+            check (ok, "drag to Logic: the up-stroke goes out as D#1 and comes back (" + juce::String ((int) m2.notes.size()) + " notes)");
+            // Logic now plays it with D#1: the plugin's setting is no longer needed
+            auto ev = chordAt (1.0, 1.5);
+            ev.push_back ({ 0.995, juce::MidiMessage::noteOn (1, Score::kStrumUpKey, (juce::uint8) 100) });
+            ev.push_back ({ 0.998, juce::MidiMessage::noteOff (1, Score::kStrumUpKey) });
+            hits.clear();
+            renderHost (proc, head, ev, 0.0, 4.0, sr);
+            check (sc.pendingCount() == 0, "with D#1 in Logic the up-stroke is no longer pending (" + juce::String (sc.pendingCount()) + ")");
+            juce::String kTxt; auto kHits = orderOf (kTxt);
+            check (isUp (kHits), "D#1 from Logic plays an up-stroke (" + kTxt + ")");
+        }
+
+        // down then up, legato (each chord held right up to the next): the up-stroke's top strings keep ringing
+        {
+            sc.clear(); proc.scoreEdited();
+            auto ev = chordAt (1.0, 0.5);
+            for (auto& e : chordAt (1.5, 0.5)) ev.push_back (e);
+            auto legato = renderHost (proc, head, ev, 0.0, 3.0, sr);
+            auto upAlone = renderHost (proc, head, chordAt (1.5, 0.5), 0.0, 3.0, sr);
+            // high E (330 Hz) 60 - 200 ms after the up-stroke, compared with the up-stroke played alone
+            const double d = band (legato, 0.81, 329.6) - band (upAlone, 0.81, 329.6);
+            check (d > -6.0, "down then up (legato): the up-stroke's top string keeps ringing (" + juce::String (d, 1) + " dB vs alone)");
+        }
+
+        // brushing stops the ringing chord
+        {
+            sc.clear(); proc.scoreEdited();
+            auto ev = chordAt (1.0, 2.5);
+            ev.push_back ({ 2.0, juce::MidiMessage::noteOn (1, Kit::kBrushDownNote, (juce::uint8) 100) });
+            ev.push_back ({ 2.1, juce::MidiMessage::noteOff (1, Kit::kBrushDownNote) });
+            auto br = renderHost (proc, head, ev, 0.0, 4.0, sr);
+            auto ring = renderHost (proc, head, chordAt (1.0, 2.5), 0.0, 4.0, sr);
+            check (band (br, 1.2, 164.8) < band (ring, 1.2, 164.8) - 20.0, "a brush stroke stops the chord ("
+                   + juce::String (band (br, 1.2, 164.8) - band (ring, 1.2, 164.8), 1) + " dB)");
+        }
+
+        // stop in the middle of a strum: nothing hangs
+        {
+            auto ev = chordAt (1.0, 3.0);
+            auto part = renderHost (proc, head, ev, 0.995, 0.02, sr, 64);   // stops 10 ms into the strum
+            auto after = render (proc, {}, 2.0, sr);
+            check (rmsDb (after, 1.5, 2.0, sr) < -80.0f, "stopping mid-strum: no hanging strings (" + juce::String (rmsDb (after, 1.5, 2.0, sr), 1) + " dB)");
+        }
+        proc.testNoteLog = nullptr;
+        sc.clear(); proc.scoreEdited();
+        setP (proc, "ampOn", 1); setP (proc, "cabOn", 1); setP (proc, "revMix", 0.12f); setP (proc, "kitHuman", 0.5f);
+        proc.setPlayHead (nullptr);
     }
 
     // ---- GUI snapshot
@@ -604,7 +763,19 @@ int main (int argc, char** argv)
             if (fos.openedOk()) { juce::PNGImageFormat fmt; fmt.writeImageToStream (img, fos); }
         };
         snap ("editor.png");
-        // SCORE tab
+        // SCORE tab, with a few chords: AUTO down / AUTO up / set by hand
+        {
+            auto& sc = proc.getScore();
+            sc.clear();
+            const int ch[] { 40, 47, 52, 56, 59, 64 };
+            const double beats[] { 0.0, 0.5, 1.0, 1.5, 2.0, 2.75, 3.0 };
+            for (double bt : beats)
+                for (int nn : ch) { Score::Note n; n.tick = (juce::int64) (bt * Score::kTicks); n.length = Score::kTicks / 3; n.note = nn; n.autoString = 0; sc.notes.push_back (n); }
+            for (auto& n : sc.notes) { const int s6[] { 6, 5, 4, 3, 2, 1 }; for (int k = 0; k < 6; ++k) if (n.note == ch[k]) n.autoString = s6[k]; }
+            sc.sort();
+            for (auto& n : sc.notes) if (n.tick == 2 * Score::kTicks) { Score::Override o; o.strum = 1; sc.setOverride (n, o); }
+            proc.scoreEdited();
+        }
         for (auto* c : ed->getChildren())
             if (auto* b = dynamic_cast<juce::TextButton*> (c))
                 if (b->getButtonText() == "SCORE") b->triggerClick();

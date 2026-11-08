@@ -39,6 +39,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
                                   juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.5f, fmt ("", 2)));
     l.add (std::make_unique<APC> (juce::ParameterID { "stringMode", 1 }, "String Choice",
                                   juce::StringArray { "Auto", "MIDI Ch 1-6 = String" }, 0));
+    // STRUM: chords are played string by string (direction AUTO from the beat, or set in SCORE / D1 D#1)
+    l.add (std::make_unique<APB> (juce::ParameterID { "strumOn", 1 }, "Strum", true));
+    l.add (std::make_unique<APF> (juce::ParameterID { "strumSpeed", 1 }, "Strum Speed",
+                                  juce::NormalisableRange<float> (0.0f, 30.0f, 0.1f, 0.6f), 7.0f, fmt (" ms", 1)));
+    l.add (std::make_unique<APC> (juce::ParameterID { "upStrings", 1 }, "Up-stroke Strings",
+                                  juce::StringArray { "Top 3", "Top 4", "All" }, 1));
 
     // ---- EFFECTS: Porch Drive / Wool Fuzz (same ranges and defaults as the stand-alone plugins)
     l.add (std::make_unique<APB> (juce::ParameterID { "pdOn", 1 }, "Drive On", false));
@@ -128,15 +134,18 @@ AIOGuitarProcessor::AIOGuitarProcessor()
     synth.onNoteOn = [this] (int ch, int note, float vel, int autoString, int& art, int& forced)
     {
         if (ch > 10) return;   // auditions from the UI
-        const double ppq = hookPpq0 + (double) (synth.getClock() - hookClock0) * hookPpqPerSample;
+        double ppq = hookPpq0 + (double) (synth.getClock() - hookClock0) * hookPpqPerSample;
+        if (const double orig = strum.origPpqFor (note); orig >= 0.0) { ppq = orig; strum.clearOrig (note); }   // strummed: where Logic put it
         if (hookCapture)
         {
             Score::CaptureEvent e;
             e.type = Score::CaptureEvent::noteOn; e.ppq = ppq; e.note = note;
             e.velocity = juce::jlimit (1, 127, juce::roundToInt (vel * 127.0f)); e.channel = ch;
             e.logicArt = art; e.autoString = autoString;
+            e.logicStrum = strum.logicStrumFor (note);
             pushCapture (e);
         }
+        if (testNoteLog) testNoteLog (note, autoString, synth.strumUpForNote[note], synth.getClock());
         if (auto* t = audioTable.get())
             if (auto* en = t->find (Score::toTick (ppq), note))
             {
@@ -151,6 +160,21 @@ AIOGuitarProcessor::AIOGuitarProcessor()
         e.type = Score::CaptureEvent::noteOff;
         e.ppq = hookPpq0 + (double) (synth.getClock() - hookClock0) * hookPpqPerSample;
         e.note = note; e.channel = ch;
+        pushCapture (e);
+    };
+    strum.onDroppedNoteOn = [this] (int ch, int note, int vel, double ppq, int string, int keyDir)
+    {
+        if (! hookCapture || ppq < 0.0) return;
+        Score::CaptureEvent e;
+        e.type = Score::CaptureEvent::noteOn; e.ppq = ppq; e.note = note; e.velocity = vel; e.channel = ch;
+        e.logicArt = voiceParams.articulation; e.autoString = string; e.logicStrum = keyDir;
+        pushCapture (e);
+    };
+    strum.onDroppedNoteOff = [this] (int ch, int note, double ppq)
+    {
+        if (! hookCapture || ppq < 0.0) return;
+        Score::CaptureEvent e;
+        e.type = Score::CaptureEvent::noteOff; e.ppq = ppq; e.note = note; e.channel = ch;
         pushCapture (e);
     };
     synth.chokeString = [this] (int s)
@@ -183,6 +207,7 @@ void AIOGuitarProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     synth.setCurrentPlaybackSampleRate (sampleRate);
     volume.reset (sampleRate, 0.03);
     sortedMidi.ensureSize (16384);
+    strum.prepare (sampleRate);
     scoreMidi.ensureSize (16384);
     previewRunning = capturing = syncWasPlaying = false;
     expectedPpq = -1.0;
@@ -216,6 +241,10 @@ void AIOGuitarProcessor::readParams()
     voiceParams.vibDelay  = get ("vibDelay");
     voiceParams.kitTune     = get ("kitTune") > 0.5f;
     voiceParams.kitVelSens  = get ("kitVelSens");
+    strumSet.on = get ("strumOn") > 0.5f;
+    strumSet.msPerString = get ("strumSpeed");
+    strumSet.upStrings = (int) get ("upStrings") + 3;   // 3, 4, 5 (= all)
+    strumSet.humanize = voiceParams.humanize;
 
     fx.gateThresh  = -80.0f;   // the old gate / comp / drive of FXChain are not used (EFFECTS has the real pedals)
     fx.compOn      = false;
@@ -326,8 +355,8 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     hostBpm.store (bpm);
     const double ppqPerSample = bpm / 60.0 / sr;
     const int req = previewRequest.exchange (0);
-    if (req == 1) { previewRunning = true; previewPpq = previewFrom.load(); synth.allNotesOff (0, true); }
-    if (req == 2 && previewRunning) { previewRunning = false; synth.allNotesOff (0, true); }
+    if (req == 1) { strum.flush (midi); previewRunning = true; previewPpq = previewFrom.load(); synth.allNotesOff (0, true); }
+    if (req == 2 && previewRunning) { strum.flush (midi); previewRunning = false; synth.allNotesOff (0, true); }
 
     const bool syncPlay = ! previewRunning && get ("scoreMode") > 0.5f && playing && havePpq && audioTable != nullptr && ! audioTable->entries.empty();
     // a jump (cycle, click in the ruler): judged on the sample position when the host gives it,
@@ -337,8 +366,10 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (havePpq && expectedPpq >= 0.0 && ppq < expectedPpq - 0.01) jumped = true;   // went backwards (cycle), whatever the sample clock says
     else if (havePpq && expectedPpq >= 0.0)
         jumped = std::abs (ppq - expectedPpq) > 0.01 + n * std::abs (bpm - lastBpm) / 60.0 / sr;
-    if (syncWasPlaying && (! syncPlay || jumped)) synth.allNotesOff (0, true);   // stop / cycle jump: let held score notes ring out
-    if (syncPlay && ! syncWasPlaying) synth.allNotesOff (0, true);              // host notes held from before must not hang
+    if (syncWasPlaying && (! syncPlay || jumped)) { strum.flush (midi); synth.allNotesOff (0, true); }   // stop / cycle jump: let held score notes ring out
+    if (syncPlay && ! syncWasPlaying) { strum.flush (midi); synth.allNotesOff (0, true); }              // host notes held from before must not hang
+    if (jumped || (expectedPpq >= 0.0 && ! playing)) strum.flush (midi);       // strings still waiting to be strummed: drop
+    if (expectedPpq >= 0.0 && ! playing && ! previewRunning) synth.allNotesOff (0, true);   // transport stopped: let everything ring out
     // playback starts / jumps: articulation back to Normal, so a keyswitch latched at the end
     // of the last pass does not leak into the first notes (same result every time you press play)
     if (playing && havePpq && ! previewRunning && (expectedPpq < 0.0 || jumped)) synth.select (artNormal);
@@ -376,10 +407,18 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (previewRunning)
         {
             previewPpq += n * ppqPerSample;
-            if (audioTable == nullptr || previewPpq * Score::kTicks > (double) audioTable->lastEnd + Score::kTicks) { previewRunning = false; synth.allNotesOff (0, true); }
+            if (audioTable == nullptr || previewPpq * Score::kTicks > (double) audioTable->lastEnd + Score::kTicks)
+            {
+                previewRunning = false;
+                strum.flush (midi);
+                synth.allNotesOff (0, true);
+            }
         }
     }
     else hookPpq0 = ppq;
+    // STRUM: spread chords string by string (after the score notes are in, before the synth)
+    strum.process (midi, n, strumSet, synth, audioTable.get(), (playing && havePpq) || previewRunning, hookPpq0, ppqPerSample,
+                   previewRunning || syncPlay);
     uiPpq.store (previewRunning ? previewPpq : ppq);
     uiHostPlaying.store (playing);
     uiPreview.store (previewRunning);
@@ -658,7 +697,8 @@ void AIOGuitarProcessor::setCurrentProgram (int index)
     // Performance settings (play board) and the "My Guitar" switch are not part of the sound presets.
     static const juce::StringArray keep { "kitTune", "kitLevel", "kitVelSens", "kitHuman", "stringMode", "bendUp", "bendDown",
                                           "artBendStart", "artBendTime", "artHold", "slideRange",
-                                          "vibRate", "vibDelay", "gtVolume", "gtRelease", "gtMute", "linkGroup", "scoreMode" };   // pedals / amp ARE part of the sound presets
+                                          "vibRate", "vibDelay", "gtVolume", "gtRelease", "gtMute", "linkGroup", "scoreMode",
+                                          "strumOn", "strumSpeed", "upStrings" };   // pedals / amp ARE part of the sound presets
 
     for (auto* p : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
