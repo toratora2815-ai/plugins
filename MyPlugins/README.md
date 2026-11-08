@@ -20,6 +20,7 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 | Balance Scope | BalanceScope | 帯域バランスとラウドネスの測定器。Plugin Link の配り役 |
 | Mod Host | ModHost | 好きな AU を中に入れて、どのつまみでも LFO などで動かす |
 | Sample Sculptor | SampleSculptor | サンプルを落として加工し、ドラッグで Logic に戻す（AU 音源） |
+| AIO Guitar | AIOGuitar | 自分のエレキを録った音で鳴らす全部入りギター音源（AU 音源＋単体アプリ） |
 
 ## アプリ（.app）
 | 名前 | フォルダ | 何用か |
