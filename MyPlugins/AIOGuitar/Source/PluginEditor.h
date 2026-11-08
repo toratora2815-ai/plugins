@@ -3,6 +3,7 @@
 #include "PluginProcessor.h"
 #include "ScorePage.h"
 #include "EffectsPage.h"
+#include "RecordGuide.h"
 
 //==============================================================================
 class AIOLookAndFeel : public juce::LookAndFeel_V4
@@ -105,6 +106,7 @@ class KitCard : public juce::Component, private juce::Timer
 {
 public:
     KitCard (AIOGuitarProcessor&, juce::Colour);
+    std::function<void()> onGuide;   // stand-alone app: open the RECORD GUIDE
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -113,7 +115,7 @@ private:
     AIOGuitarProcessor& proc;
     juce::Colour colour;
     juce::Label name;
-    juce::TextButton saveButton { "Save Guitar..." }, openButton { "Open Guitar..." };
+    juce::TextButton saveButton { "Save Guitar..." }, openButton { "Open Guitar..." }, guideButton { "RECORD GUIDE" };
     std::unique_ptr<juce::FileChooser> chooser;
     juce::String message;
     int shownVersion = -1;
@@ -133,6 +135,10 @@ public:
 
     static constexpr int frets = 23;   // 0 .. 22
 
+    // RECORD GUIDE: the cell to play now glows; right-click a cell to record just that note again
+    void setHighlight (int string, int fret, bool recording) { if (hlString != string || hlFret != fret || hlRec != recording) { hlString = string; hlFret = fret; hlRec = recording; repaint(); } }
+    std::function<void (int string, int fret)> onRedo;
+
 private:
     struct Cell { bool rec[3] {}; float cents = 0; int srcString = 0, srcFret = -1, shift = 0; bool any = false; };
     void timerCallback() override;
@@ -147,6 +153,8 @@ private:
     juce::String summary;
     juce::Point<int> hover, pressed;
     int pressedNote = -1, shownVersion = -1;
+    int hlString = 0, hlFret = -1;
+    bool hlRec = false;
 };
 
 class PlaySettings : public juce::Component
@@ -182,11 +190,14 @@ public:
     explicit MyGuitarPage (AIOGuitarProcessor&);
     void resized() override;
 private:
+    void showGuide (bool show);
     SlotCard soft, hard, mute, brush;
     KitCard kit;
     StringGrid grid;
     PlaySettings settings;
     ArticulationPanel articulations;
+    GuidePanel guide;
+    bool guideShown = false;
 };
 
 //==============================================================================

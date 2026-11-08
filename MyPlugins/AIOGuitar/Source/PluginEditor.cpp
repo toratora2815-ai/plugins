@@ -419,6 +419,13 @@ KitCard::KitCard (AIOGuitarProcessor& p, juce::Colour c) : proc (p), colour (c)
     addAndMakeVisible (name);
     addAndMakeVisible (saveButton);
     addAndMakeVisible (openButton);
+    if (AIOGuitarProcessor::isStandaloneApp())
+    {
+        guideButton.setColour (juce::TextButton::buttonColourId, Pal::guitar.withAlpha (0.35f));
+        guideButton.setTooltip (jp (u8"ギターをつないで、1 音ずつ案内を見ながら録る（アプリだけ）"));
+        guideButton.onClick = [this] { if (onGuide) onGuide(); };
+        addAndMakeVisible (guideButton);
+    }
 
     saveButton.onClick = [this]
     {
@@ -464,8 +471,9 @@ void KitCard::paint (juce::Graphics& g)
     g.setColour (Pal::dim);
     g.setFont (juce::FontOptions (12.0f));
     auto r = getLocalBounds().reduced (12, 8);
-    g.drawFittedText (message.isNotEmpty() ? message : jp (u8"録音一式を 1 つのファイルに保存・読み込み（Logic のプロジェクトにも自動で入ります）"),
-                      r.withTrimmedTop (62).withHeight (34), juce::Justification::topLeft, 2);
+    if (! guideButton.isVisible() || message.isNotEmpty())
+        g.drawFittedText (message.isNotEmpty() ? message : jp (u8"録音一式を 1 つのファイルに保存・読み込み（Logic のプロジェクトにも自動で入ります）"),
+                          r.withTrimmedTop (62).withHeight (34), juce::Justification::topLeft, 2);
 }
 
 void KitCard::resized()
@@ -474,6 +482,7 @@ void KitCard::resized()
     r.removeFromTop (28);
     name.setBounds (r.removeFromTop (26));
     auto b = r.removeFromBottom (26);
+    if (guideButton.isVisible()) { r.removeFromBottom (6); guideButton.setBounds (r.removeFromBottom (28)); }
     saveButton.setBounds (b.removeFromLeft (b.getWidth() / 2 - 3));
     b.removeFromLeft (6);
     openButton.setBounds (b);
@@ -621,6 +630,13 @@ void StringGrid::paint (juce::Graphics& g)
             if (hover == juce::Point<int> (f, s)) fill = fill.brighter (0.4f);
             g.setColour (fill);
             g.fillRect (cr);
+            if (s == hlString && f == hlFret)
+            {
+                g.setColour ((hlRec ? juce::Colour (0xffff3b30) : Pal::guitar).withAlpha (0.5f));
+                g.fillRect (cr);
+                g.setColour (hlRec ? juce::Colour (0xffff3b30) : Pal::text);
+                g.drawRect (cr.expanded (1.5f), 2.0f);
+            }
 
             const float d = juce::jmin (cr.getWidth(), cr.getHeight()) * 0.42f;
             const juce::Colour lc[3] { Pal::guitar, Pal::amp, Pal::reverb };
@@ -669,6 +685,7 @@ void StringGrid::mouseDown (const juce::MouseEvent& e)
 {
     const auto c = cellAt (e.position);
     if (c.y < 1) return;
+    if (e.mods.isPopupMenu() && onRedo) { onRedo (c.y, c.x); return; }
     pressed = c;
     pressedNote = kOpenString[c.y] + c.x;
     proc.previewNote (pressedNote, c.y, true);
@@ -759,10 +776,39 @@ MyGuitarPage::MyGuitarPage (AIOGuitarProcessor& p)
       hard  (p, Kit::slotHard,  "HARD PICKING", jp (u8"強く弾いた単音（あとからで OK）。録り方は SOFT と同じ。強い打ち込み（ベロシティ 80 以上）で鳴る"), Pal::amp),
       mute  (p, Kit::slotMute,  "PALM MUTE",    jp (u8"ブリッジミュートの単音。6・5・4 弦を 0・3・6・9 で、6→4 弦、各弦ダウン→アップ"), Pal::reverb),
       brush (p, Kit::slotBrush, "BRUSHING",     jp (u8"全弦ミュートのストローク。ダウン、アップ…と交互に 8 回ほど、少し間を空けて。C1 = ダウン、C#1 = アップ"), Pal::cab),
-      kit (p, Pal::guitar), grid (p), settings (p, Pal::guitar), articulations (p, Pal::drive)
+      kit (p, Pal::guitar), grid (p), settings (p, Pal::guitar), articulations (p, Pal::drive), guide (p)
 {
     for (juce::Component* c : std::initializer_list<juce::Component*> { &soft, &hard, &mute, &brush, &kit, &grid, &settings, &articulations })
         addAndMakeVisible (*c);
+    addChildComponent (guide);
+    kit.onGuide = [this] { showGuide (true); };
+    guide.onClose = [this] { showGuide (false); };
+    guide.onHighlight = [this] (int s, int f, bool rec) { grid.setHighlight (s, f, rec); };
+    if (AIOGuitarProcessor::isStandaloneApp())
+        grid.onRedo = [this] (int s, int f)
+        {
+            juce::PopupMenu m;
+            m.addSectionHeader (juce::String (s) + jp (u8"弦 ") + juce::String (f) + jp (u8"F を録る（ダウンとアップ）"));
+            m.addItem (1, "SOFT PICKING");
+            m.addItem (2, "HARD PICKING");
+            m.addItem (3, "PALM MUTE");
+            m.showMenuAsync (juce::PopupMenu::Options(), [this, s, f] (int r)
+            {
+                if (r <= 0) return;
+                showGuide (true);
+                guide.startSingle (r - 1, s, f);
+            });
+        };
+}
+
+void MyGuitarPage::showGuide (bool show)
+{
+    guideShown = show;
+    if (! show) guide.stop();
+    guide.setVisible (show);
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &soft, &hard, &mute, &brush, &kit, &settings, &articulations })
+        c->setVisible (! show);
+    resized();
 }
 
 void MyGuitarPage::resized()
@@ -777,6 +823,13 @@ void MyGuitarPage::resized()
     grid.setBounds (r.removeFromTop (214)); r.removeFromTop (gap);
     settings.setBounds (r.removeFromTop (118)); r.removeFromTop (gap);
     articulations.setBounds (r);
+    if (guideShown)   // the guide on top, the strings & frets table below it
+    {
+        auto all = getLocalBounds();
+        grid.setBounds (all.removeFromBottom (240));
+        all.removeFromBottom (gap);
+        guide.setBounds (all);
+    }
 }
 
 //==============================================================================

@@ -54,7 +54,16 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
 - MIDI のタイミングは書き換えない（mix-engineer: 50 ms の和音の窓・奏法の照合・クオンタイズを壊すため）。遅らせた音は origPpq で Logic の位置として取り込む。アップで鳴らさない弦も onDroppedNoteOn で取り込む
 - ダウンはダウンの録音、アップはアップの録音（nextStrumUp）。ブラッシングで全弦 choke。停止で allNotesOff(0, true)、停止・ジャンプでキューを flush
 - パラメーター strumOn（標準 ON）/ strumSpeed / upStrings。SCORE の和音の上に ↓↑（クリックで AUTO→↓→↑→AUTO）。書き出しで D1/D#1
-- 録音ガイド（もう 1 つの提案）は mix-engineer「形を変えれば価値あり・後回し」で保留
+- 録音ガイドも 2026-11-08 本人「明日録音したい」で作った（下）
+
+## RECORD GUIDE（単体アプリだけ、2026-11-08）
+- 入力: makeBuses で wrapperType_Standalone のときだけ入力バス（AU は入力なしのまま）。processBlock の頭で buffer.clear() の前に inputTap.push（出力には流さない）。
+  単体アプリは入力を消音で始めるので、ガイド開始時に StandalonePluginHolder の消音を外す（#if JucePlugin_Build_Standalone で juce_StandaloneFilterWindow.h を include）。MICROPHONE_PERMISSION_ENABLED
+- GuideCore.h: InputTap（2^21 の mono FIFO）、buildSteps（README と同じ順番）、TakeDetector（5 ms の包絡、立ち上がり 9 dB、−45 dB か床 +6 dB が 250 ms で終わり、次の立ち上がりでも区切る）、
+  judge（割れ −1 dBFS / 小さすぎ −40 / 2 回弾き = 高域（差分）の 5 ms 包絡で 30〜200 ms 後に +8 dB / 前の弦 = Goertzel で −24 dB より大きければだめ・−32 で警告 / slice で 1 音 / 半音以上ずれ / オクターブ違いは直して警告 / 短すぎ）。
+  弦・フレットは順番から決まっているので assignStrings は使わない
+- RecordGuide.h: GuidePanel。カポの位置が変わるところで putTakes（キットに入れる）＋ .aioguitar に自動保存。カポ待ちの間の違う音は無視。生の入力は Recordings/*.wav。表の右クリックで startSingle（その弦・フレットのダウン/アップ）
+- テスト: 疑似の入力（わざとの失敗 4 種、カポ待ちの雑音）で 66 / 24 / 8 音が通る
 
 ## テスト
 `-DAIO_BUILD_RENDER_TEST=ON` で RenderTest。疑似 DI（±20 セント、±6 dB、弦の硬さ指定可）で切り分け・弦・音程・音量・連打・choke・ミュート・状態を確認。

@@ -28,6 +28,8 @@ juce_add_plugin(AIOGuitar
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     AU_MAIN_TYPE kAudioUnitType_MusicDevice
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "The RECORD GUIDE listens to your guitar through the audio interface."
     COPY_PLUGIN_AFTER_BUILD ${COPY_AFTER_BUILD})
 
 juce_generate_juce_header(AIOGuitar)

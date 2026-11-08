@@ -119,8 +119,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
 }
 
 //==============================================================================
+juce::AudioProcessor::BusesProperties AIOGuitarProcessor::makeBuses()
+{
+    auto b = BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true);
+    // the stand-alone app listens to the guitar for the RECORD GUIDE (the AU stays an instrument without inputs)
+    if (AIOGuitarProcessor::isStandaloneApp()) b = b.withInput ("Guitar In", juce::AudioChannelSet::stereo(), true);
+    return b;
+}
+
 AIOGuitarProcessor::AIOGuitarProcessor()
-    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (makeBuses()),
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
     for (auto* p : getParameters())
@@ -186,6 +194,7 @@ AIOGuitarProcessor::AIOGuitarProcessor()
     apvts.addParameterListener ("kitLevel", this);
     publishTable();
     startTimerHz (30);
+    if (isStandaloneApp()) inputTap.allocate();   // the RECORD GUIDE's buffer (8 MB), not in the AU
 }
 
 AIOGuitarProcessor::~AIOGuitarProcessor()
@@ -198,7 +207,10 @@ AIOGuitarProcessor::~AIOGuitarProcessor()
 
 bool AIOGuitarProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo()) return false;
+    if (layouts.inputBuses.isEmpty()) return true;
+    const auto in = layouts.getMainInputChannelSet();
+    return in.isDisabled() || in == juce::AudioChannelSet::mono() || in == juce::AudioChannelSet::stereo();
 }
 
 void AIOGuitarProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -269,6 +281,11 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
+    // RECORD GUIDE: hand the guitar input to the guide (never to the output)
+    if (const int nIn = juce::jmin (getTotalNumInputChannels(), buffer.getNumChannels()); nIn > 0)
+        inputTap.push (buffer.getArrayOfReadPointers(), nIn, n);
+    else
+        inputTap.channels.store (0);
     buffer.clear();
 
     keyboardState.processNextMidiBuffer (midi, 0, n, true);
@@ -614,6 +631,23 @@ void AIOGuitarProcessor::applySlice (int slot, Kit::SliceResult res)
     kit->samples.erase (std::remove_if (kit->samples.begin(), kit->samples.end(),
                                         [slot] (const Kit::Sample& s) { return s.slot == slot; }), kit->samples.end());
     for (auto& s : res.samples) kit->samples.push_back (std::move (s));
+    publish (kit);
+}
+
+void AIOGuitarProcessor::putTakes (const std::vector<Kit::Sample>& takes)
+{
+    if (takes.empty()) return;
+    auto kit = editKit ? std::make_shared<Kit::GuitarKit> (*editKit) : std::make_shared<Kit::GuitarKit>();
+    for (auto& t : takes)
+    {
+        kit->samples.erase (std::remove_if (kit->samples.begin(), kit->samples.end(), [&] (const Kit::Sample& s)
+        {
+            if (s.slot != t.slot || s.up != t.up) return false;
+            return t.slot == Kit::slotBrush ? false : (s.string == t.string && s.fret == t.fret);
+        }), kit->samples.end());
+        kit->samples.push_back (t);
+    }
+    kit->encoded = {};   // re-encode
     publish (kit);
 }
 

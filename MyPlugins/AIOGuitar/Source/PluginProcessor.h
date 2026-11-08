@@ -6,6 +6,7 @@
 #include "KitVoice.h"
 #include "Score.h"
 #include "Strum.h"
+#include "GuideCore.h"
 #include "PluginLinkJuce.h"
 #include "PresetBar.h"
 
@@ -86,6 +87,13 @@ public:
     std::atomic<bool>   fxSleeping { false };   // UI: effects and amp are resting (nothing playing)
     std::atomic<int>    hostNum { 4 }, hostDen { 4 };
 
+    // ---- RECORD GUIDE (stand-alone app only: the guitar comes in through the audio interface)
+    static bool isStandaloneApp() { return juce::PluginHostType::getPluginLoadedAs() == juce::AudioProcessor::wrapperType_Standalone; }
+    Guide::InputTap inputTap;
+    double getSampleRateNow() const { return sr; }
+    // put recorded takes into the kit: the same slot / string / fret / direction is replaced
+    void putTakes (const std::vector<Kit::Sample>& takes);
+
     // tests only: told about every note that starts (note, string, take direction, sample clock)
     std::function<void (int note, int string, int strumUp, juce::int64 clock)> testNoteLog;
 
@@ -96,6 +104,7 @@ public:
     void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) link.setTrackName (*tp.name); }
 
 private:
+    static BusesProperties makeBuses();
     // no allocation: linear search with juce::String == const char* (safe on the audio thread)
     std::atomic<float>* raw (const char* id) const
     {

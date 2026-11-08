@@ -6,6 +6,7 @@
 // 使い方: RenderTest <出力フォルダ>    失敗があると終了コード 1
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
+#include "../Source/RecordGuide.h"
 
 namespace
 {
@@ -748,6 +749,197 @@ int main (int argc, char** argv)
         sc.clear(); proc.scoreEdited();
         setP (proc, "ampOn", 1); setP (proc, "cabOn", 1); setP (proc, "revMix", 0.12f); setP (proc, "kitHuman", 0.5f);
         proc.setPlayHead (nullptr);
+    }
+
+    // ================= RECORD GUIDE =================
+    std::cout << "== record guide ==" << std::endl;
+    {
+        AIOGuitarProcessor gp;
+        gp.inputTap.allocate();   // as in the stand-alone app
+        gp.prepareToPlay (44100.0, 512);
+        GuidePanel guide (gp);
+        guide.baseDir = outDir.getChildFile ("guide");
+        guide.baseDir.deleteRecursively();
+        juce::Random r2 (99);
+        const double gsr = 44100.0;
+        std::vector<float> stream;
+        auto pluck = [&] (int note, float level, double len, float cents = 0.0f)
+        {
+            const size_t at = stream.size();
+            stream.resize (at + (size_t) ((len + 1.0) * gsr), 0.0f);
+            std::vector<float> tmp ((size_t) (len * gsr + 10), 0.0f);
+            addPluck (tmp, 0, gsr, noteHz (note + cents / 100.0), level, len, 1.2, false, r2);
+            for (size_t i = 0; i < tmp.size() && at + i < stream.size(); ++i) stream[at + i] += tmp[i];
+        };
+        auto silence = [&] (double sec) { stream.resize (stream.size() + (size_t) (sec * gsr), 0.0f); };
+        // play the stream into the guide, as the audio interface would (blocks of 512), letting the guide work as it goes
+        size_t fed = 0;
+        auto feed = [&]
+        {
+            for (; fed < stream.size(); fed += 512)
+            {
+                const int n = (int) juce::jmin ((size_t) 512, stream.size() - fed);
+                const float* ch[] { stream.data() + fed };
+                gp.inputTap.push (ch, 1, n);
+                if ((fed / 512) % 16 == 0) guide.pump();
+            }
+            guide.pump();
+        };
+
+        guide.start (Kit::slotSoft);
+        check (guide.isRunning() && ! guide.isWaitingForCapo(), "guide starts at capo 0, string 6, down");
+        const auto steps = Guide::buildSteps (Kit::slotSoft);
+        int mistakesStopped = 0, capoNoise = 0, reasonsOk = 0;
+        auto reasonHas = [&] (const char* utf8) { if (guide.statusText().contains (juce::String (juce::CharPointer_UTF8 (utf8)))) ++reasonsOk; };
+        for (size_t i = 0; i < steps.size(); ++i)
+        {
+            const auto& st = steps[i];
+            const int want = st.expectedNote();
+            const double len = st.string >= 5 ? 3.0 : 2.0;
+            if (i > 0 && st.capo != steps[i - 1].capo)   // changing the capo: some noodling first (must be ignored)
+            {
+                pluck (want + 5, 0.15f, 0.6); pluck (want + 2, 0.15f, 0.6);
+                feed();
+                if (guide.stepIndex() == (int) i && guide.isWaitingForCapo()) ++capoNoise;
+            }
+            if (i == 2)  { pluck (want + 5, 0.2f, len); feed(); if (guide.stepIndex() == 2) ++mistakesStopped; reasonHas (u8"半音"); if (getenv ("DBG")) std::cout << "    [wrong string] index " << guide.stepIndex() << " status " << guide.statusText() << std::endl; }   // wrong string
+            if (i == 4)  { pluck (want, 1.3f, len);     feed(); if (guide.stepIndex() == 4) ++mistakesStopped; reasonHas (u8"割れ"); if (getenv ("DBG")) std::cout << "    [clipped] index " << guide.stepIndex() << " status " << guide.statusText() << std::endl; }   // clipped
+            if (i == 6)                                                                                              // picked twice
+            {
+                pluck (want, 0.2f, 0.06); stream.resize (stream.size() - (size_t) (1.0 * gsr));
+                pluck (want, 0.2f, len); feed();
+                if (guide.stepIndex() == 6) ++mistakesStopped; reasonHas (u8"2 回"); if (getenv ("DBG")) std::cout << "    [twice] index " << guide.stepIndex() << " status " << guide.statusText() << std::endl;
+            }
+            if (i == 8)                                                                                              // the previous string still ringing
+            {
+                const size_t at = stream.size();
+                pluck (want, 0.2f, len);
+                std::vector<float> ring ((size_t) (len * gsr), 0.0f);
+                addPluck (ring, 0, gsr, noteHz (steps[i - 1].expectedNote()), 0.2f, len, 3.0, false, r2);
+                for (size_t k = 0; k < ring.size(); ++k) stream[at + k] += ring[k];
+                feed();
+                if (guide.stepIndex() == 8) ++mistakesStopped; reasonHas (u8"前の弦"); if (getenv ("DBG")) std::cout << "    [ringing] index " << guide.stepIndex() << " status " << guide.statusText() << std::endl;
+            }
+            pluck (want, 0.2f * juce::Decibels::decibelsToGain ((r2.nextFloat() * 2.0f - 1.0f) * 5.0f), len, (r2.nextFloat() * 2.0f - 1.0f) * 15.0f);
+            feed();
+        }
+        silence (1.0); feed();
+        check (mistakesStopped == 4 && reasonsOk == 4, "mistakes stop the guide (with the right reason) on the same note: " + juce::String (mistakesStopped) + " / 4 (wrong string, clipping, picked twice, previous string ringing)");
+        check (capoNoise == 5, "noodling while changing the capo is ignored (" + juce::String (capoNoise) + " / 5 capo changes)");
+        check (guide.isFinished(), "the whole SOFT layer is done (" + juce::String (guide.stepIndex()) + " / " + juce::String ((int) steps.size()) + ")");
+        auto kit = gp.getKit();
+        int right = 0, soft = 0;
+        if (kit != nullptr)
+            for (auto& smp : kit->samples)
+                if (smp.slot == Kit::slotSoft)
+                {
+                    ++soft;
+                    if (smp.string >= 1 && smp.rootNote == Kit::kOpen[smp.string] + smp.fret) ++right;
+                }
+        check (soft == (int) steps.size() && right == soft, "kit: " + juce::String (soft) + " soft takes, " + juce::String (right) + " on the right string / fret");
+        check (guide.baseDir.getChildFile ("My Guitar.aioguitar").existsAsFile(), "saved to .aioguitar automatically");
+        check (guide.baseDir.getChildFile ("Recordings").findChildFiles (juce::File::findFiles, false, "*.wav").size() == 1, "the raw recording is kept as a WAV");
+
+        // one note again (right-click in the table): 5th string, 7th fret, down + up
+        guide.startSingle (Kit::slotSoft, 5, 7);
+        stream.clear(); fed = 0;
+        pluck (Kit::kOpen[5] + 7, 0.2f, 3.0); feed();
+        if (getenv ("DBG")) std::cout << "    [single 1] index " << guide.stepIndex() << " status " << guide.statusText() << std::endl;
+        pluck (Kit::kOpen[5] + 7, 0.2f, 3.0); silence (0.5);
+        feed();
+        if (getenv ("DBG")) std::cout << "    [single] index " << guide.stepIndex() << " finished " << (int) guide.isFinished() << " status " << guide.statusText() << std::endl;
+        kit = gp.getKit();
+        int at7 = 0;
+        for (auto& smp : kit->samples) if (smp.slot == Kit::slotSoft && smp.string == 5 && smp.fret == 7) ++at7;
+        check (guide.isFinished() && at7 == 2, "one note again: 5th string 7th fret added (down + up)");
+        // PALM MUTE (short notes) and BRUSHING (noise strokes) go through too
+        {
+            guide.start (Kit::slotMute);
+            stream.clear(); fed = 0;
+            const auto ms = Guide::buildSteps (Kit::slotMute);
+            for (size_t i = 0; i < ms.size(); ++i)
+            {
+                if (i > 0 && ms[i].capo != ms[i - 1].capo) { silence (1.0); feed(); }
+                const size_t at = stream.size();
+                stream.resize (at + (size_t) (1.2 * gsr), 0.0f);
+                std::vector<float> tmp ((size_t) (0.5 * gsr), 0.0f);
+                addPluck (tmp, 0, gsr, noteHz (ms[i].expectedNote()), 0.2f, 0.45, 0.07, ms[i].up, r2);
+                for (size_t k = 0; k < tmp.size(); ++k) stream[at + k] += tmp[k];
+                feed();
+            }
+            silence (0.5); feed();
+            check (guide.isFinished(), "PALM MUTE layer: " + juce::String (guide.stepIndex()) + " / " + juce::String ((int) ms.size()) + " short notes accepted ("
+                   + guide.statusText() + ")");
+
+            guide.start (Kit::slotBrush);
+            stream.clear(); fed = 0;
+            for (int k = 0; k < 8; ++k)
+            {
+                const size_t at = stream.size();
+                stream.resize (at + (size_t) (0.7 * gsr), 0.0f);
+                for (int i = 0; i < (int) (0.2 * gsr); ++i) stream[at + (size_t) i] = 0.3f * (r2.nextFloat() * 2.0f - 1.0f) * std::exp (-(float) i / (0.03f * (float) gsr));
+                feed();
+            }
+            silence (0.5); feed();
+            int strokes = 0;
+            if (auto k2 = gp.getKit()) strokes = k2->count (Kit::slotBrush);
+            check (guide.isFinished() && strokes == 8, "BRUSHING: 8 strokes (" + juce::String (strokes) + ")");
+        }
+        // picture of the guide (capo 3, string 5, up) with the table under it
+        {
+            guide.start (Kit::slotSoft);
+            for (int k = 0; k < 15; ++k) guide.pump();   // a few steps in (via skip)
+            StringGrid grid (gp);
+            guide.onHighlight = [&] (int s2, int f2, bool rec) { grid.setHighlight (s2, f2, rec); };
+            for (int k = 0; k < 15; ++k) { juce::MouseEvent* none = nullptr; juce::ignoreUnused (none); }
+            juce::Component holder;
+            holder.setSize (1076, 760);
+            holder.addAndMakeVisible (guide);
+            holder.addAndMakeVisible (grid);
+            guide.setBounds (0, 0, 1076, 512);
+            grid.setBounds (0, 520, 1076, 240);
+            for (int k = 0; k < 15; ++k) { auto* b = dynamic_cast<juce::TextButton*> (guide.getChildComponent (8)); juce::ignoreUnused (b); }
+            for (auto* c : guide.getChildren()) if (auto* b = dynamic_cast<juce::TextButton*> (c)) if (b->getButtonText().contains ("→")) for (int k = 0; k < 15; ++k) b->triggerClick();
+            for (int i = 0; i < 3; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            guide.pump();
+            auto img = holder.createComponentSnapshot (holder.getLocalBounds(), true, 1.0f);
+            auto f = outDir.getChildFile ("guide.png"); f.deleteFile();
+            juce::FileOutputStream fos (f);
+            if (fos.openedOk()) { juce::PNGImageFormat fmt; fmt.writeImageToStream (img, fos); }
+            holder.removeAllChildren();
+        }
+        guide.stop();
+    }
+
+    // ---- RECORD GUIDE input: a 2-input interface with the guitar on input 1 only
+    {
+        Guide::InputTap tap;
+        tap.allocate();
+        tap.active.store (true);
+        juce::Random r3 (5);
+        std::vector<float> in1 (512), in2 (512), got (512 * 40);
+        int pulled = 0;
+        for (int b = 0; b < 40; ++b)
+        {
+            for (int i = 0; i < 512; ++i) { in1[(size_t) i] = 0.5f * std::sin (0.05f * (b * 512 + i)); in2[(size_t) i] = 0.001f * (r3.nextFloat() - 0.5f); }
+            const float* ch[] { in1.data(), in2.data() };
+            tap.push (ch, 2, 512);
+            pulled += tap.pull (got.data() + pulled, 512 * 40 - pulled);
+        }
+        float pk = 0; for (int i = 0; i < pulled; ++i) pk = juce::jmax (pk, std::abs (got[(size_t) i]));
+        check (std::abs (pk - 0.5f) < 0.01f && tap.usedChannel.load() == 0, "guide input: guitar on input 1 of 2 comes in at full level (" + juce::String (pk, 3) + ")");
+        // the guitar moves to input 2: follows it
+        for (int b = 0; b < 40; ++b)
+        {
+            for (int i = 0; i < 512; ++i) { in2[(size_t) i] = 0.5f * std::sin (0.05f * (b * 512 + i)); in1[(size_t) i] = 0.001f * (r3.nextFloat() - 0.5f); }
+            const float* ch[] { in1.data(), in2.data() };
+            tap.push (ch, 2, 512);
+            tap.pull (got.data(), 512 * 40);
+        }
+        check (tap.usedChannel.load() == 1, "guide input: follows the guitar to input 2");
+        // nobody reads: overflow is flagged
+        for (int b = 0; b < 5000; ++b) { const float* ch[] { in1.data(), in2.data() }; tap.push (ch, 2, 512); }
+        check (tap.overflow.load(), "guide input: a full buffer is flagged (the note is asked again)");
     }
 
     // ---- GUI snapshot
