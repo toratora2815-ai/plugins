@@ -497,6 +497,7 @@ int main (int argc, char** argv)
                                                   { 1.6, juce::MidiMessage::noteOff (1, 45) }, { 1.6, juce::MidiMessage::noteOff (1, 52) } }; };
         setP (proc, "revMix", 0.0f);
         setP (proc, "strumOn", 0);   // these compare pedal sounds, not strums
+        setP (proc, "ampOn", 0); setP (proc, "cabOn", 0);   // the pedals alone (the amp would distort the clean sound too)
         auto clean = render (proc, riff(), 2.0, sr);
         setP (proc, "pdOn", 1); setP (proc, "pdGain", 6);
         render (proc, {}, 0.05, sr);
@@ -511,6 +512,7 @@ int main (int argc, char** argv)
         auto crest = [&] (const juce::AudioBuffer<float>& b) { return juce::Decibels::gainToDecibels (b.getMagnitude (0, (int) (0.1 * sr), (int) (0.8 * sr)) / b.getRMSLevel (0, (int) (0.1 * sr), (int) (0.8 * sr))); };
         check (crest (drv) < crest (clean) - 1.0f && crest (fz) < crest (clean) - 1.0f, "drive / fuzz squash the peaks (crest clean " + juce::String (crest (clean), 1)
                + " dB, drive " + juce::String (crest (drv), 1) + ", fuzz " + juce::String (crest (fz), 1) + ")");
+        setP (proc, "ampOn", 1); setP (proc, "cabOn", 1);
         // after switching both off again the sound is the same as before (timing included)
         double diff = 0, ref = 0;
         for (int i = (int) (0.05 * sr); i < (int) (1.5 * sr); ++i) { ref += std::pow (clean.getSample (0, i), 2); }
@@ -726,6 +728,43 @@ int main (int argc, char** argv)
             check (d > -6.0, "down then up (legato): the up-stroke's top string keeps ringing (" + juce::String (d, 1) + " dB vs alone)");
         }
 
+        // a chord played by hand: the notes come 0-20 ms apart (low to high) -> still a strum
+        {
+            sc.clear(); proc.scoreEdited();
+            auto rolled = [&] (double beat)
+            {
+                std::vector<BeatEv> ev;
+                for (int k = 0; k < 6; ++k)
+                {
+                    const double b = beat + (k * 0.004) * 2.0;   // 4 ms apart at 120 bpm (1 beat = 0.5 s)
+                    ev.push_back ({ b, juce::MidiMessage::noteOn (1, chord[k], (juce::uint8) 100) });
+                    ev.push_back ({ beat + 1.2, juce::MidiMessage::noteOff (1, chord[k]) });
+                }
+                return ev;
+            };
+            hits.clear();
+            renderHost (proc, head, rolled (1.0), 0.0, 3.0, sr);
+            juce::String rTxt; auto rHits = orderOf (rTxt);
+            double minGap = 1e9;
+            for (size_t k = 1; k < rHits.size(); ++k) minGap = juce::jmin (minGap, (rHits[k].at - rHits[k - 1].at) / sr * 1000.0);
+            check (rHits.size() == 6 && isDown (rHits) && minGap > 4.5, "hand-played chord (notes 4 ms apart): strummed down, strings at least "
+                   + juce::String (minGap, 1) + " ms apart (" + rTxt + ")");
+            hits.clear();
+            renderHost (proc, head, rolled (1.5), 0.0, 3.0, sr);
+            juce::String uTxt; auto uHits = orderOf (uTxt);
+            double uGap = 1e9;
+            for (size_t k = 1; k < uHits.size(); ++k) uGap = juce::jmin (uGap, (uHits[k].at - uHits[k - 1].at) / sr * 1000.0);
+            // (the top-strings rule needs the whole chord; a hand-played one arrives low string first, so all of it sounds, spread)
+            check (uHits.size() >= 4 && uGap > 3.0 && takesMatch (uHits.size() > 1 ? std::vector<Hit> (uHits.begin() + 1, uHits.end()) : uHits, 1),
+                   "hand-played chord on the 'and': spread with up takes (" + uTxt + ")");
+            hits.clear();
+            // two separate single notes 60 ms apart are not a chord
+            renderHost (proc, head, { { 1.0, juce::MidiMessage::noteOn (1, 64, (juce::uint8) 100) }, { 1.12, juce::MidiMessage::noteOn (1, 67, (juce::uint8) 100) },
+                                      { 1.5, juce::MidiMessage::noteOff (1, 64) }, { 1.5, juce::MidiMessage::noteOff (1, 67) } }, 0.0, 3.0, sr);
+            juce::String sTxt; auto sHits = orderOf (sTxt);
+            check (sHits.size() == 2 && std::abs ((sHits[1].at - sHits[0].at) / sr * 1000.0 - 60.0) < 1.0, "notes 60 ms apart stay where they are (" + sTxt + ")");
+        }
+
         // brushing stops the ringing chord
         {
             sc.clear(); proc.scoreEdited();
@@ -760,7 +799,7 @@ int main (int argc, char** argv)
         GuidePanel guide (gp);
         guide.baseDir = outDir.getChildFile ("guide");
         guide.baseDir.deleteRecursively();
-        juce::Random r2 (99);
+        juce::Random r2 (getenv ("GSEED") ? juce::String (getenv ("GSEED")).getLargeIntValue() : 99);
         const double gsr = 44100.0;
         std::vector<float> stream;
         auto pluck = [&] (int note, float level, double len, float cents = 0.0f)
@@ -787,7 +826,13 @@ int main (int argc, char** argv)
         };
 
         guide.start (Kit::slotSoft);
-        check (guide.isRunning() && ! guide.isWaitingForCapo(), "guide starts at capo 0, string 6, down");
+        silence (0.3);
+        check (guide.isRunning() && guide.isTuning(), "guide starts with the tuning check");
+        // tuning: string 6 is 40 cents sharp -> asked again; then all six in tune
+        pluck (Kit::kOpen[6], 0.2f, 2.5, 40.0f); feed();
+        check (guide.isTuning() && guide.statusText().contains (juce::String (juce::CharPointer_UTF8 (u8"セント高い"))), "tuning check: a string 40 cents sharp is caught (" + guide.statusText() + ")");
+        for (int str = 6; str >= 1; --str) { pluck (Kit::kOpen[str], 0.2f, 2.5, 5.0f); feed(); }
+        check (! guide.isTuning() && guide.stepIndex() == 0, "tuning check passes when every string is within 20 cents");
         const auto steps = Guide::buildSteps (Kit::slotSoft);
         int mistakesStopped = 0, capoNoise = 0, reasonsOk = 0;
         auto reasonHas = [&] (const char* utf8) { if (guide.statusText().contains (juce::String (juce::CharPointer_UTF8 (utf8)))) ++reasonsOk; };
@@ -809,6 +854,17 @@ int main (int argc, char** argv)
                 pluck (want, 0.2f, 0.06); stream.resize (stream.size() - (size_t) (1.0 * gsr));
                 pluck (want, 0.2f, len); feed();
                 if (guide.stepIndex() == 6) ++mistakesStopped; reasonHas (u8"2 回"); if (getenv ("DBG")) std::cout << "    [twice] index " << guide.stepIndex() << " status " << guide.statusText() << std::endl;
+            }
+            if (i == 10)                                                                                             // sympathetic ringing (-20 dB): fine, a warning
+            {
+                const size_t at = stream.size();
+                pluck (want, 0.2f, len);
+                std::vector<float> ring ((size_t) (len * gsr), 0.0f);
+                addPluck (ring, 0, gsr, noteHz (steps[i - 1].expectedNote()), 0.02f, len, 3.0, false, r2);
+                for (size_t k = 0; k < ring.size(); ++k) stream[at + k] += ring[k];
+                feed();
+                check (guide.stepIndex() == 11, "sympathetic ringing (-20 dB) is accepted (" + guide.statusText() + ")");
+                continue;
             }
             if (i == 8)                                                                                              // the previous string still ringing
             {
@@ -843,6 +899,7 @@ int main (int argc, char** argv)
         // one note again (right-click in the table): 5th string, 7th fret, down + up
         guide.startSingle (Kit::slotSoft, 5, 7);
         stream.clear(); fed = 0;
+        silence (0.3);
         pluck (Kit::kOpen[5] + 7, 0.2f, 3.0); feed();
         if (getenv ("DBG")) std::cout << "    [single 1] index " << guide.stepIndex() << " status " << guide.statusText() << std::endl;
         pluck (Kit::kOpen[5] + 7, 0.2f, 3.0); silence (0.5);
@@ -852,10 +909,129 @@ int main (int argc, char** argv)
         int at7 = 0;
         for (auto& smp : kit->samples) if (smp.slot == Kit::slotSoft && smp.string == 5 && smp.fret == 7) ++at7;
         check (guide.isFinished() && at7 == 2, "one note again: 5th string 7th fret added (down + up)");
+
+        // mains hum on the input: recorded anyway, with a warning
+        guide.startSingle (Kit::slotSoft, 4, 2);
+        stream.clear(); fed = 0;
+        silence (1.0);   // the hum is there before anything is played
+        pluck (Kit::kOpen[4] + 2, 0.2f, 3.0); pluck (Kit::kOpen[4] + 2, 0.2f, 3.0); silence (0.5);
+        for (size_t i = 0; i < stream.size(); ++i) stream[i] += 0.006f * std::sin (2.0 * 3.14159265 * 50.0 * i / gsr);   // -30 dB under the note
+        feed();
+        if (getenv ("DBG"))
+        {
+            Guide::TakeDetector td; td.prepare (gsr, false);
+            td.feed (stream.data(), (int) stream.size());
+            std::cout << "    [hum detector] takes " << td.finished.size() << " recording " << (int) td.isRecording() << " floor " << td.noiseFloorDb() << " :";
+            for (auto& t : td.finished) std::cout << " " << t.size() / gsr << "s";
+            std::cout << std::endl;
+        }
+        if (getenv ("DBG")) std::cout << "    [hum] index " << guide.stepIndex() << " finished " << (int) guide.isFinished() << " status " << guide.statusText()
+                                      << " warnings " << guide.warningList().joinIntoString (" | ") << std::endl;
+        check (guide.isFinished() && guide.warningList().joinIntoString (" ").contains (juce::String (juce::CharPointer_UTF8 (u8"ハム"))),
+               "mains hum (50 Hz): recorded, with a warning");
+        // a long low E that beats (T60 15 s, 0.3 Hz, ~4 dB): one take, kept long, not cut into pieces
+        {
+            guide.startSingle (Kit::slotSoft, 6, 0);
+            stream.clear(); fed = 0;
+            silence (0.5);
+            auto longNote = [&] (bool up)
+            {
+                const size_t at = stream.size();
+                const double len = 12.0;
+                stream.resize (at + (size_t) ((len + 1.0) * gsr), 0.0f);
+                std::vector<float> tmp ((size_t) (len * gsr), 0.0f);
+                addPluck (tmp, 0, gsr, noteHz (40), 0.25f, len, 15.0 / 6.9, up, r2);
+                for (size_t k = 0; k < tmp.size(); ++k)
+                    stream[at + k] += tmp[k] * (1.0f + 0.25f * (float) std::sin (2.0 * 3.14159265 * 0.3 * k / gsr));
+            };
+            longNote (false);
+            if (getenv ("DBG"))
+            {
+                Guide::TakeDetector td; td.prepare (gsr, false);
+                td.feed (stream.data(), (int) stream.size());
+                std::cout << "    [long] takes " << td.finished.size() << " recording " << (int) td.isRecording() << " :";
+                for (auto& t : td.finished) std::cout << " " << t.size() / gsr << "s";
+                std::cout << std::endl;
+            }
+            feed();
+            const int afterFirst = guide.stepIndex();
+            if (getenv ("DBG")) std::cout << "    [long] after first: index " << afterFirst << " status " << guide.statusText() << std::endl;
+            if (getenv ("DBG"))
+            {
+                const size_t a0 = stream.size();
+                longNote (true);
+                std::vector<float> tk (stream.begin() + (long) a0, stream.begin() + (long) (a0 + (size_t) (0.3 * gsr)));
+                const int fr = (int) (gsr * 0.005);
+                std::cout << "    [long up hf]";
+                for (int i = 2; i + fr <= (int) tk.size(); i += fr)
+                {
+                    double e = 0; for (int k = 0; k < fr; ++k) { const float d = tk[(size_t) (i + k)] - 2.0f * tk[(size_t) (i + k - 1)] + tk[(size_t) (i + k - 2)]; e += d * d; }
+                    std::cout << " " << juce::roundToInt (10.0 * std::log10 (e / fr + 1e-16));
+                }
+                std::cout << std::endl;
+                silence (0.5); feed();
+            }
+            else { longNote (true); silence (0.5); feed(); }
+            int lowE = 0; double shortest = 1e9;
+            if (auto k2 = gp.getKit())
+                for (auto& smp : k2->samples)
+                    if (smp.slot == Kit::slotSoft && smp.string == 6 && smp.fret == 0) { ++lowE; shortest = juce::jmin (shortest, smp.audio.getNumSamples() / smp.sampleRate); }
+            if (getenv ("DBG"))
+            {
+                std::cout << "    [long] finished " << (int) guide.isFinished() << " index " << guide.stepIndex() << " status " << guide.statusText() << " :";
+                if (auto k2 = gp.getKit()) for (auto& smp : k2->samples) if (smp.slot == Kit::slotSoft && smp.string == 6 && smp.fret == 0)
+                    std::cout << " " << (smp.up ? "up " : "down ") << smp.audio.getNumSamples() / smp.sampleRate << "s";
+                std::cout << std::endl;
+            }
+            check (afterFirst == 1 && guide.isFinished() && lowE == 2 && shortest > 8.0, "a long, beating low E is one take each (down then up), "
+                   + juce::String (shortest, 1) + " s long (" + juce::String (lowE) + " takes)");
+        }
+
+        // a high note 15 cents sharp with the previous string ringing along at -40 dB: accepted
+        {
+            guide.startSingle (Kit::slotSoft, 1, 15);
+            stream.clear(); fed = 0;
+            silence (0.5);
+            for (int k = 0; k < 2; ++k)
+            {
+                const size_t at = stream.size();
+                pluck (Kit::kOpen[1] + 15, 0.2f, 2.5, 15.0f);
+                std::vector<float> ring ((size_t) (2.5 * gsr), 0.0f);
+                addPluck (ring, 0, gsr, noteHz (Kit::kOpen[2] + 15), 0.002f, 2.5, 3.0, false, r2);
+                for (size_t i = 0; i < ring.size(); ++i) stream[at + i] += ring[i];
+                feed();
+            }
+            silence (0.5); feed();
+            check (guide.isFinished(), "high G5 15 cents sharp with a -40 dB ring of the next string: accepted (" + guide.statusText() + ")");
+            check (! guide.warningList().joinIntoString (" ").contains (juce::String (juce::CharPointer_UTF8 (u8"ハム"))), "... and no false hum warning");
+        }
+
         // PALM MUTE (short notes) and BRUSHING (noise strokes) go through too
         {
+            if (getenv ("DBG"))
+            {
+                for (int up = 0; up < 2; ++up)
+                {
+                    std::vector<float> tmp ((size_t) (0.8 * gsr), 0.0f);
+                    juce::Random rdbg (11);
+                    addPluck (tmp, (int) (0.015 * gsr), gsr, noteHz (40), 0.2f, 0.45, 0.07, up == 1, rdbg);
+                    juce::AudioBuffer<float> bb (1, (int) tmp.size());
+                    for (size_t i = 0; i < tmp.size(); ++i) bb.setSample (0, (int) i, tmp[i]);
+                    auto rr = Kit::slice (bb, gsr, Kit::slotMute);
+                    std::cout << "    [mute slice " << up << "] notes " << rr.samples.size() << " unpitched " << rr.unpitched << " msg " << rr.message;
+                    for (auto& sm : rr.samples) std::cout << " len " << sm.audio.getNumSamples() / sm.sampleRate << " note " << sm.rootNote;
+                    std::cout << std::endl;
+                }
+            }
+            guide.debugTakes = getenv ("DBG") != nullptr;
             guide.start (Kit::slotMute);
             stream.clear(); fed = 0;
+            silence (0.3);
+            for (int str = 6; str >= 1; --str)   // tuning check
+            {
+                pluck (Kit::kOpen[str], 0.2f, 2.0); feed();
+                if (getenv ("DBG")) std::cout << "    [mute tuning " << str << "] tuning " << (int) guide.isTuning() << " status " << guide.statusText() << std::endl;
+            }
             const auto ms = Guide::buildSteps (Kit::slotMute);
             for (size_t i = 0; i < ms.size(); ++i)
             {
@@ -866,6 +1042,7 @@ int main (int argc, char** argv)
                 addPluck (tmp, 0, gsr, noteHz (ms[i].expectedNote()), 0.2f, 0.45, 0.07, ms[i].up, r2);
                 for (size_t k = 0; k < tmp.size(); ++k) stream[at + k] += tmp[k];
                 feed();
+                if (getenv ("DBG") && i < 4) std::cout << "    [mute " << i << "] index " << guide.stepIndex() << " status " << guide.statusText() << std::endl;
             }
             silence (0.5); feed();
             check (guide.isFinished(), "PALM MUTE layer: " + juce::String (guide.stepIndex()) + " / " + juce::String ((int) ms.size()) + " short notes accepted ("
@@ -873,6 +1050,7 @@ int main (int argc, char** argv)
 
             guide.start (Kit::slotBrush);
             stream.clear(); fed = 0;
+            silence (0.3);
             for (int k = 0; k < 8; ++k)
             {
                 const size_t at = stream.size();
@@ -909,6 +1087,45 @@ int main (int argc, char** argv)
             holder.removeAllChildren();
         }
         guide.stop();
+    }
+
+    // ---- AMP / CAB on and off while a note rings: no click (2nd difference vs the steady sound around it)
+    {
+        FXChain ch; FXParams fp; fp.revMix = 0.0f; fp.compOn = false; fp.drvOn = false; fp.ampChannel = 1; fp.cabOn = true;
+        ch.prepare (48000.0, 256);
+        const int total = 48000;
+        juce::AudioBuffer<float> b (2, total);
+        for (int i = 0; i < total; ++i) { const float v = 0.2f * (float) std::sin (2.0 * 3.14159265 * 110.0 * i / 48000.0); b.setSample (0, i, v); b.setSample (1, i, v); }
+        for (int pos = 0; pos < total; pos += 256)
+        {
+            fp.ampOn = ! (pos >= 12288 && pos < 24576);
+            fp.cabOn = ! (pos >= 30720 && pos < 38912);
+            juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, 256);
+            ch.process (blk, 256, fp);
+        }
+        auto bend = [&] (int a, int e) { float m = 0; for (int i = juce::jmax (2, a); i < e; ++i) m = juce::jmax (m, std::abs (b.getSample (0, i) - 2.0f * b.getSample (0, i - 1) + b.getSample (0, i - 2))); return m; };
+        const float steady = juce::jmax (bend (4000, 12000), juce::jmax (bend (14000, 24000), bend (26000, 30000)));
+        float sw = 0;
+        for (int at : { 12288, 24576, 30720, 38912 }) sw = juce::jmax (sw, bend (at - 50, at + 900));
+        check (sw < steady * 3.0f, "AMP / CAB switched while playing: no click (" + juce::String (sw, 4) + " vs steady " + juce::String (steady, 4) + ")");
+    }
+
+    // ---- latency: the same with the amp on or off (an impulse through the chain lands at the same place)
+    {
+        auto impulseAt = [&] (bool ampOn)
+        {
+            FXChain ch; FXParams fp; fp.ampOn = ampOn; fp.cabOn = false; fp.revMix = 0.0f; fp.compOn = false; fp.drvOn = false;
+            fp.ampChannel = 0; fp.ampGain = 0.0f;
+            ch.prepare (48000.0, 256);
+            juce::AudioBuffer<float> b (2, 256);
+            b.clear(); b.setSample (0, 10, 0.01f); b.setSample (1, 10, 0.01f);
+            ch.process (b, 256, fp);
+            int at = 0; float mx = 0;
+            for (int i = 0; i < 256; ++i) if (std::abs (b.getSample (0, i)) > mx) { mx = std::abs (b.getSample (0, i)); at = i; }
+            return std::make_pair (at - 10, ch.getLatencySamples());
+        };
+        const auto off = impulseAt (false);
+        check (off.first == off.second, "AMP off: the delay (" + juce::String (off.first) + ") matches the reported latency (" + juce::String (off.second) + ")");
     }
 
     // ---- RECORD GUIDE input: a 2-input interface with the guitar on input 1 only

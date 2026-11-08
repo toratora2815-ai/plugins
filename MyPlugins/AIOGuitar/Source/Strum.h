@@ -116,6 +116,7 @@ public:
         for (auto& d : dropped) for (auto& v : d) v = false;
         for (auto& v : upForDelayed) v = -1;
         for (auto& v : origPpq) v = -1.0;
+        group.active = false;
     }
 
 private:
@@ -162,13 +163,48 @@ private:
         }
     }
 
+    // play one note of the strum: now, or queued `delay` samples later
+    void playStrung (int pos, int ch, int nn, int vel, int k, int dir, int delay, double ppq, GuitarSynth& synth)
+    {
+        const float gainDb = -1.0f * (float) k - (dir == 1 ? 2.5f : 0.0f);
+        const int v = juce::jlimit (1, 127, (int) std::lround (vel * juce::Decibels::decibelsToGain (gainDb)));
+        synth.strumUpForNote[nn] = -1;   // set when the note actually starts (below / queue)
+        origPpq[nn] = ppq;
+        auto on = juce::MidiMessage::noteOn (ch, nn, (juce::uint8) v);
+        if (delay <= 0)
+        {
+            pullOffBefore (ch, nn, clock + pos, true, pos);
+            synth.strumUpForNote[nn] = dir;
+            out.addEvent (on, pos);
+            delayOf[ch - 1][nn] = -1;
+        }
+        else
+        {
+            pullOffBefore (ch, nn, clock + pos + delay, false, pos);
+            upForDelayed[nn] = dir;
+            enqueue (clock + pos + delay, on);
+            delayOf[ch - 1][nn] = delay;
+        }
+        group.last = juce::jmax (group.last, clock + pos + juce::jmax (0, delay));
+    }
+
     void emitChord (int pos, const int* notes, const int* vel, const int* chs, int count, const Settings& set, GuitarSynth& synth,
                     const Score::ApplyTable* table, bool havePpq, double ppq0, double ppqPerSample, bool tableIsScore)
     {
         const double ppq = havePpq ? ppq0 + pos * ppqPerSample : -1.0;
+        const juce::int64 t = clock + pos;
         for (int i = 0; i < count; ++i) keyDirFor[notes[i]] = pendingDir;
+
+        // a chord played by hand reaches us a few ms apart: notes within 25 ms join the strum that has begun
+        if (set.on && group.active && t > group.t0 && t - group.t0 < (juce::int64) (0.025 * sr))
+        {
+            joinGroup (pos, notes, vel, chs, count, synth);
+            return;
+        }
+
         releaseWaitingStrings (pos, synth);
-        if (count < 2 || ! set.on)   // a single note, or STRUM off: as it is
+        group.active = false;
+        if (! set.on)   // STRUM off: as it is
         {
             for (int i = 0; i < count; ++i)
             {
@@ -205,6 +241,11 @@ private:
         // stronger = a little faster
         const float speed = (dir == 0 ? set.msPerString : set.msPerString * 0.7f) * (1.15f - 0.3f * strongest);
 
+        group = {};
+        group.active = true; group.t0 = t; group.last = t; group.dir = dir; group.maxUp = maxUp;
+        group.speedSamples = speed * 0.001f * (float) sr;
+        group.humanize = set.humanize; group.ppq = ppq;
+
         for (int k = 0; k < count; ++k)
         {
             const int i = idx[order[k]];
@@ -216,27 +257,73 @@ private:
                 continue;
             }
             const float jitter = (rng.nextFloat() * 2.0f - 1.0f) * 1.5f * set.humanize;
-            const int delay = k == 0 ? 0 : juce::jmax (0, (int) std::lround ((k * speed + jitter) * 0.001 * sr));
-            const float gainDb = -1.0f * (float) k - (dir == 1 ? 2.5f : 0.0f);
-            const int v = juce::jlimit (1, 127, (int) std::lround (vel[i] * juce::Decibels::decibelsToGain (gainDb)));
-            synth.strumUpForNote[nn] = -1;   // set when the note actually starts (below / queue)
-            origPpq[nn] = ppq;
-            auto on = juce::MidiMessage::noteOn (ch, nn, (juce::uint8) v);
-            if (delay == 0)
-            {
-                pullOffBefore (ch, nn, clock + pos, true, pos);
-                synth.strumUpForNote[nn] = dir;
-                out.addEvent (on, pos);
-            }
-            else
-            {
-                pullOffBefore (ch, nn, clock + pos + delay, false, pos);
-                upForDelayed[nn] = dir;
-                enqueue (clock + pos + delay, on);
-                delayOf[ch - 1][nn] = delay;
-            }
+            const int delay = (count < 2 || k == 0) ? 0 : juce::jmax (0, (int) std::lround ((k * speed + jitter) * 0.001 * sr));
+            playStrung (pos, ch, nn, vel[i], k, dir, delay, ppq, synth);
+            if (count < 2) synth.strumUpForNote[nn] = -1;   // a single note keeps alternating down / up takes
+            if (group.count < 16) group.strings[group.count++] = strs[order[k]];
         }
     }
+
+    // notes arriving shortly after the strum began: placed after the strings already playing, at least one
+    // string's step apart (the first note could not wait for them, so the order is the order they came in)
+    void joinGroup (int pos, const int* notes, const int* vel, const int* chs, int count, GuitarSynth& synth)
+    {
+        const juce::int64 t = clock + pos;
+        int idx[16];
+        for (int i = 0; i < count; ++i) idx[i] = i;
+        std::sort (idx, idx + count, [&] (int a, int b) { return group.dir == 0 ? notes[a] < notes[b] : notes[a] > notes[b]; });
+        for (int j = 0; j < count; ++j)
+        {
+            const int i = idx[j];
+            const int nn = notes[i], ch = juce::jlimit (1, 16, chs[i]);
+            int str = 0;
+            synth.predictStrings (&nn, 1, &ch, &str);
+            for (int g = 0; g < group.count; ++g)   // a string already in this strum: the nearest free one that has the note
+                if (group.strings[g] == str)
+                {
+                    int best = 0;
+                    for (int d = 1; d <= 5 && best == 0; ++d)
+                        for (int cand : { str - d, str + d })
+                            if (cand >= 1 && cand <= 6 && best == 0)
+                            {
+                                const int f = StringAllocator::fretOn (cand, nn);
+                                bool used = false;
+                                for (int h = 0; h < group.count; ++h) used = used || group.strings[h] == cand;
+                                if (f >= 0 && f <= kMaxFret && ! used) best = cand;
+                            }
+                    if (best > 0) str = best;
+                    break;
+                }
+            if (group.dir == 1)   // up-stroke: is it among the top strings of the chord?
+            {
+                int higher = 0;
+                for (int g = 0; g < group.count; ++g) if (group.strings[g] < str) ++higher;
+                if (higher >= group.maxUp)
+                {
+                    dropped[ch - 1][nn] = true;
+                    if (onDroppedNoteOn) onDroppedNoteOn (ch, nn, vel[i], group.ppq, str, keyDirFor[nn]);
+                    continue;
+                }
+            }
+            const float jitter = (rng.nextFloat() * 2.0f - 1.0f) * 1.5f * group.humanize * 0.001f * (float) sr;
+            // at most 8 ms apart: with a slow STRUM setting, quick single notes must not be pushed late
+            const float step = juce::jmin (group.speedSamples, 0.008f * (float) sr);
+            const juce::int64 at = juce::jmax (t, group.last + (juce::int64) std::llround (step + jitter));
+            playStrung (pos, ch, nn, vel[i], group.count, group.dir, (int) (at - t), group.ppq, synth);
+            if (group.count < 16) group.strings[group.count++] = str;
+        }
+    }
+
+    struct Group
+    {
+        bool active = false;
+        juce::int64 t0 = 0, last = 0;
+        int dir = 0, maxUp = 4, count = 0;
+        int strings[16] {};
+        float speedSamples = 0.0f, humanize = 0.0f;
+        double ppq = -1.0;
+    };
+    Group group;
 
 private:
     double sr = 44100.0;

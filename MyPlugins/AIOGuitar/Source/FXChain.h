@@ -46,6 +46,11 @@ public:
                 2, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false);
         os->initProcessing ((size_t) maxBlock);
         osFs = fs * 4.0;
+        for (auto& d : bypassDelay) d.assign ((size_t) getLatencySamples() + 1, 0.0f);   // AMP off keeps the same latency
+        bypassPos = 0;
+        dryBuf.setSize (2, maxBlock);
+        ampMix.reset (fs, 0.015); cabMix.reset (fs, 0.015);
+        ampFirst = true;
 
         drvDC.prepare (osFs);
         ampDC.prepare (osFs);
@@ -84,6 +89,12 @@ public:
             for (auto* sv : { &drvGainS, &drvLevelS, &ampPreS, &ampMasterS, &outS, &makeupS })
                 sv->setCurrentAndTargetValue (sv->getTargetValue());
             firstBlock = false;
+        }
+        if (ampFirst)   // start where the switches are, without a fade
+        {
+            ampMix.setCurrentAndTargetValue ((p.drvOn || p.ampOn) ? 1.0f : 0.0f);
+            cabMix.setCurrentAndTargetValue (p.cabOn ? 1.0f : 0.0f);
+            ampFirst = false;
         }
 
         comp.setThreshold (p.compThresh);
@@ -145,9 +156,34 @@ private:
         }
         else makeupS.skip (n);
 
-        // ---- Drive + Amp (oversampled)
-        if (p.drvOn || p.ampOn)
+        // ---- Drive + Amp (oversampled). The way around it is delayed by the same amount (the reported latency
+        // is always right) and kept running, so switching AMP on / off is a 15 ms crossfade, not a click
+        const bool ampWanted = p.drvOn || p.ampOn;
+        ampMix.setTargetValue (ampWanted ? 1.0f : 0.0f);
+        const bool runAmp = ampWanted || ampMix.isSmoothing();
+        const bool blendAmp = ampMix.isSmoothing() || ! ampWanted;
+        if (blendAmp)
         {
+            const int lat = getLatencySamples();
+            const int len = lat + 1;
+            int q = bypassPos;
+            for (int i = 0; i < n; ++i)
+            {
+                bypassDelay[0][(size_t) q] = L[i]; dryBuf.setSample (0, i, lat > 0 ? bypassDelay[0][(size_t) ((q + 1) % len)] : L[i]);
+                bypassDelay[1][(size_t) q] = R[i]; dryBuf.setSample (1, i, lat > 0 ? bypassDelay[1][(size_t) ((q + 1) % len)] : R[i]);
+                q = (q + 1) % len;
+            }
+            bypassPos = q;
+        }
+        if (runAmp)
+        {
+            if (! ampWasRunning)   // starts again: the amp's own filters from silence (not the cabinet's, which may be playing)
+            {
+                os->reset();
+                for (auto* f : { &drvPre, &drvPre2, &drvTone, &drvPost, &ampIn, &ampBright, &c1HP, &c1LP, &c2HP, &c2LP, &c3LP, &bass, &mid, &treble, &presence, &pwrLP })
+                    f->reset();
+                drvDC.reset(); ampDC.reset();
+            }
             auto up = os->processSamplesUp (block);
             const int un = (int) up.getNumSamples();
             float* ch[2] = { up.getChannelPointer (0), up.getChannelPointer (1) };
@@ -165,7 +201,7 @@ private:
                 {
                     float x = ch[c][i];
                     if (p.drvOn) x = drivePedal (x, c, p.drvType, dg) * dl;
-                    if (p.ampOn) x = ampSection (x, c, p.ampChannel, pre) * mst;
+                    if (p.ampOn || ! ampWanted) x = ampSection (x, c, p.ampChannel, pre) * mst;   // fading out: the amp as it was
                     ch[c][i] = x;
                 }
             }
@@ -175,17 +211,34 @@ private:
         {
             drvGainS.skip (n); drvLevelS.skip (n); ampPreS.skip (n); ampMasterS.skip (n);
         }
-
-        // ---- Cabinet
-        if (p.cabOn)
+        ampWasRunning = runAmp;
+        if (blendAmp)
         {
+            for (int i = 0; i < n; ++i)
+            {
+                const float m = ampMix.getNextValue();
+                L[i] = (runAmp ? L[i] * m : 0.0f) + dryBuf.getSample (0, i) * (1.0f - m);
+                R[i] = (runAmp ? R[i] * m : 0.0f) + dryBuf.getSample (1, i) * (1.0f - m);
+            }
+        }
+        else ampMix.skip (n);
+
+        // ---- Cabinet (crossfaded on / off as well)
+        cabMix.setTargetValue (p.cabOn ? 1.0f : 0.0f);
+        if (p.cabOn || cabMix.isSmoothing())
+        {
+            const bool fading = cabMix.isSmoothing();
+            if (! cabWasRunning) for (auto& f : cab) f.reset();
             for (int i = 0; i < n; ++i)
             {
                 float l = L[i], r = R[i];
                 for (int k = 0; k < numCab; ++k) { l = cab[(size_t) k].process (l, 0); r = cab[(size_t) k].process (r, 1); }
+                if (fading) { const float m = cabMix.getNextValue(); l = l * m + L[i] * (1.0f - m); r = r * m + R[i] * (1.0f - m); }
                 L[i] = l; R[i] = r;
             }
+            cabWasRunning = true;
         }
+        else { cabMix.skip (n); cabWasRunning = false; }
 
         // ---- Reverb
         if (p.revMix > 0.001f)
@@ -373,6 +426,11 @@ private:
     DCBlocker drvDC, ampDC;
     Biquad ampIn, ampBright, c1HP, c1LP, c2HP, c2LP, c3LP, bass, mid, treble, presence, pwrLP;
     std::array<Biquad, 10> cab;
+    std::vector<float> bypassDelay[2];
+    int bypassPos = 0;
+    juce::AudioBuffer<float> dryBuf;
+    juce::SmoothedValue<float> ampMix, cabMix;
+    bool ampWasRunning = false, cabWasRunning = false, ampFirst = true;
     int numCab = 0;
 
     juce::SmoothedValue<float> drvGainS, drvLevelS, ampPreS, ampMasterS, outS, makeupS;

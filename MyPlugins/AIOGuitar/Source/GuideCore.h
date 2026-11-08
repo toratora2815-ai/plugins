@@ -124,7 +124,8 @@ public:
         frame = juce::jmax (1, (int) (sr * 0.005));
         pre.assign ((size_t) (sr * 0.015), 0.0f);   // 15 ms before the pick (the slicer adds its own fade-in)
         prePos = 0; acc = 0; accN = 0;
-        recording = false; take.clear(); env.clear();
+        recording = false; take.clear(); env.clear(); envS.clear(); pw.clear(); hf.clear();
+        x1 = x2 = 0.0f; hfAcc = 0; hfPeak = -200.0f; floorAtStart = -90.0f;
         floorDb = -90.0f; quietFrames = 0;
         finished.clear();
     }
@@ -137,7 +138,14 @@ public:
             pre[(size_t) prePos] = v; prePos = (prePos + 1) % (int) pre.size();
             if (recording) take.push_back (v);
             acc += v * v; ++accN;
-            if (accN >= frame) { onFrame ((float) (10.0 * std::log10 (acc / accN + 1e-14))); acc = 0; accN = 0; }
+            const float d2 = v - 2.0f * x1 + x2;   // 2nd difference: the pick's click, not the string's body
+            x2 = x1; x1 = v;
+            hfAcc += d2 * d2;
+            if (accN >= frame)
+            {
+                onFrame ((float) (10.0 * std::log10 (acc / accN + 1e-14)), (float) (10.0 * std::log10 (hfAcc / accN + 1e-16)));
+                acc = 0; hfAcc = 0; accN = 0;
+            }
         }
     }
 
@@ -146,12 +154,22 @@ public:
     std::deque<std::vector<float>> finished;   // takes ready to judge
 
 private:
-    void onFrame (float db)
+    void onFrame (float db, float hfDb)
     {
         env.push_back (db);
         if (env.size() > 200) env.pop_front();   // 1 s of history
+        hf.push_back (hfDb);
+        if (hf.size() > 200) hf.pop_front();
+        // 30 ms average (in power): 5 ms frames follow the waveform of 50 Hz hum / low strings, this does not
+        pw.push_back (std::pow (10.0f, db * 0.1f));
+        if (pw.size() > 6) pw.pop_front();
+        float m = 0; for (auto v : pw) m += v;
+        envS.push_back (10.0f * std::log10 (m / (float) pw.size() + 1e-14f));
+        if (envS.size() > 200) envS.pop_front();
         const int nEnv = (int) env.size();
-        float minPrev = nEnv < 11 ? -200.0f : db;   // no history yet = silence before
+        // the first 60 ms only learn the noise floor (hum present from the start is not a pick)
+        if (! recording && nEnv <= 12) { floorDb = juce::jmin (floorDb < -89.0f ? db : floorDb, db); return; }
+        float minPrev = db;
         for (int k = 2; k <= 11 && k <= nEnv; ++k) minPrev = juce::jmin (minPrev, env[(size_t) (nEnv - k)]);
         float maxPrev = -200.0f;
         for (int k = 12; k <= 60 && k <= nEnv; ++k) maxPrev = juce::jmax (maxPrev, env[(size_t) (nEnv - k)]);
@@ -161,22 +179,42 @@ private:
 
         if (! recording)
         {
-            // noise floor: follows quiet frames quickly down, slowly up
-            if (! loud) floorDb = db < floorDb ? db : floorDb + 0.02f * (db - floorDb);
+            // noise floor (hum included): follows the level quickly down, slowly up, whenever nothing is being picked
+            if (! attack) floorDb = db < floorDb ? db : floorDb + 0.02f * (db - floorDb);
             if (attack) start();
             return;
         }
 
         sinceStart += 1;
         peakDb = juce::jmax (peakDb, db);
-        // the next pick while this one still rings
-        if (attack && sinceStart > (brush ? 20 : 24) && db > maxPrev - 1.0f)
+        hfPeak = juce::jmax (hfPeak, hfDb);
+        // the next pick while this one still rings: the pick's click (a jump in the highs) AND the level going up.
+        // The level alone is fooled by a long low note (5 ms frames follow its waveform, beating brings it back up)
         {
-            end ((int) take.size() - frame);
-            start();
-            return;
+            const int nH = (int) hf.size(), nS = (int) envS.size();
+            float hfBefore = -200.0f;
+            for (int k = 2; k <= 8 && k <= nH; ++k) hfBefore = juce::jmax (hfBefore, hf[(size_t) (nH - k)]);
+            const bool click = hfDb - hfBefore > 10.0f && hfDb > hfPeak - 15.0f;
+            const bool rises = nS > 7 && envS.back() > envS[(size_t) (nS - 7)] + 2.0f;
+            if (click && rises && sinceStart > (brush ? 20 : 24))
+            {
+                end ((int) take.size() - frame);
+                start();
+                return;
+            }
         }
-        const bool quiet = db < peakDb - 45.0f || db < floorDb + 6.0f;
+        // the note has died into a steady noise floor (hum, amp hiss): 500 ms that hardly change, down near the
+        // noise measured before the pick (a beating note can look flat for a while far above it).
+        // A ringing note keeps falling (a low E loses ~4 dB in 500 ms), so it is not cut
+        bool flat = false;
+        const int nS = (int) envS.size();
+        if (nS >= 100 && envS.back() < peakDb - 20.0f && envS.back() < floorAtStart + 10.0f)
+        {
+            float lo = 200.0f, hi = -200.0f;
+            for (int k = 1; k <= 100; ++k) { lo = juce::jmin (lo, envS[(size_t) (nS - k)]); hi = juce::jmax (hi, envS[(size_t) (nS - k)]); }
+            flat = hi - lo < 1.5f;
+        }
+        const bool quiet = db < peakDb - 45.0f || db < floorDb + 6.0f || flat;
         quietFrames = quiet ? quietFrames + 1 : 0;
         const int maxFrames = (int) ((brush ? 1.5 : 12.0) / 0.005);
         if (quietFrames > 50 || sinceStart > maxFrames || (brush && sinceStart > 60 && quietFrames > 10))
@@ -186,7 +224,8 @@ private:
     void start()
     {
         recording = true;
-        sinceStart = 0; peakDb = -200.0f; quietFrames = 0;
+        sinceStart = 0; peakDb = -200.0f; hfPeak = -200.0f; quietFrames = 0;
+        floorAtStart = floorDb;
         take.clear();
         // 15 ms before the pick
         for (size_t k = 0; k < pre.size(); ++k) take.push_back (pre[(size_t) ((prePos + (int) k) % (int) pre.size())]);
@@ -211,7 +250,9 @@ private:
     double acc = 0;
     float floorDb = -90.0f, peakDb = -200.0f;
     std::vector<float> pre, take;
-    std::deque<float> env;
+    std::deque<float> env, envS, pw, hf;
+    float x1 = 0.0f, x2 = 0.0f, hfPeak = -200.0f, floorAtStart = -90.0f;
+    double hfAcc = 0;
 };
 
 //==============================================================================
@@ -224,6 +265,20 @@ struct Result
     float peakDb = -200.0f;
     bool wrongNote = false;       // pitch says another string / capo position
 };
+
+inline float energyAt (const std::vector<float>& x, int a, int b, double sr, double hz);
+
+// the strongest spot within +-cents of hz (a note 10-20 cents off must still be found)
+inline float energyAround (const std::vector<float>& x, int a, int b, double sr, double hz, double cents = 50.0, int points = 11)
+{
+    float best = -200.0f;
+    for (int k = 0; k < points; ++k)
+    {
+        const double c = -cents + 2.0 * cents * k / juce::jmax (1, points - 1);
+        best = juce::jmax (best, energyAt (x, a, b, sr, hz * std::pow (2.0, c / 1200.0)));
+    }
+    return best;
+}
 
 inline float energyAt (const std::vector<float>& x, int a, int b, double sr, double hz)
 {
@@ -253,6 +308,27 @@ inline Result judge (const std::vector<float>& take, double sr, const Step& st, 
 
     const bool brush = st.slot == Kit::slotBrush;
 
+    // it must start with a pick: the click in the highs within the first 40 ms, well above what came before
+    if (! brush)
+    {
+        const int fr = juce::jmax (1, (int) (sr * 0.005));
+        auto hfAt = [&] (int a0, int b0)
+        {
+            double e = 0; int cnt = 0;
+            for (int i = juce::jmax (2, a0); i < juce::jmin ((int) take.size(), b0); ++i)
+            { const float d = take[(size_t) i] - 2.0f * take[(size_t) (i - 1)] + take[(size_t) (i - 2)]; e += d * d; ++cnt; }
+            return (float) (10.0 * std::log10 (e / juce::jmax (1, cnt) + 1e-16));
+        };
+        const float before = hfAt (0, (int) (0.008 * sr));
+        float pickHf = -200.0f;
+        for (int a0 = (int) (0.008 * sr); a0 < (int) (0.055 * sr); a0 += fr) pickHf = juce::jmax (pickHf, hfAt (a0, a0 + fr));
+        if (pickHf - before < 10.0f)
+        {
+            r.reason = juce::String (juce::CharPointer_UTF8 (u8"弾いた瞬間が取れていません（もう一回）"));
+            return r;
+        }
+    }
+
     // picked twice in a flash (a "flam"): the pick's click comes twice. The click is in the highs
     // (sample-to-sample difference), where a ringing string is quiet; 5 ms frames, 30-200 ms after the first
     if (! brush)
@@ -262,7 +338,13 @@ inline Result judge (const std::vector<float>& take, double sr, const Step& st, 
         for (int i = 1; i + fr <= (int) take.size(); i += fr)
         {
             double e = 0;
-            for (int k = 0; k < fr; ++k) { const float d = take[(size_t) (i + k)] - take[(size_t) (i + k - 1)]; e += d * d; }
+            for (int k = 0; k < fr; ++k)
+            {
+                if (i + k < 2) continue;
+                // 2nd difference: +12 dB/octave, so the pick's click stands far above the string's harmonics
+                const float d = take[(size_t) (i + k)] - 2.0f * take[(size_t) (i + k - 1)] + take[(size_t) (i + k - 2)];
+                e += d * d;
+            }
             hf.push_back ((float) (10.0 * std::log10 (e / fr + 1e-16)));
         }
         int first = -1; float hfPeak = -200.0f;
@@ -272,7 +354,8 @@ inline Result judge (const std::vector<float>& take, double sr, const Step& st, 
             {
                 float before = -200.0f;
                 for (int k = 2; k <= 6; ++k) before = juce::jmax (before, hf[(size_t) (i - k)]);
-                if (hf[(size_t) i] - before > 8.0f && hf[(size_t) i] > hfPeak - 10.0f)
+                // a second pick clicks nearly as hard as the first, and out of a quieter moment
+                if (hf[(size_t) i] - before > 10.0f && hf[(size_t) i] > hfPeak - 6.0f)
                 {
                     r.reason = juce::String (juce::CharPointer_UTF8 (u8"2 回鳴りました（1 回だけ弾いて）"));
                     return r;
@@ -283,10 +366,22 @@ inline Result judge (const std::vector<float>& take, double sr, const Step& st, 
     if (! brush && prevNote >= 0 && prevNote != st.expectedNote() && st.slot != Kit::slotMute)
     {
         const int a = (int) (0.15 * sr), e = (int) (0.6 * sr);
-        const float rel = energyAt (take, a, e, sr, juce::MidiMessage::getMidiNoteInHertz (prevNote))
-                        - energyAt (take, a, e, sr, juce::MidiMessage::getMidiNoteInHertz (st.expectedNote()));
-        if (rel > -24.0f) { r.reason = juce::String (juce::CharPointer_UTF8 (u8"前の弦が鳴っています（ミュートしてからもう一回）")); return r; }
-        if (rel > -32.0f) r.warnings.add (juce::String (juce::CharPointer_UTF8 (u8"前の弦の鳴り残りが少しある音があります")));
+        const float rel = energyAround (take, a, e, sr, juce::MidiMessage::getMidiNoteInHertz (prevNote))
+                        - energyAround (take, a, e, sr, juce::MidiMessage::getMidiNoteInHertz (st.expectedNote()));
+        // nearly as loud as the new note = the previous string was not muted. Quieter = sympathetic ringing
+        // (with a capo every string is open and rings along): only a warning
+        if (rel > -12.0f) { r.reason = juce::String (juce::CharPointer_UTF8 (u8"前の弦が鳴っています（ミュートしてからもう一回）")); return r; }
+        if (rel > -30.0f) r.warnings.add (juce::String (juce::CharPointer_UTF8 (u8"前の弦の鳴り残り（共鳴）が少しある音があります")));
+    }
+
+    // mains hum (50 Hz east / 60 Hz west Japan): below every guitar note, so easy to see. A warning only
+    if (! brush && take.size() > (size_t) (0.7 * sr))
+    {
+        const int a = (int) (0.15 * sr), e = (int) (0.65 * sr);
+        const float note = energyAround (take, a, e, sr, juce::MidiMessage::getMidiNoteInHertz (st.expectedNote()));
+        const float hum = juce::jmax (energyAround (take, a, e, sr, 50.0, 30.0, 5), energyAround (take, a, e, sr, 60.0, 30.0, 5));
+        if (hum - note > -35.0f)
+            r.warnings.add (juce::String (juce::CharPointer_UTF8 (u8"ハム（ブーンという電源の雑音）が入っています。ギターの向きを変える、電源タップから離す、と減ります")));
     }
 
     auto res = Kit::slice (b, sr, st.slot);

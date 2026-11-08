@@ -258,6 +258,33 @@ inline SliceResult slice (const juce::AudioBuffer<float>& in, double sr, int slo
             x[(size_t) i] += in.getSample (c, i) / (float) in.getNumChannels();
     decimateToBelow60k (x, sr);
     len = (int) x.size();
+
+    // pitch is measured on a copy with the mains hum (50 / 60 / 100 Hz) notched out; the audio itself is untouched
+    std::vector<float> xp (x);
+    bool hum = false;
+    if (slot != slotBrush && len > (int) sr)
+    {
+        // only when there is hum: 50 / 60 Hz compared with everything (a clean recording is left as it is)
+        auto band = [&] (double f)
+        {
+            const double w = juce::MathConstants<double>::twoPi * f / sr;
+            double re = 0, im = 0;
+            const int n = juce::jmin (len, (int) (sr * 20.0));
+            for (int i = 0; i < n; ++i) { re += x[(size_t) i] * std::cos (w * i); im -= x[(size_t) i] * std::sin (w * i); }
+            return (re * re + im * im) / ((double) n * n) * 2.0;
+        };
+        double total = 0;
+        for (int i = 0; i < juce::jmin (len, (int) (sr * 20.0)); ++i) total += x[(size_t) i] * x[(size_t) i];
+        total /= juce::jmax (1, juce::jmin (len, (int) (sr * 20.0)));
+        hum = juce::jmax (band (50.0), band (60.0)) > total * 1.0e-4;   // within 40 dB of the whole signal
+    }
+    if (hum)
+        for (double f : { 50.0, 60.0, 100.0 })
+        {
+            juce::dsp::IIR::Filter<float> notch;
+            notch.coefficients = juce::dsp::IIR::Coefficients<float>::makeNotch (sr, f, 20.0f);
+            for (auto& v : xp) v = notch.processSample (v);
+        }
     double mean = 0; for (auto v : x) mean += v; mean /= juce::jmax (1, len);
     for (auto& v : x) v -= (float) mean;
 
@@ -275,22 +302,54 @@ inline SliceResult slice (const juce::AudioBuffer<float>& in, double sr, int slo
     }
     if (peak < -70.0f) { res.message = "The file is silent."; return res; }
 
-    // onsets: a jump of 9 dB within 50 ms, at least 120 ms apart (brushing can be quick)
+    // 30 ms averages (5 ms frames follow the waveform of the low strings) and the highs (2nd difference = the pick's click)
+    std::vector<float> envS ((size_t) nf), hf ((size_t) nf);
+    for (int i = 0; i < nf; ++i)
+    {
+        double p = 0; int c = 0;
+        for (int k = juce::jmax (0, i - 5); k <= i; ++k) { p += std::pow (10.0, env[(size_t) k] * 0.1); ++c; }
+        envS[(size_t) i] = (float) (10.0 * std::log10 (p / c + 1e-14));
+        double e = 0;
+        for (int k = 0; k < fr; ++k)
+        {
+            const int n = i * fr + k;
+            if (n < 2) continue;
+            const float d = x[(size_t) n] - 2.0f * x[(size_t) (n - 1)] + x[(size_t) (n - 2)];
+            e += d * d;
+        }
+        hf[(size_t) i] = (float) (10.0 * std::log10 (e / fr + 1e-16));
+    }
+
+    // onsets: the level climbs (9 dB within 50 ms on the 30 ms average) back near the loudest of the last 0.3 s,
+    // and - unless it starts from near silence - the pick clicks. A ringing note that beats does neither
     const bool brushing = slot == slotBrush;
     const int minGap = brushing ? 24 : 40;
     std::vector<int> onsets;
     int last = -1000;
     if (env[0] > peak - 40.0f) { onsets.push_back (0); last = 0; }
-    for (int i = 10; i < nf; ++i)
+    for (int i = 1; i < nf; ++i)   // from the very start (a take may begin 10 ms before the pick)
     {
-        float minPrev = env[(size_t) (i - 1)];
-        for (int k = 2; k <= 10; ++k) minPrev = juce::jmin (minPrev, env[(size_t) (i - k)]);
-        // a new pick climbs back near the loudest level of the last 0.3 s; string beating
-        // (a dip and recovery inside a ringing note) does not
-        float maxPrev = -200.0f;
-        for (int k = 11; k <= 60 && i - k >= 0; ++k) maxPrev = juce::jmax (maxPrev, env[(size_t) (i - k)]);
-        if (env[(size_t) i] > peak - 40.0f && env[(size_t) i] - minPrev > 9.0f && i - last > minGap
-            && (brushing || env[(size_t) i] > maxPrev - 1.0f))
+        float minPrev = 200.0f, minRaw = 200.0f, maxPrev = -200.0f;
+        for (int k = 1; k <= 10; ++k)
+        {
+            const float vS = i - k >= 0 ? envS[(size_t) (i - k)] : -200.0f, vR = i - k >= 0 ? env[(size_t) (i - k)] : -200.0f;
+            minPrev = juce::jmin (minPrev, vS); minRaw = juce::jmin (minRaw, vR);
+        }
+        for (int k = 11; k <= 60 && i - k >= 0; ++k) maxPrev = juce::jmax (maxPrev, envS[(size_t) (i - k)]);
+        if (! (env[(size_t) i] > peak - 40.0f && i - last > minGap)) continue;
+        const float sNow = envS[(size_t) juce::jmin (nf - 1, i + 2)];
+        bool hit;
+        if (brushing) hit = env[(size_t) i] - minRaw > 9.0f;
+        else if (minPrev < peak - 40.0f)   // from (near) silence: the averaged level jumps
+            hit = sNow - minPrev > 9.0f;
+        else                               // over a ringing note: the pick's click, and the level comes back up
+        {
+            float hfBefore = -200.0f;
+            for (int k = 2; k <= 8 && i - k >= 0; ++k) hfBefore = juce::jmax (hfBefore, hf[(size_t) (i - k)]);
+            const float hfNow = juce::jmax (hf[(size_t) i], i + 1 < nf ? hf[(size_t) (i + 1)] : -200.0f);
+            hit = hfNow - hfBefore > 10.0f && sNow - minPrev > 6.0f && sNow > maxPrev - 1.0f;
+        }
+        if (hit)
         {
             int j = i;
             while (j > 0 && i - j < 10 && env[(size_t) (j - 1)] < env[(size_t) j] - 1.0f) --j;
@@ -322,7 +381,7 @@ inline SliceResult slice (const juce::AudioBuffer<float>& in, double sr, int slo
         s.sampleRate = sr;
         if (! brushing)
         {
-            s.rootHz = detail::measurePitch (x, on, end, sr, slot == slotMute);
+            s.rootHz = detail::measurePitch (xp, on, end, sr, slot == slotMute);
             if (s.rootHz <= 0.0f) { ++res.unpitched; continue; }
             const double midi = 69.0 + 12.0 * std::log2 (s.rootHz / 440.0);
             s.rootNote = (int) std::round (midi);

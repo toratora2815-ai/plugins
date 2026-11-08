@@ -61,7 +61,7 @@ public:
         addAndMakeVisible (inputBox);
         closeButton.onClick = [this] { stop(); if (onClose) onClose(); };
         backButton.onClick = [this] { if (index > 0) { --index; capoWait = false; status = {}; statusColour = GuideUI::dim; refresh(); } };
-        skipButton.onClick = [this] { advance (false); };
+        skipButton.onClick = [this] { if (tuning) { tuning = false; status = {}; refresh(); } else advance (false); };
         pauseButton.onClick = [this] { paused = ! paused; proc.inputTap.active.store (! paused && running); pauseButton.setButtonText (paused ? jp (u8"再開") : jp (u8"一時停止")); refresh(); };
         for (juce::Component* c : std::initializer_list<juce::Component*> { &settingsButton, &closeButton, &backButton, &skipButton, &pauseButton })
             addAndMakeVisible (c);
@@ -81,9 +81,11 @@ public:
     int stepIndex() const { return index; }
     bool isFinished() const { return finished; }
     bool isWaitingForCapo() const { return capoWait; }
+    bool isTuning() const { return tuning; }
     juce::String statusText() const { return status; }
     const juce::StringArray& warningList() const { return warnings; }
     void pump() { timerCallback(); }   // what the timer does
+    bool debugTakes = false;
 
     // a whole layer, in the README order
     void start (int slot)
@@ -145,6 +147,28 @@ public:
             g.setColour (dim);
             juce::String w = warnings.isEmpty() ? jp (u8"気になる点はありませんでした。") : jp (u8"気になる点（録り直さなくても使えます）:\n・") + warnings.joinIntoString (jp (u8"\n・"));
             g.drawFittedText (w, body.reduced (0, 6), juce::Justification::topLeft, 8);
+            return;
+        }
+
+        if (tuning)
+        {
+            auto big = body.removeFromTop (70);
+            g.setFont (juce::FontOptions (44.0f, juce::Font::bold));
+            g.setColour (text);
+            g.drawText (jp (u8"チューニング確認   開放 ") + juce::String (stringName (tuneString)) + jp (u8" 弦"), big, juce::Justification::centredLeft);
+            g.setColour (dim);
+            g.setFont (juce::FontOptions (14.0f));
+            g.drawText (juce::String (7 - tuneString) + " / 6", big, juce::Justification::centredRight);
+            auto line = body.removeFromTop (34);
+            g.setFont (juce::FontOptions (20.0f, juce::Font::bold));
+            g.setColour (statusColour);
+            g.drawText (status.isNotEmpty() ? status : jp (u8"カポを外して、6 弦から 1 本ずつ弾いてください"), line, juce::Justification::centredLeft);
+            body.removeFromTop (14);
+            g.setColour (dim);
+            g.setFont (juce::FontOptions (14.0f));
+            g.drawFittedText (jp (u8"・±20 セント以内なら次の弦へ進みます。ずれていたら何セントずれたか出るので、チューニングしてもう一回") + "\n"
+                              + jp (u8"・急ぐときは「飛ばす →」で確認をまるごと飛ばせます（音程はあとで自動で直ります）"),
+                              body.removeFromTop (60), juce::Justification::topLeft, 3);
             return;
         }
 
@@ -255,7 +279,9 @@ private:
         proc.inputTap.active.store (true);
         openBackup();
         running = true;
-        if (! singleMode && steps.front().capo != 0) capoWait = true;
+        tuning = ! singleMode && slot != Kit::slotBrush;   // open strings first: is the guitar in tune?
+        tuneString = 6;
+        if (! tuning && ! singleMode && steps.front().capo != 0) capoWait = true;
         refresh();
         startTimerHz (30);
         grabKeyboardFocus();
@@ -322,6 +348,36 @@ private:
 
     void judgeTake (const std::vector<float>& take)
     {
+        if (tuning)
+        {
+            const Guide::Step open { slot == Kit::slotMute ? Kit::slotSoft : slot, 0, tuneString, false };
+            auto r = Guide::judge (take, sr, open, -1, 0.0f);
+            if (! r.ok)
+            {
+                status = r.wrongNote ? GuideUI::jp (u8"開放の ") + juce::String (tuneString) + GuideUI::jp (u8" 弦を弾いてください（カポなし）")
+                                     : juce::String (juce::CharPointer_UTF8 (u8"✗ ")) + r.reason;
+                statusColour = GuideUI::bad;
+                return;
+            }
+            const float c = r.sample.cents;
+            if (std::abs (c) > 20.0f)
+            {
+                status = juce::String (tuneString) + GuideUI::jp (u8" 弦が ") + (c > 0 ? "+" : "") + juce::String (juce::roundToInt (c))
+                       + (c > 0 ? GuideUI::jp (u8" セント高い（少し下げてもう一回）") : GuideUI::jp (u8" セント低い（少し上げてもう一回）"));
+                statusColour = GuideUI::accent;
+                return;
+            }
+            status = juce::String (tuneString) + GuideUI::jp (u8" 弦 OK（") + (c >= 0 ? "+" : "") + juce::String (juce::roundToInt (c)) + GuideUI::jp (u8" セント）");
+            statusColour = GuideUI::ok;
+            if (--tuneString < 1)
+            {
+                tuning = false;
+                status = GuideUI::jp (u8"チューニング OK。録音を始めます");
+                if (steps.front().capo != 0) capoWait = true;
+            }
+            refresh();
+            return;
+        }
         const auto& st = steps[(size_t) index];
         float softDb = 0.0f;
         if (st.slot == Kit::slotHard)
@@ -331,6 +387,26 @@ private:
                         softDb = juce::Decibels::gainToDecibels (s.rawRms);
         const int prev = singleMode ? -1 : lastAcceptedNote;
         auto r = Guide::judge (take, sr, st, capoWait ? -1 : prev, softDb);
+        if (debugTakes)
+        {
+            juce::AudioBuffer<float> bb (1, (int) take.size());
+            for (size_t i = 0; i < take.size(); ++i) bb.setSample (0, (int) i, take[i]);
+            auto rr = Kit::slice (bb, sr, st.slot);
+            std::cout << "      take " << take.size() / sr << " s -> " << (r.ok ? "OK" : r.reason) << "  [slice: " << rr.message << " n=" << rr.samples.size();
+            for (auto& sm : rr.samples) std::cout << " len " << sm.audio.getNumSamples() / sm.sampleRate;
+            std::cout << "]" << std::endl;
+            if (rr.samples.empty())
+            {
+                const int fr = (int) (sr * 0.005);
+                std::cout << "        env:";
+                for (int i = 0; i < 20 && (i + 1) * fr <= (int) take.size(); ++i)
+                {
+                    double e = 0; for (int k = 0; k < fr; ++k) e += take[(size_t) (i * fr + k)] * take[(size_t) (i * fr + k)];
+                    std::cout << " " << juce::roundToInt (10.0 * std::log10 (e / fr + 1e-14));
+                }
+                std::cout << std::endl;
+            }
+        }
         if (! r.ok)
         {
             if (capoWait && r.wrongNote) return;   // still changing the capo: wrong notes are fine
@@ -401,7 +477,8 @@ private:
     {
         if (onHighlight)
         {
-            if (running && ! finished && index < (int) steps.size())
+            if (running && tuning) onHighlight (tuneString, 0, detector.isRecording());
+            else if (running && ! finished && index < (int) steps.size())
                 onHighlight (steps[(size_t) index].string, steps[(size_t) index].capo, detector.isRecording());
             else onHighlight (0, -1, false);
         }
@@ -432,6 +509,7 @@ private:
     juce::Colour statusColour { GuideUI::dim };
     double sr = 48000.0;
     int slot = 0, index = 0, doneCount = 0, lastAcceptedNote = -1;
-    bool running = false, finished = false, paused = false, capoWait = false, singleMode = false;
+    bool running = false, finished = false, paused = false, capoWait = false, singleMode = false, tuning = false;
+    int tuneString = 6;
     float meterDb = -100.0f, holdDb = -100.0f;
 };
