@@ -2,15 +2,8 @@
 #include <JuceHeader.h>
 #include "PluginLinkJuce.h"
 #include "PresetBar.h"
+#include "PorchDriveDSP.h"   // 音の部分（AIO Guitar の EFFECTS も同じものを使う）
 
-struct OnePole
-{
-    float a = 0.0f, z = 0.0f;
-    void setCutoff (float fc, double fs) { a = std::exp (-juce::MathConstants<float>::twoPi * fc / (float) fs); }
-    float lp (float x) { z = (1.0f - a) * x + a * z; return z; }
-    float hp (float x) { return x - lp (x); }
-    void reset() { z = 0.0f; }
-};
 
 class PorchDriveProcessor : public juce::AudioProcessor
 {
@@ -57,15 +50,7 @@ private:
     std::atomic<float>* toneParam  = nullptr;
     std::atomic<float>* levelParam = nullptr;
 
-    juce::SmoothedValue<float> g1, g2, toneGain, outGain;
-    std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
-
-    static constexpr int maxCh = 2;
-    OnePole inHP[maxCh], dc1[maxCh], dc2[maxCh], lp1[maxCh], lp2[maxCh];
-    OnePole toneSplit[maxCh], fizzLP[maxCh];
-
-    // オーバーサンプリング側で使うゲインの一時バッファ
-    std::vector<float> g1Buf, g2Buf;
+    pedal::PorchDriveDSP dsp;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PorchDriveProcessor)
 };

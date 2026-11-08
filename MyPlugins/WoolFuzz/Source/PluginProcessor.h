@@ -2,16 +2,7 @@
 #include <JuceHeader.h>
 #include "PluginLinkJuce.h"
 #include "PresetBar.h"
-
-// 1次フィルター（ローパス／ハイパス兼用）
-struct OnePole
-{
-    float a = 0.0f, z = 0.0f;
-    void setCutoff (float fc, double fs) { a = std::exp (-juce::MathConstants<float>::twoPi * fc / (float) fs); }
-    float lp (float x) { z = (1.0f - a) * x + a * z; return z; }
-    float hp (float x) { return x - lp (x); }
-    void reset() { z = 0.0f; }
-};
+#include "WoolFuzzDSP.h"   // 音の部分（AIO Guitar の EFFECTS も同じものを使う）
 
 class WoolFuzzProcessor : public juce::AudioProcessor
 {
@@ -58,15 +49,7 @@ private:
     std::atomic<float>* toneParam    = nullptr;
     std::atomic<float>* volumeParam  = nullptr;
 
-    juce::SmoothedValue<float> driveGain, toneMix, outGain;
-
-    std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
-
-    static constexpr int maxCh = 2;
-    OnePole inHP[maxCh];                      // 入力の低域カット
-    OnePole stage1LP[maxCh], stage2LP[maxCh]; // 段間のハイ落とし
-    OnePole dcBlock1[maxCh], dcBlock2[maxCh]; // 非対称クリップ後のDCカット
-    OnePole toneLP[maxCh], toneHP[maxCh];     // トーン回路
+    pedal::WoolFuzzDSP dsp;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (WoolFuzzProcessor)
 };

@@ -36,6 +36,17 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
 - 状態は v3: APVTS ＋ キット ＋ SCORE（ノートは 21 バイトずつのバイナリ、Override は子ノード）
 - 取り消しは Override の表ごとのコピー（100 手）
 
+## EFFECTS（2026-11-08 本人「エフェクターは一旦ドライブとファズ」「使ってなかったらオフにして軽く」）
+- 音の部品は単体と共有: MyPlugins/WoolFuzz/Source/WoolFuzzDSP.h・MyPlugins/PorchDrive/Source/PorchDriveDSP.h（namespace pedal）。
+  切り出す前の HEAD と最大差 1.2e-7・遅れ 4 で同じことを確認（scratch の pedaleq）。CMakeLists で ../WoolFuzz/Source と ../PorchDrive/Source を include
+  → **Wool Fuzz / Porch Drive を変えたら AIO Guitar もビルドし直す**（build.yml の依存の追加は workflow 権限がなくまだ push できていない）
+- Pedals.h: PedalSlot（OFF は計算せず latency 分の遅らせだけ、ON/OFF 15 ms クロスフェード、走り出しで reset）、PedalBoard（順番の入れ替えは 5 ms 下げ → 次のブロックで入れ替え → 5 ms 上げ）
+- パラメーター pdOn/pdGain/pdTone/pdLevel、wfOn/wfSustain/wfTone/wfVolume、pedalOrder。範囲と初期値は単体と同じ
+- 休止: 入力が 0.5 s 無音かつ前のブロックの出力ピーク < 1e-5 で EFFECTS と AMP を止めて無音（fxSleeping）。リバーブ最大でも −96 dBFS まで待つ
+- AMP と CAB が両方 OFF のときだけ出口でソフトクリップ（−6 dBFS から上を丸めて 0 dBFS を超えない）
+- 古い FXChain のゲート・コンプ・ドライブはパラメーターごと外した（fx.compOn=false など固定）。内蔵プリセットもペダルで作り直し
+- CPU（48k・256、1 コア）: ペダル OFF 0.63 %、両方 ON 1.4 %、休止 0.05 %。DSP 検査「渡してよい」
+
 ## テスト
 `-DAIO_BUILD_RENDER_TEST=ON` で RenderTest。疑似 DI（±20 セント、±6 dB、弦の硬さ指定可）で切り分け・弦・音程・音量・連打・choke・ミュート・状態を確認。
 `RenderTest <出力> [弦の硬さ 0〜0.0004]`

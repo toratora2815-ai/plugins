@@ -51,7 +51,9 @@ target_link_libraries(AIOGuitar
         juce::juce_recommended_warning_flags)
 
 # 自作プラグイン共通の部品（Plugin Link・プリセット）
-target_include_directories(AIOGuitar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../Shared)
+target_include_directories(AIOGuitar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../Shared
+    # EFFECTS のペダルは単体プラグインと同じ音の部品を使う
+    ${CMAKE_CURRENT_SOURCE_DIR}/../WoolFuzz/Source ${CMAKE_CURRENT_SOURCE_DIR}/../PorchDrive/Source)
 
 # ---- オフラインの数値テスト（開発用・任意。-DAIO_BUILD_RENDER_TEST=ON） ----
 option(AIO_BUILD_RENDER_TEST "Build offline render test tool" OFF)
@@ -64,7 +66,8 @@ if(AIO_BUILD_RENDER_TEST)
         Source/PluginEditor.cpp)
     target_compile_definitions(RenderTest PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
-    target_include_directories(RenderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../Shared)
+    target_include_directories(RenderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../Shared
+        ${CMAKE_CURRENT_SOURCE_DIR}/../WoolFuzz/Source ${CMAKE_CURRENT_SOURCE_DIR}/../PorchDrive/Source)
     target_link_libraries(RenderTest PRIVATE
         juce::juce_audio_utils juce::juce_dsp
         juce::juce_recommended_config_flags)

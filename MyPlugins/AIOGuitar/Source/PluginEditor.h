@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "ScorePage.h"
+#include "EffectsPage.h"
 
 //==============================================================================
 class AIOLookAndFeel : public juce::LookAndFeel_V4
@@ -201,11 +202,12 @@ private:
     AIOLookAndFeel lnf;
 
     juce::TextButton tabs[4] { juce::TextButton ("MY GUITAR"), juce::TextButton ("SCORE"), juce::TextButton ("EFFECTS"), juce::TextButton ("AMP") };
-    juce::Component effectsPage, ampPage;
+    juce::Component ampPage;
     MyGuitarPage myGuitarPage;
     ScorePage scorePage;
-    Section comp, drive, amp, cab, reverb;
-    juce::Label effectsNote, ampNote;
+    EffectsPage effectsPage;
+    Section amp, cab, reverb;
+    juce::Label ampNote;
     juce::ComboBox presetBox;
     int page = 0;
 

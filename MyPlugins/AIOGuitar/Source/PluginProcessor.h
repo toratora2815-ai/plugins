@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "Articulations.h"
 #include "FXChain.h"
+#include "Pedals.h"
 #include "KitVoice.h"
 #include "Score.h"
 #include "PluginLinkJuce.h"
@@ -81,6 +82,7 @@ public:
     std::atomic<double> uiPpq { 0.0 };          // where playback is (host or preview)
     std::atomic<bool>   uiHostPlaying { false }, uiPreview { false };
     std::atomic<double> hostBpm { 120.0 };
+    std::atomic<bool>   fxSleeping { false };   // UI: effects and amp are resting (nothing playing)
     std::atomic<int>    hostNum { 4 }, hostDen { 4 };
 
     juce::AudioProcessorValueTreeState apvts;
@@ -108,6 +110,9 @@ private:
     VoiceParams voiceParams;
     GuitarSynth synth { voiceParams };
     FXChain chain;
+    PedalBoard pedals;
+    int quietSamples = 0;
+    float lastOutPeak = 1.0f;
     FXParams fx;
 
     // kit hand-over: message thread -> audio thread without locking the audio thread

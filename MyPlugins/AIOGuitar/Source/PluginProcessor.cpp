@@ -40,32 +40,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
     l.add (std::make_unique<APC> (juce::ParameterID { "stringMode", 1 }, "String Choice",
                                   juce::StringArray { "Auto", "MIDI Ch 1-6 = String" }, 0));
 
-    // ---- Gate
-    l.add (std::make_unique<APF> (juce::ParameterID { "gateThresh", 1 }, "Gate Threshold",
-                                  juce::NormalisableRange<float> (-80.0f, -20.0f, 0.1f), -80.0f,
-                                  Attr().withStringFromValueFunction ([] (float v, int)
-                                  { return v <= -79.5f ? juce::String ("Off") : juce::String (v, 1) + " dB"; })));
-
-    // ---- Compressor
-    l.add (std::make_unique<APB> (juce::ParameterID { "compOn", 1 }, "Comp On", false));
-    l.add (std::make_unique<APF> (juce::ParameterID { "compThresh", 1 }, "Comp Threshold",
-                                  juce::NormalisableRange<float> (-50.0f, 0.0f, 0.1f), -20.0f, fmt (" dB", 1)));
-    l.add (std::make_unique<APF> (juce::ParameterID { "compRatio", 1 }, "Comp Ratio",
-                                  juce::NormalisableRange<float> (1.0f, 20.0f, 0.01f, 0.4f), 4.0f, fmt (":1", 1)));
-    l.add (std::make_unique<APF> (juce::ParameterID { "compAttack", 1 }, "Comp Attack",
-                                  juce::NormalisableRange<float> (0.1f, 100.0f, 0.01f, 0.35f), 5.0f, fmt (" ms", 1)));
-    l.add (std::make_unique<APF> (juce::ParameterID { "compRelease", 1 }, "Comp Release",
-                                  juce::NormalisableRange<float> (10.0f, 1000.0f, 0.1f, 0.4f), 120.0f, fmt (" ms", 0)));
-    l.add (std::make_unique<APF> (juce::ParameterID { "compMakeup", 1 }, "Comp Makeup",
-                                  juce::NormalisableRange<float> (0.0f, 24.0f, 0.1f), 4.0f, fmt (" dB", 1)));
-
-    // ---- Drive pedal
-    l.add (std::make_unique<APB> (juce::ParameterID { "drvOn", 1 }, "Drive On", false));
-    l.add (std::make_unique<APC> (juce::ParameterID { "drvType", 1 }, "Drive Type",
-                                  juce::StringArray { "Overdrive", "Distortion", "Fuzz" }, 0));
-    l.add (knob ("drvDrive", "Drive", 5.0f));
-    l.add (knob ("drvTone",  "Drive Tone", 5.0f));
-    l.add (knob ("drvLevel", "Drive Level", 5.0f));
+    // ---- EFFECTS: Porch Drive / Wool Fuzz (same ranges and defaults as the stand-alone plugins)
+    l.add (std::make_unique<APB> (juce::ParameterID { "pdOn", 1 }, "Drive On", false));
+    l.add (std::make_unique<APF> (juce::ParameterID { "pdGain", 1 }, "Drive Gain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 4.0f, fmt ("", 1)));
+    l.add (std::make_unique<APF> (juce::ParameterID { "pdTone", 1 }, "Drive Tone", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
+    l.add (std::make_unique<APF> (juce::ParameterID { "pdLevel", 1 }, "Drive Level", juce::NormalisableRange<float> (-30.0f, 12.0f, 0.1f), -6.0f, fmt (" dB", 1)));
+    l.add (std::make_unique<APB> (juce::ParameterID { "wfOn", 1 }, "Fuzz On", false));
+    l.add (std::make_unique<APF> (juce::ParameterID { "wfSustain", 1 }, "Fuzz Sustain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 6.0f, fmt ("", 1)));
+    l.add (std::make_unique<APF> (juce::ParameterID { "wfTone", 1 }, "Fuzz Tone", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
+    l.add (std::make_unique<APF> (juce::ParameterID { "wfVolume", 1 }, "Fuzz Volume", juce::NormalisableRange<float> (-36.0f, 6.0f, 0.1f), -12.0f, fmt (" dB", 1)));
+    l.add (std::make_unique<APC> (juce::ParameterID { "pedalOrder", 1 }, "Pedal Order",
+                                  juce::StringArray { "Drive > Fuzz", "Fuzz > Drive" }, 0));
 
     // ---- Amp
     l.add (std::make_unique<APB> (juce::ParameterID { "ampOn", 1 }, "Amp On", true));
@@ -203,7 +188,13 @@ void AIOGuitarProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     expectedPpq = -1.0;
     volume.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (get ("gtVolume")));
     chain.prepare (sampleRate, samplesPerBlock);
-    setLatencySamples (chain.getLatencySamples());
+    pedals.prepare (sampleRate, samplesPerBlock);
+    pedals.setOrderNow (get ("pedalOrder") > 0.5f);
+    pedals.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
+    pedals.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
+    setLatencySamples (chain.getLatencySamples() + pedals.latency());
+    quietSamples = 0;
+    lastOutPeak = 1.0f;
 
     synth.resetArticulation();
     keyboardState.reset();
@@ -226,18 +217,9 @@ void AIOGuitarProcessor::readParams()
     voiceParams.kitTune     = get ("kitTune") > 0.5f;
     voiceParams.kitVelSens  = get ("kitVelSens");
 
-    fx.gateThresh  = get ("gateThresh");
-    fx.compOn      = get ("compOn") > 0.5f;
-    fx.compThresh  = get ("compThresh");
-    fx.compRatio   = get ("compRatio");
-    fx.compAttack  = get ("compAttack");
-    fx.compRelease = get ("compRelease");
-    fx.compMakeup  = get ("compMakeup");
-    fx.drvOn       = get ("drvOn") > 0.5f;
-    fx.drvType     = (int) get ("drvType");
-    fx.drvDrive    = get ("drvDrive");
-    fx.drvTone     = get ("drvTone");
-    fx.drvLevel    = get ("drvLevel");
+    fx.gateThresh  = -80.0f;   // the old gate / comp / drive of FXChain are not used (EFFECTS has the real pedals)
+    fx.compOn      = false;
+    fx.drvOn       = false;
     fx.ampOn       = get ("ampOn") > 0.5f;
     fx.ampChannel  = (int) get ("ampChannel");
     fx.ampGain     = get ("ampGain");
@@ -415,7 +397,38 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     else
         buffer.applyGain (volume.getTargetValue());
 
+    // ---- EFFECTS (pedals) -> AMP. Nothing playing and the tails gone: skip all of it (saves CPU)
+    pedals.drive.setOn (get ("pdOn") > 0.5f);
+    pedals.fuzz.setOn (get ("wfOn") > 0.5f);
+    pedals.drive.setParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
+    pedals.fuzz.setParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
+
+    const bool silentIn = buffer.getMagnitude (0, n) < 1.0e-6f && (buffer.getNumChannels() < 2 || buffer.getMagnitude (1, 0, n) < 1.0e-6f);
+    quietSamples = silentIn ? quietSamples + n : 0;
+    // rest once nothing comes in for 0.5 s AND what comes out (reverb tail) has died away
+    const bool sleeping = quietSamples > (int) (sr * 0.5) && lastOutPeak < 1.0e-5f;
+    fxSleeping.store (sleeping);
+    if (sleeping)
+    {
+        buffer.clear();
+        return;
+    }
+    if (buffer.getNumChannels() >= 2)
+        pedals.process (buffer.getArrayOfWritePointers(), n, get ("pedalOrder") > 0.5f);
     chain.process (buffer, n, fx);
+
+    // with AMP and CAB both off the pedals come out raw (up to +26 dBFS): round off the top
+    if (! fx.ampOn && ! fx.cabOn)
+        for (int c = 0; c < buffer.getNumChannels(); ++c)
+        {
+            auto* d = buffer.getWritePointer (c);
+            for (int i = 0; i < n; ++i)
+            {
+                const float x = d[i], a = std::abs (x);
+                if (a > 0.5f) d[i] = std::copysign (0.5f + 0.5f * std::tanh ((a - 0.5f) * 2.0f), x);   // linear up to -6 dBFS, never above 0 dBFS
+            }
+        }
+    lastOutPeak = buffer.getMagnitude (0, n);
 }
 
 //==============================================================================
@@ -645,7 +658,7 @@ void AIOGuitarProcessor::setCurrentProgram (int index)
     // Performance settings (play board) and the "My Guitar" switch are not part of the sound presets.
     static const juce::StringArray keep { "kitTune", "kitLevel", "kitVelSens", "kitHuman", "stringMode", "bendUp", "bendDown",
                                           "artBendStart", "artBendTime", "artHold", "slideRange",
-                                          "vibRate", "vibDelay", "gtVolume", "gtRelease", "gtMute", "linkGroup", "scoreMode" };
+                                          "vibRate", "vibDelay", "gtVolume", "gtRelease", "gtMute", "linkGroup", "scoreMode" };   // pedals / amp ARE part of the sound presets
 
     for (auto* p : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))

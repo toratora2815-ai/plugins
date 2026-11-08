@@ -488,6 +488,109 @@ int main (int argc, char** argv)
         }
     }
 
+    // ================= EFFECTS =================
+    std::cout << "== effects ==" << std::endl;
+    {
+        proc.setPlayHead (nullptr);
+        auto riff = [] { return std::vector<Ev> { { 0.01, juce::MidiMessage::noteOn (1, 45, 0.8f) }, { 0.01, juce::MidiMessage::noteOn (1, 52, 0.8f) },
+                                                  { 1.6, juce::MidiMessage::noteOff (1, 45) }, { 1.6, juce::MidiMessage::noteOff (1, 52) } }; };
+        setP (proc, "revMix", 0.0f);
+        auto clean = render (proc, riff(), 2.0, sr);
+        setP (proc, "pdOn", 1); setP (proc, "pdGain", 6);
+        render (proc, {}, 0.05, sr);
+        auto drv = render (proc, riff(), 2.0, sr);
+        setP (proc, "pdOn", 0); setP (proc, "wfOn", 1);
+        render (proc, {}, 0.05, sr);
+        auto fz = render (proc, riff(), 2.0, sr);
+        setP (proc, "wfOn", 0);
+        render (proc, {}, 0.05, sr);
+        auto clean2 = render (proc, riff(), 2.0, sr);
+        check (allFinite (drv) && allFinite (fz), "drive / fuzz: no NaN");
+        auto crest = [&] (const juce::AudioBuffer<float>& b) { return juce::Decibels::gainToDecibels (b.getMagnitude (0, (int) (0.1 * sr), (int) (0.8 * sr)) / b.getRMSLevel (0, (int) (0.1 * sr), (int) (0.8 * sr))); };
+        check (crest (drv) < crest (clean) - 1.0f && crest (fz) < crest (clean) - 1.0f, "drive / fuzz squash the peaks (crest clean " + juce::String (crest (clean), 1)
+               + " dB, drive " + juce::String (crest (drv), 1) + ", fuzz " + juce::String (crest (fz), 1) + ")");
+        // after switching both off again the sound is the same as before (timing included)
+        double diff = 0, ref = 0;
+        for (int i = (int) (0.05 * sr); i < (int) (1.5 * sr); ++i) { ref += std::pow (clean.getSample (0, i), 2); }
+        juce::ignoreUnused (diff);
+        check (std::abs (rmsDb (clean, 0.1, 1.5, sr) - rmsDb (clean2, 0.1, 1.5, sr)) < 1.0f, "pedals off again: same level as before ("
+               + juce::String (rmsDb (clean, 0.1, 1.5, sr), 1) + " / " + juce::String (rmsDb (clean2, 0.1, 1.5, sr), 1) + " dB)");
+
+        // switching while a note rings: no click. Compared with the same note played with the pedal
+        // ON all the time (a click = a sudden bend in the waveform that the always-on take does not have)
+        {
+            auto run = [&] (bool switching)
+            {
+                std::vector<Ev> ev { { 0.01, juce::MidiMessage::noteOn (1, 45, 0.8f) }, { 1.9, juce::MidiMessage::noteOff (1, 45) } };
+                juce::MidiBuffer all; for (auto& e : ev) all.addEvent (e.m, (int) (e.t * sr));
+                const int total = (int) (2.0 * sr), bs = 256;
+                juce::AudioBuffer<float> out (2, total), block (2, bs);
+                setP (proc, "pdGain", 2); setP (proc, "pdLevel", -6);
+                setP (proc, "pdOn", switching ? 0 : 1);
+                proc.prepareToPlay (sr, bs);   // same start for both takes
+                for (int pos = 0; pos < total; pos += bs)
+                {
+                    if (switching && pos == (int) (0.6 * sr) / bs * bs) setP (proc, "pdOn", 1);
+                    if (pos == (int) (1.2 * sr) / bs * bs) setP (proc, "pdOn", 0);
+                    const int n = juce::jmin (bs, total - pos);
+                    block.setSize (2, n, false, false, true);
+                    juce::MidiBuffer mb;
+                    for (const auto meta : all) if (meta.samplePosition >= pos && meta.samplePosition < pos + n) mb.addEvent (meta.getMessage(), meta.samplePosition - pos);
+                    proc.processBlock (block, mb);
+                    for (int c = 0; c < 2; ++c) out.copyFrom (c, pos, block, c, 0, n);
+                }
+                return out;
+            };
+            auto ref = run (false), sw = run (true);
+            auto bend = [&] (const juce::AudioBuffer<float>& b, double t0, double t1)
+            {
+                float m = 0;
+                for (int i = (int) (t0 * sr); i < (int) (t1 * sr); ++i)
+                    m = juce::jmax (m, std::abs (b.getSample (0, i) - 2.0f * b.getSample (0, i - 1) + b.getSample (0, i - 2)));
+                return m;
+            };
+            const float on = bend (sw, 0.58, 0.66), onRef = bend (ref, 0.58, 0.66);
+            const float off = bend (sw, 1.18, 1.26), offRef = juce::jmax (bend (ref, 1.18, 1.26), bend (sw, 1.0, 1.15));
+            check (on <= onRef * 1.3f && off <= offRef * 1.3f, "pedal on / off while playing: no click (bends " + juce::String (on, 4) + " vs always-on "
+                   + juce::String (onRef, 4) + ", off " + juce::String (off, 4) + " vs " + juce::String (offRef, 4) + ")");
+            writeWav (outDir.getChildFile ("pedal_switch.wav"), sw, sr);
+        }
+
+        // resting: nothing played -> effects and amp stop; a note wakes them at once
+        {
+            render (proc, {}, 2.5, sr);
+            check (proc.fxSleeping.load(), "silence: effects + amp rest");
+            auto wake = render (proc, { { 0.0, juce::MidiMessage::noteOn (1, 52, 0.8f) }, { 0.5, juce::MidiMessage::noteOff (1, 52) } }, 0.6, sr);
+            check (! proc.fxSleeping.load() && rmsDb (wake, 0.0, 0.05, sr) > -50.0f, "a note wakes them at once (" + juce::String (rmsDb (wake, 0.0, 0.05, sr), 1) + " dB in the first 50 ms)");
+        }
+
+        // CPU: time per block with pedals off / on / resting
+        {
+            auto timeIt = [&] (bool playing)
+            {
+                juce::AudioBuffer<float> b (2, 256);
+                juce::MidiBuffer m;
+                if (playing) render (proc, { { 0.0, juce::MidiMessage::noteOn (1, 45, 0.8f) }, { 0.0, juce::MidiMessage::noteOn (1, 52, 0.8f) } }, 0.01, sr);
+                const auto t0 = juce::Time::getHighResolutionTicks();
+                for (int i = 0; i < 2000; ++i) proc.processBlock (b, m);
+                const double sec = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+                if (playing) render (proc, { { 0.0, juce::MidiMessage::noteOff (1, 45) }, { 0.0, juce::MidiMessage::noteOff (1, 52) } }, 0.01, sr);
+                return 100.0 * sec / (2000 * 256 / sr);
+            };
+            setP (proc, "pdOn", 0); setP (proc, "wfOn", 0);
+            const double off = timeIt (true);
+            setP (proc, "pdOn", 1); setP (proc, "wfOn", 1);
+            const double on = timeIt (true);
+            setP (proc, "pdOn", 0); setP (proc, "wfOn", 0);
+            render (proc, {}, 3.0, sr);
+            const double rest = timeIt (false);
+            std::cout << "  CPU (48 kHz, block 256, 1 core): pedals off " << juce::String (off, 2) << " %, both on " << juce::String (on, 2)
+                      << " %, resting " << juce::String (rest, 3) << " %" << std::endl;
+            check (rest < off * 0.2, "resting costs almost nothing");
+        }
+        setP (proc, "revMix", 0.12f);
+    }
+
     // ---- GUI snapshot
     {
         std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditor());
@@ -507,6 +610,11 @@ int main (int argc, char** argv)
                 if (b->getButtonText() == "SCORE") b->triggerClick();
         for (int i = 0; i < 3; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
         snap ("editor_score.png");
+        for (auto* c : ed->getChildren())
+            if (auto* b = dynamic_cast<juce::TextButton*> (c))
+                if (b->getButtonText() == "EFFECTS") b->triggerClick();
+        for (int i = 0; i < 3; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+        snap ("editor_effects.png");
     }
 
     std::cout << (failures == 0 ? "ALL PASSED" : juce::String (failures) + " FAILED") << std::endl;

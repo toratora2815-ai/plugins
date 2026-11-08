@@ -12,38 +12,27 @@ struct Preset
 
 inline const std::vector<Preset>& getFactoryPresets()
 {
+    // pedals: Porch Drive = pd*, Wool Fuzz = wf* (same sound as the stand-alone plugins)
     static const std::vector<Preset> presets
     {
         { "Init", {} },
 
         { "Clean Sparkle", {
-            
-            { "compOn", 1 }, { "compThresh", -26 }, { "compRatio", 4 }, { "compAttack", 8 }, { "compRelease", 150 }, { "compMakeup", 6 },
             { "ampOn", 1 }, { "ampChannel", 0 }, { "ampGain", 4 }, { "ampBass", 5 }, { "ampMid", 4.5f }, { "ampTreble", 6.5f },
             { "ampPresence", 6 }, { "ampMaster", 6 },
             { "cabOn", 1 }, { "cabType", 1 }, { "cabMic", 6 },
             { "revMix", 0.25f }, { "revSize", 0.6f } } },
 
-        { "Funk Comp Clean", {
-            { "gtRelease", 0.06f }, 
-            { "compOn", 1 }, { "compThresh", -32 }, { "compRatio", 8 }, { "compAttack", 2 }, { "compRelease", 80 }, { "compMakeup", 10 },
-            { "ampOn", 1 }, { "ampChannel", 0 }, { "ampGain", 3 }, { "ampBass", 4 }, { "ampMid", 5.5f }, { "ampTreble", 7 },
-            { "ampPresence", 6.5f }, { "ampMaster", 6 },
-            { "cabOn", 1 }, { "cabType", 2 }, { "cabMic", 6.5f },
-            { "revMix", 0.12f }, { "revSize", 0.35f } } },
-
-        { "Crunch Rock", {
-            
-            { "drvOn", 1 }, { "drvType", 0 }, { "drvDrive", 3 }, { "drvTone", 6 }, { "drvLevel", 6 },
-            { "ampOn", 1 }, { "ampChannel", 1 }, { "ampGain", 6 }, { "ampBass", 5 }, { "ampMid", 6.5f }, { "ampTreble", 6 },
+        { "Crunch + Drive", {
+            { "pdOn", 1 }, { "pdGain", 3 }, { "pdTone", 6 }, { "pdLevel", 0 },
+            { "ampOn", 1 }, { "ampChannel", 1 }, { "ampGain", 5 }, { "ampBass", 5 }, { "ampMid", 6.5f }, { "ampTreble", 6 },
             { "ampPresence", 5.5f }, { "ampMaster", 5 },
             { "cabOn", 1 }, { "cabType", 0 }, { "cabMic", 5 },
             { "revMix", 0.12f }, { "revSize", 0.45f } } },
 
         { "Metal Rhythm", {
             { "gtRelease", 0.05f },
-            { "gateThresh", -52 },
-            { "drvOn", 1 }, { "drvType", 0 }, { "drvDrive", 0.5f }, { "drvTone", 6 }, { "drvLevel", 7.5f },
+            { "pdOn", 1 }, { "pdGain", 0.5f }, { "pdTone", 6.5f }, { "pdLevel", 6 },
             { "ampOn", 1 }, { "ampChannel", 2 }, { "ampGain", 7 }, { "ampBass", 6 }, { "ampMid", 4 }, { "ampTreble", 6.5f },
             { "ampPresence", 6 }, { "ampMaster", 5 },
             { "cabOn", 1 }, { "cabType", 0 }, { "cabMic", 5 },
@@ -51,20 +40,27 @@ inline const std::vector<Preset>& getFactoryPresets()
 
         { "Lead Solo", {
             { "gtRelease", 0.2f },
-            { "compOn", 1 }, { "compThresh", -18 }, { "compRatio", 3 }, { "compAttack", 10 }, { "compRelease", 200 }, { "compMakeup", 3 },
-            { "drvOn", 1 }, { "drvType", 1 }, { "drvDrive", 4 }, { "drvTone", 5.5f }, { "drvLevel", 6 },
+            { "pdOn", 1 }, { "pdGain", 5 }, { "pdTone", 5.5f }, { "pdLevel", 0 },
             { "ampOn", 1 }, { "ampChannel", 2 }, { "ampGain", 6 }, { "ampBass", 5 }, { "ampMid", 6.5f }, { "ampTreble", 5.5f },
             { "ampPresence", 5.5f }, { "ampMaster", 5 },
             { "cabOn", 1 }, { "cabType", 1 }, { "cabMic", 5 },
             { "revMix", 0.3f }, { "revSize", 0.75f } } },
 
         { "Fuzz Garage", {
-            
-            { "drvOn", 1 }, { "drvType", 2 }, { "drvDrive", 7 }, { "drvTone", 4.5f }, { "drvLevel", 5 },
+            { "wfOn", 1 }, { "wfSustain", 7 }, { "wfTone", 4.5f }, { "wfVolume", -10 },
             { "ampOn", 1 }, { "ampChannel", 1 }, { "ampGain", 3.5f }, { "ampBass", 5.5f }, { "ampMid", 5.5f }, { "ampTreble", 5 },
             { "ampPresence", 5 }, { "ampMaster", 5 },
             { "cabOn", 1 }, { "cabType", 2 }, { "cabMic", 4.5f },
             { "revMix", 0.18f }, { "revSize", 0.5f } } },
+
+        { "Fuzz into Drive", {
+            { "pedalOrder", 1 },
+            { "wfOn", 1 }, { "wfSustain", 5 }, { "wfTone", 6 }, { "wfVolume", -14 },
+            { "pdOn", 1 }, { "pdGain", 2 }, { "pdTone", 5 }, { "pdLevel", -3 },
+            { "ampOn", 1 }, { "ampChannel", 1 }, { "ampGain", 4 }, { "ampBass", 5 }, { "ampMid", 6 }, { "ampTreble", 5.5f },
+            { "ampPresence", 5 }, { "ampMaster", 5 },
+            { "cabOn", 1 }, { "cabType", 0 }, { "cabMic", 5 },
+            { "revMix", 0.15f }, { "revSize", 0.5f } } },
     };
     return presets;
 }

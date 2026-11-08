@@ -763,28 +763,12 @@ void MyGuitarPage::resized()
 //==============================================================================
 AIOGuitarEditor::AIOGuitarEditor (AIOGuitarProcessor& p)
     : AudioProcessorEditor (&p), proc (p),
-      myGuitarPage (p), scorePage (p),
-      comp   (p.apvts, "GATE / COMP",  Pal::comp),
-      drive  (p.apvts, "DRIVE",        Pal::drive),
+      myGuitarPage (p), scorePage (p), effectsPage (p),
       amp    (p.apvts, "AMP",          Pal::amp),
       cab    (p.apvts, "CAB",          Pal::cab),
       reverb (p.apvts, "REVERB / OUT", Pal::reverb)
 {
     setLookAndFeel (&lnf);
-
-    comp.addToggle ("compOn");
-    comp.addKnob ("gateThresh", "Gate");
-    comp.addKnob ("compThresh", "Threshold");
-    comp.addKnob ("compRatio", "Ratio");
-    comp.addKnob ("compAttack", "Attack");
-    comp.addKnob ("compRelease", "Release");
-    comp.addKnob ("compMakeup", "Makeup");
-
-    drive.addToggle ("drvOn");
-    drive.addCombo ("drvType");
-    drive.addKnob ("drvDrive", "Drive");
-    drive.addKnob ("drvTone", "Tone");
-    drive.addKnob ("drvLevel", "Level");
 
     amp.addToggle ("ampOn");
     amp.addCombo ("ampChannel");
@@ -803,16 +787,10 @@ AIOGuitarEditor::AIOGuitarEditor (AIOGuitarProcessor& p)
     reverb.addKnob ("revSize", "Size");
     reverb.addKnob ("outGain", "Output");
 
-    for (auto* c : { &comp, &drive }) effectsPage.addAndMakeVisible (*c);
     for (auto* c : { &amp, &cab, &reverb }) ampPage.addAndMakeVisible (*c);
-    effectsNote.setText (jp (u8"仮の画面です。次に、Wool Fuzz・Porch Drive などを並べ替えできるペダルボードに作り直します"), juce::dontSendNotification);
-    ampNote.setText (jp (u8"仮の画面です。EFFECTS の次に、アンプ・キャビ・マイクの種類と位置まで選べる画面に作り直します"), juce::dontSendNotification);
-    for (auto* l : { &effectsNote, &ampNote })
-    {
-        l->setColour (juce::Label::textColourId, Pal::dim);
-        l->setFont (juce::FontOptions (13.0f));
-    }
-    effectsPage.addAndMakeVisible (effectsNote);
+    ampNote.setText (jp (u8"仮の画面です。アンプ・キャビ・マイクの種類と位置まで選べる画面に作り直します（AmpliTube・Amp Designer を測って合わせ込み中）"), juce::dontSendNotification);
+    ampNote.setColour (juce::Label::textColourId, Pal::dim);
+    ampNote.setFont (juce::FontOptions (13.0f));
     ampPage.addAndMakeVisible (ampNote);
 
     addAndMakeVisible (myGuitarPage);
@@ -834,7 +812,7 @@ AIOGuitarEditor::AIOGuitarEditor (AIOGuitarProcessor& p)
     for (int i = 0; i < proc.getNumPrograms(); ++i)
         presetBox.addItem (proc.getProgramName (i), i + 1);
     presetBox.setSelectedId (proc.getCurrentProgram() + 1, juce::dontSendNotification);
-    presetBox.setTooltip (jp (u8"内蔵の音作り（EFFECTS と AMP だけが変わる。録音と演奏の設定はそのまま）"));
+    presetBox.setTooltip (jp (u8"内蔵の音作り（EFFECTS と AMP だけが変わる。録音・演奏・譜面の設定はそのまま）"));
     presetBox.onChange = [this]
     {
         const int idx = presetBox.getSelectedId() - 1;
@@ -906,12 +884,6 @@ void AIOGuitarEditor::resized()
     effectsPage.setBounds (page);
     ampPage.setBounds (page);
 
-    {
-        auto e = effectsPage.getLocalBounds();
-        effectsNote.setBounds (e.removeFromTop (28));
-        comp.setBounds (e.removeFromTop (200)); e.removeFromTop (8);
-        drive.setBounds (e.removeFromTop (200));
-    }
     {
         auto a = ampPage.getLocalBounds();
         ampNote.setBounds (a.removeFromTop (28));

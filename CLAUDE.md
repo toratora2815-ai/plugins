@@ -98,7 +98,7 @@
 - Mod Host（ModHost）1.1.0 … 好きな AU を中に読み込み、MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS / LINK）でつまみを動かす。3 帯域・DRIVE・MORPH・前後の解析
 - AIO Guitar（AIOGuitar）0.1.0 … 本人のエレキをライン録りした音で鳴らす全部入りギター音源（AU 音源 aumu Aiog ＋単体アプリ、CMakeLists の ALSO_APP で AIOGuitar-App.zip も）。
   MY GUITAR（カポで録った数十音 → 弦・フレットを自動判定、音程・音量を自動補正、ダウン/アップ交互、1 弦 1 音）/ SCORE（タブ譜で 1 音ずつ奏法、FOLLOW LOGIC と PLAY IN SYNC）/ EFFECTS / AMP の 4 ページ。
-  2026-11-08 本人の判断で全部入り（EFFECTS に Wool Fuzz・Porch Drive と同じ DSP、AMP は Amp Designer 以上を目指す）。EFFECTS・AMP はまだ仮。Plugin Link は LINK 欄だけ（Kind 17 は未登録）
+  2026-11-08 本人の判断で全部入り。EFFECTS は Porch Drive・Wool Fuzz（単体と同じ DSP を WoolFuzzDSP.h・PorchDriveDSP.h で共有。変えたら AIO Guitar もビルド）。AMP は Amp Designer 以上を目指す（まだ仮）。Plugin Link は LINK 欄だけ（Kind 17 は未登録）
 - Forge Strip（ForgeStrip）1.2.1 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Plugin Link の相手だった Forge Mixer は削除（受け取る処理と独自の種類 200 / 201 はソースに残っている）
 
 ### 単体 Mac アプリ（.app）
