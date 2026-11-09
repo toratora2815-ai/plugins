@@ -13,7 +13,9 @@
 //   5. 仕上げのリミッター（先読み 1.5 ms）… クリッパーが残した分（LIMIT 側の割合と低域）を天井まで下げる
 //   6. 最後の安全クリップ（天井ちょうど。普通は働かない）
 //
-// 遅れ = 5 ms + オーバーサンプリングの分 + 1.5 ms（48 kHz で 373 サンプル）
+//   4b. 低音の少ない音（スネアなど）だけ、戻した後の山の行き過ぎをもう一度 4 倍で切る（1.1.0）
+//
+// 遅れ = 5 ms + オーバーサンプリングの分 × 2 + 1.5 ms（48 kHz で 431 サンプル）
 #include <JuceHeader.h>
 #include <atomic>
 #include <cmath>
@@ -122,7 +124,14 @@ namespace dt
         static constexpr float transDb = 6.0f;       // アタックがこれだけ（dB）立っていたら、クリッパーに任せる分を全部使う
         static constexpr float trFloor = 0.3f;       // アタックでない所（伸びる低音など）も、これだけはクリッパーに任せる
         static constexpr float kTop = 1.0f, kPunch = 0.1f;   // クリップの肩: 天井から PUNCH 100% で 0.9 倍（-0.9 dB）まで
+        static constexpr float lowFracLo = 0.3f, lowFracHi = 0.7f;   // 低音の割合（150 Hz 以下 / 全体）がこれより少ない音はクリッパーに多く任せる（1.1.0）
+        static constexpr double lowHz = 150.0;
         static constexpr double detHz = 5000.0;      // 検出の LPF（ハイハットに反応しすぎない）   // CLIP 100% でクリッパーに任せる dB
+
+        Engine()
+        {
+            for (int i = 0; i < histSize; ++i) { histAtk[i].store (0.0f); histBody[i].store (0.0f); histIn[i].store (-100.0f); }
+        }
 
         void prepare (double sampleRate, int maxBlock, int numCh, const Params& initial)
         {
@@ -133,9 +142,14 @@ namespace dt
             laFast = juce::jmax (1, (int) std::round (0.0015 * fs));
 
             os = std::make_unique<juce::dsp::Oversampling<float>> ((size_t) maxCh, 2,
-                     juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true);
+                     juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, false);
             os->initProcessing ((size_t) blockMax);
             osLat = (int) std::round (os->getLatencyInSamples());
+            os2 = std::make_unique<juce::dsp::Oversampling<float>> ((size_t) maxCh, 2,
+                      juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, false);
+            os2->initProcessing ((size_t) blockMax);
+            // 遅れを整数にしない（Thiran オールパスで高い音の位相がずれるため）。59.5 ずつなので足すと整数（48 kHz で計 119）
+            osLat2 = (int) std::round (os->getLatencyInSamples() + os2->getLatencyInSamples()) - osLat;
 
             work.setSize (maxCh, blockMax, false, true, true);
             for (int k = 0; k < numSlots; ++k) { slowLim[k].prepare (laSlow); fastLim[k].prepare (laFast); }
@@ -145,8 +159,11 @@ namespace dt
                 dDry[c].prepare (latency());
             }
             dGain.prepare (latency());
-            ceilBuf.assign ((size_t) blockMax, 0.0f); ceilLin.assign ((size_t) blockMax, 1.0f); gainWork.assign ((size_t) blockMax, 1.0f);
+            ceilBuf.assign ((size_t) blockMax, 0.0f); for (auto& v : nlBuf) v.assign ((size_t) blockMax, 0.0f); ceilLin.assign ((size_t) blockMax, 1.0f); gainWork.assign ((size_t) blockMax, 1.0f);
             dryWork.setSize (maxCh, blockMax, false, true, true);
+            for (int i = 0; i < histSize; ++i) { histAtk[i].store (0.0f); histBody[i].store (0.0f); histIn[i].store (-100.0f); }
+            histWrite.store (0);
+            colLen = juce::jmax (1, (int) std::round (0.005 * fs)); colCount = 0; colAtk = colBody = 0.0f; colIn = 0.0f;
             lastLowKeep = -1.0f;
             setLowKeep (initial.lowKeepHz > 0.0f ? initial.lowKeepHz : 90.0f);
             reset();
@@ -158,24 +175,32 @@ namespace dt
             {
                 slowLim[k].reset(); fastLim[k].reset();
                 tFast[k] = tSlow[k] = sFast[k] = sSlow[k] = 1e-6f;
-                rs[k] = rf[k] = rFast[k] = 0.0f; bodyDb[k] = 0.0f;
+                rs[k] = rf[k] = rFast[k] = 0.0f; bodyDb[k] = 0.0f; lowFr[k] = 1.0f;
             }
             for (int c = 0; c < maxCh; ++c)
             {
                 dSlow[c].reset(); dFast[c].reset(); dDry[c].reset(); lpz[c] = 0.0f;
+                lowA[c] = lowB[c] = envLow[c] = envFull[c] = 0.0f;
                 for (auto& h : hp[c]) h.reset();
+                for (auto& h : hpB[c]) h.reset();
             }
             dGain.reset();
             if (os) os->reset();
+            if (os2) os2->reset();
             pushLin.reset (fs, 0.03); pushLin.setCurrentAndTargetValue (std::pow (10.0f, cur.pushDb / 20.0f));
             clipAmt = cur.clip; ceilDb = cur.ceilingDb;
             linkMix = cur.link ? 1.0f : 0.0f; deltaMix = cur.delta ? 1.0f : 0.0f; hpMix = cur.lowKeepHz > 0.0f ? 1.0f : 0.0f;
         }
 
-        int latency() const { return laSlow + osLat + laFast; }
+        int latency() const { return laSlow + osLat + osLat2 + laFast; }
 
         // メーター（画面用）。ブロック内の最大の下げ量 dB
         std::atomic<float> meterBody { 0.0f }, meterAttack { 0.0f }, meterOut { -100.0f };
+
+        // 画面の「流れる表示」用の履歴（5 ms ごとに 1 列: アタックを切った量・胴を下げた量・入口（PUSH 後）の天井からの dB）
+        static constexpr int histSize = 2048;
+        std::atomic<float> histAtk[histSize], histBody[histSize], histIn[histSize];
+        std::atomic<int> histWrite { 0 };
 
         void process (float* const* ch, int numCh, int n, const Params& p)
         {
@@ -205,6 +230,8 @@ namespace dt
             {
                 hp[c][0].setHighpass (fos, hz, 0.5411961);   // 4 次バターワース（2 段）
                 hp[c][1].setHighpass (fos, hz, 1.3065630);
+                hpB[c][0].setHighpass (fos, hz, 0.5411961);
+                hpB[c][1].setHighpass (fos, hz, 1.3065630);
             }
         }
 
@@ -227,6 +254,9 @@ namespace dt
             const float aS = coef (fs, 1.0), rSF = coef (fs, 25.0), rSS = coef (fs, 250.0);   // 胴の検出
             const float lpc = 1.0f - (float) std::exp (-2.0 * juce::MathConstants<double>::pi * juce::jmin (detHz, 0.45 * fs) / fs);   // ハイハットに反応しすぎないよう 5 kHz の LPF で検出
             const float bodySm = coef (fs, 5.0);
+            const float lowC = 1.0f - (float) std::exp (-2.0 * juce::MathConstants<double>::pi * lowHz / fs);
+            const float envRel = coef (fs, 60.0);
+            const float fracSm = coef (fs, 300.0);
             const float rel = juce::jlimit (0.0f, 1.0f, p.release);
             const float relFast = coef (fs, fastMinMs * std::pow (fastMaxMs / fastMinMs, rel));
             const float relSlow = coef (fs, slowMinMs * std::pow (slowMaxMs / slowMinMs, rel));
@@ -259,6 +289,18 @@ namespace dt
                 for (int c = 0; c < numCh; ++c) { lpz[c] += lpc * (x[c] - lpz[c]); d[c] = std::abs (lpz[c]); }
                 if (stereo) d[linkSlot] = juce::jmax (d[0], d[1]);
 
+                // 低音の割合（低音が少ない音＝スネアなどは、クリッパーに任せる分を増やす）
+                float lowE[numSlots] {}, fullE[numSlots] {};
+                for (int c = 0; c < numCh; ++c)
+                {
+                    lowA[c] += lowC * (x[c] - lowA[c]); lowB[c] += lowC * (lowA[c] - lowB[c]);
+                    const float lv = std::abs (lowB[c]), fv = std::abs (x[c]);
+                    envLow[c] = lv > envLow[c] ? lv : envRel * envLow[c] + (1 - envRel) * lv;
+                    envFull[c] = fv > envFull[c] ? fv : envRel * envFull[c] + (1 - envRel) * fv;
+                    lowE[c] = envLow[c]; fullE[c] = envFull[c];
+                }
+                if (stereo) { lowE[linkSlot] = juce::jmax (lowE[0], lowE[1]); fullE[linkSlot] = juce::jmax (fullE[0], fullE[1]); }
+
                 float excess[numSlots] {};
                 for (int j = 0; j < nS; ++j)
                 {
@@ -286,7 +328,7 @@ namespace dt
                 }
                 if (stereo) peak[linkSlot] = juce::jmax (peak[0], peak[1]);
 
-                float tot[numSlots] {};
+                float tot[numSlots] {}, nlSlot[numSlots] {};
                 for (int j = 0; j < nS; ++j)
                 {
                     const int k = slots[j];
@@ -294,7 +336,12 @@ namespace dt
                     // 胴のリミッターは、クリップの肩より下に収める（天井近くに張り付いた伸びる音を、肩でずっと削らない）
                     const float lvl = toDb (peak[k]) - punch * excessMul * excess[k] - kneeDb;
                     // クリッパーに任せる分は、アタックのところだけ（伸びる低音はクリップさせず、リミッターで下げる）
-                    const float tr = juce::jmax (trFloor, juce::jmin (1.0f, excess[k] / transDb));
+                    // 打つたびに変えない（ドラムバスでキックとスネアが交互に来ても肩が揺れない）よう、割合は 300 ms でゆっくり追う
+                    if (fullE[k] > 1e-4f) lowFr[k] = fracSm * lowFr[k] + (1 - fracSm) * juce::jmin (1.0f, lowE[k] / fullE[k]);
+                    const float lowFrac = lowFr[k];
+                    const float notLow = 1.0f - juce::jlimit (0.0f, 1.0f, (lowFrac - lowFracLo) / (lowFracHi - lowFracLo));
+                    const float floorK = trFloor + (1.0f - trFloor) * notLow;
+                    const float tr = juce::jmax (floorK, juce::jmin (1.0f, excess[k] / transDb));
                     const float need = slowLim[k].push (juce::jmax (0.0f, lvl - ceilDb - clipAmt * clipRangeDb * tr));
                     const float sTarget = juce::jmin (need, slowMaxDb);
                     rs[k] = sTarget > rs[k] ? charge * rs[k] + (1 - charge) * sTarget
@@ -302,7 +349,10 @@ namespace dt
                     // 速い分: 下げ量が増えたらすぐ、減るときは RELEASE の速さで
                     rf[k] = juce::jmax (need - rs[k], relFast * rf[k]);
                     tot[k] = rs[k] + rf[k];
+                    nlSlot[k] = notLow;
                 }
+                for (int c = 0; c < numCh; ++c)
+                    nlBuf[c][(size_t) i] = stereo ? linkMix * nlSlot[linkSlot] + (1 - linkMix) * nlSlot[c] : nlSlot[0];
                 for (int c = 0; c < numCh; ++c)
                 {
                     const float t = stereo ? linkMix * tot[linkSlot] + (1 - linkMix) * tot[c] : tot[0];
@@ -310,7 +360,17 @@ namespace dt
                     work.setSample (c, i, y);
                     dryWork.setSample (c, i, dryBuf[c]);
                     mBody = juce::jmax (mBody, t);
-                    mAtk = juce::jmax (mAtk, std::abs (y) > 0 ? toDb (std::abs (y)) - ceilDb : 0.0f);
+                    const float atk = std::abs (y) > 0 ? toDb (std::abs (y)) - ceilDb : 0.0f;
+                    mAtk = juce::jmax (mAtk, atk);
+                    colBody = juce::jmax (colBody, t); colAtk = juce::jmax (colAtk, atk); colIn = juce::jmax (colIn, std::abs (in[c] * g));
+                }
+                if (++colCount >= colLen)
+                {
+                    const int w = histWrite.load (std::memory_order_relaxed);
+                    histAtk[w].store (colAtk, std::memory_order_relaxed); histBody[w].store (colBody, std::memory_order_relaxed);
+                    histIn[w].store (toDb (colIn) - ceilDb, std::memory_order_relaxed);
+                    histWrite.store ((w + 1) % histSize, std::memory_order_release);
+                    colCount = 0; colAtk = colBody = colIn = 0.0f;
                 }
                 gainWork[(size_t) i] = gainBuf;
             }
@@ -348,6 +408,25 @@ namespace dt
                 }
                 clipAmt = ca; hpMix = hm;
                 os->processSamplesDown (blk);
+                // 2 回目のクリップ（低音が少ない音だけ、もう一度 4 倍で）。1 回目を戻すと山が行き過ぎ、
+                // 仕上げのリミッターがその分を下げてスネアが小さくなるので、行き過ぎた所をもう一度 4 倍で切る（折り返しを出さない）。
+                // 歪みは LOW KEEP より下を捨てる。低音の多い音（キック・808）は 1 回目だけと同じ
+                auto up2 = os2->processSamplesUp (blk);
+                const float amt = juce::jmin (1.0f, ca * 4.0f);
+                for (int c = 0; c < numCh; ++c)
+                {
+                    float* u = up2.getChannelPointer ((size_t) c);
+                    for (int i = 0; i < un; ++i)
+                    {
+                        const int bi = juce::jmin (n - 1, i >> 2);
+                        const float T = ceilLin[(size_t) bi], v = u[i];
+                        const float kT = kn * T, span = juce::jmax ((1.0f - kn) * T, 1e-6f), a = std::abs (v);
+                        const float e = a > kT ? std::copysign (kT + span * std::tanh ((a - kT) / span), v) - v : 0.0f;
+                        const float eh = hpB[c][1].process (hpB[c][0].process (e));
+                        u[i] = v + nlBuf[c][(size_t) bi] * amt * (hm * eh + (1 - hm) * e);
+                    }
+                }
+                os2->processSamplesDown (blk);
             }
 
             // ---- 5〜6: 仕上げのリミッターと安全クリップ、DELTA
@@ -389,16 +468,21 @@ namespace dt
         }
 
         double fs = 48000.0;
-        int nCh = 2, blockMax = 512, laSlow = 240, laFast = 72, osLat = 0;
-        std::unique_ptr<juce::dsp::Oversampling<float>> os;
+        int colLen = 240, colCount = 0; float colAtk = 0, colBody = 0, colIn = 0;
+        int nCh = 2, blockMax = 512, laSlow = 240, laFast = 72, osLat = 0, osLat2 = 0;
+        std::unique_ptr<juce::dsp::Oversampling<float>> os, os2;
         juce::AudioBuffer<float> work;
         juce::AudioBuffer<float> dryWork;
         LookaheadSmoother slowLim[numSlots], fastLim[numSlots];
         Delay dSlow[maxCh], dFast[maxCh], dDry[maxCh], dGain;
         Biquad hp[maxCh][2];
+        std::vector<float> nlBuf[maxCh];
+        Biquad hpB[maxCh][2];   // 2 回目のクリップの誤差用（4 倍）
         std::vector<float> ceilBuf, ceilLin, gainWork;
         float dryBuf[maxCh] {}, gainBuf = 1.0f;
         float tFast[numSlots] {}, tSlow[numSlots] {}, sFast[numSlots] {}, sSlow[numSlots] {}, lpz[maxCh] {};
+        float lowFr[numSlots] { 1.0f, 1.0f, 1.0f };
+        float lowA[maxCh] {}, lowB[maxCh] {}, envLow[maxCh] {}, envFull[maxCh] {};
         float rs[numSlots] {}, rf[numSlots] {}, rFast[numSlots] {}, bodyDb[numSlots] {};
         float clipAmt = 0.4f, ceilDb = -0.3f, lastLowKeep = -1.0f, linkMix = 1.0f, deltaMix = 0.0f, hpMix = 1.0f;
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> pushLin { 1.0f };

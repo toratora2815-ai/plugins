@@ -34,13 +34,15 @@ private:
 
     plink::LinkBar linkBar { processor.apvts, accent, panel, text };
     myp::PresetBar presetBar { processor.myPresets, accent, panel, text };
-    static constexpr int footerH = 72, topH = 46, meterW = 120;
+    static constexpr int footerH = 72, topH = 46, meterW = 300;
 
     Knob push, punch, body, clip, release;
     juce::ComboBox lowKeep, ceiling, factory;
     juce::Label lowKeepLabel, ceilingLabel;
     std::unique_ptr<ComboAtt> lowKeepAtt, ceilingAtt;
-    juce::TextButton linkBtn { "LINK" }, deltaBtn { "DELTA" };
+    juce::TextButton linkBtn { "LINK" }, deltaBtn { "DELTA" }, learnBtn { "LEARN" };
+    int learnShowT = 0;   // LEARN の結果を出しておく残り（タイマーの回数）
+    void drawHistory (juce::Graphics&, juce::Rectangle<int>);
     std::unique_ptr<ButtonAtt> linkAtt, deltaAtt;
 
     float showAtk = 0, showBody = 0, holdAtk = 0, holdBody = 0;

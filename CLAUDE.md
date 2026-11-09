@@ -117,8 +117,8 @@
 - Vox Chop（VoxChop）1.0.0 … 自分の声を別の声に変えて、切って鍵盤で弾く AU 音源（aumu Vxch）。CAPTURE（サイドチェーン）かファイル → 後から丸ごと計算（TD-PSOLA、VoxEngine.h）。
   VOICE MAP（高さ × 体の大きさ）・BREATH・GRIT・ROBOT・ALIEN・声のプリセット 23 個 / AUTO（言葉の切れ目）・GRID で最大 64 片を C1 から / 片ごとの設定・MELODIC・WHOLE / 片・全部・MIDI・全体をドラッグで Logic へ。
   空間系・歪み・ボコーダー・ケロケロは入れない（自作と Logic 標準を後ろに）。Plugin Link は LINK 欄だけ（Kind 18 は未登録）
-- Drum Transient（DrumTransient）1.0.0 … ドラム専用のトランジェント・リミッター（Uni-L を測って合わせ込み、ドラム用に絞った）。PUSH / PUNCH / BODY / CLIP⇄LIMIT / RELEASE / LOW KEEP / CEILING、LINK・DELTA、
-  ATTACK と BODY の 2 本の GR メーター、内蔵プリセット 6 個。遅れ 7.8 ms。GAIN MATCH は下げるだけ（limitBoost 0）。Plugin Link は LINK 欄だけ（Kind 19 は未登録）
+- Drum Transient（DrumTransient）1.1.0 … ドラム専用のトランジェント・リミッター（Uni-L を測って合わせ込み、ドラム用に絞った）。PUSH / PUNCH / BODY / CLIP⇄LIMIT / RELEASE / LOW KEEP / CEILING、LINK・DELTA、
+  LEARN（PUSH を自動で 1 回）、ATTACK と BODY を流す表示、内蔵プリセット 6 個。キック・スネアは Fire Box と 2 つ挿し（自分のプリセット「キック迫力」など＋チャンネルストリップ設定）。遅れ 9.0 ms。GAIN MATCH は下げるだけ（limitBoost 0）。Plugin Link は LINK 欄だけ（Kind 19 は未登録）
 
 - Deca Satu（DecaSatu）1.0.0 … トラック用サチュレーター（本人の Mac の市販サチュレーターを測って合わせ込み）。STYLE A/E/N/T/P・DRIVE・PUNISH・LOW CUT＋THUMP・TONE・HIGH CUT＋STEEP・MIX・OUTPUT。
   本物の AUTO は GAIN MATCH に統合（ON の間だけ AUTO の量を中で使う）。DSP は DecaSatuDSP.h（JUCE なし、後で Forge Strip に入れられる）。Plugin Link は Gain Stage の LEVEL MATCH だけ（Kind 20 は未登録）。測定の道具は build/decalab

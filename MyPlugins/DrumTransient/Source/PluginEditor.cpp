@@ -27,6 +27,12 @@ DrumTransientEditor::DrumTransientEditor (DrumTransientProcessor& p)
     linkAtt = std::make_unique<ButtonAtt> (processor.apvts, "stereoLink", linkBtn);
     deltaAtt = std::make_unique<ButtonAtt> (processor.apvts, "delta", deltaBtn);
 
+    learnBtn.setColour (juce::TextButton::buttonColourId, panel.brighter (0.15f));
+    learnBtn.setColour (juce::TextButton::textColourOffId, text);
+    learnBtn.setTooltip ("Play the drums and press: listens for 5 s, then sets PUSH so the ATTACK meter peaks reach the preset's target");
+    learnBtn.onClick = [this] { processor.toggleLearn(); learnShowT = 0; };
+    addAndMakeVisible (learnBtn);
+
     factory.setTextWhenNothingSelected ("Presets");
     const auto names = DrumTransientProcessor::presetNames();
     for (int i = 0; i < names.size(); ++i) factory.addItem (names[i], i + 1);
@@ -38,7 +44,7 @@ DrumTransientEditor::DrumTransientEditor (DrumTransientProcessor& p)
     presetBar.showGainMatch (myp::GainMatch::paramId, [this] { return processor.gainMatch.readout(); });
     linkBar.status = [this] (bool& lit) -> juce::String { lit = processor.link.on(); return lit ? juce::String ("on this LINK") : juce::String ("Plugin Link OFF"); };
 
-    setSize (820, topH + 230 + footerH);
+    setSize (1000, topH + 230 + footerH);
     startTimerHz (30);
 }
 
@@ -91,6 +97,26 @@ void DrumTransientEditor::timerCallback()
     follow (showAtk, holdAtk, holdAtkT, processor.dsp.meterAttack.load());
     follow (showBody, holdBody, holdBodyT, processor.dsp.meterBody.load());
     repaint (meterArea);
+
+    // LEARN の表示
+    juce::String t = "LEARN";
+    switch (processor.learnState.load())
+    {
+        case DrumTransientProcessor::learnListening: t = "LISTEN " + juce::String (juce::roundToInt (processor.learnProgress.load() * 100.0f)) + "%"; break;
+        case DrumTransientProcessor::learnAnalyzing: t = "..."; break;
+        case DrumTransientProcessor::learnDone:
+        case DrumTransientProcessor::learnFailed:
+            if (learnShowT == 0) learnShowT = 120;   // 4 秒出す
+            t = processor.learnState.load() == DrumTransientProcessor::learnDone ? "PUSH " + juce::String (processor.learnResult.load(), 1) + " dB" : juce::String ("TOO QUIET");
+            if (--learnShowT <= 0) { processor.learnState.store (DrumTransientProcessor::learnIdle); learnShowT = 0; }
+            break;
+        default: if (processor.learnIsBusy()) t = "...";   // 前の計算が終わるまで（押しても始まらない）
+                 break;
+    }
+    const bool active = processor.learnState.load() != DrumTransientProcessor::learnIdle;
+    learnBtn.setButtonText (t);
+    learnBtn.setColour (juce::TextButton::buttonColourId, active ? accent : panel.brighter (0.15f));
+    learnBtn.setColour (juce::TextButton::textColourOffId, active ? juce::Colours::black : text);
 }
 
 void DrumTransientEditor::paint (juce::Graphics& g)
@@ -103,35 +129,73 @@ void DrumTransientEditor::paint (juce::Graphics& g)
     g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
     g.drawText ("DRUM TRANSIENT", top.reduced (14, 0), juce::Justification::centredLeft);
 
-    // GR メーター 2 本（アタックと胴）
-    auto m = meterArea.reduced (8, 6);
+    drawHistory (g, meterArea.reduced (6, 4));
+}
+
+// 削った量を右から左へ流す（約 3 秒）。真ん中に入口（PUSH 後）の波形を薄く。上から: BODY（胴を下げた量）の青い帯、
+// その下に続けて ATTACK（アタックを切った量）のオレンジのトゲ（＝上端からの長さが、合わせて削った量）
+void DrumTransientEditor::drawHistory (juce::Graphics& g, juce::Rectangle<int> r)
+{
+    const juce::Colour blue (0xff6fb4ff);
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    const int bw = (m.getWidth() - 10) / 2;
-    auto drawBar = [&] (juce::Rectangle<int> r, float db, float hold, const juce::String& name, juce::Colour col)
+    auto head = r.removeFromTop (16);
+    g.setColour (accent);
+    g.drawText ("ATTACK -" + juce::String (holdAtk, 1), head.removeFromLeft (head.getWidth() / 2), juce::Justification::centredLeft);
+    g.setColour (blue);
+    g.drawText ("BODY -" + juce::String (holdBody, 1), head, juce::Justification::centredRight);
+
+    g.setColour (juce::Colours::black.withAlpha (0.45f));
+    g.fillRect (r);
+    const float range = 18.0f;   // 縦: 上端 0 dB、下端 -18 dB
+    const auto rr = r.toFloat();
+    auto yOf = [&] (float dB) { return rr.getY() + juce::jlimit (0.0f, 1.0f, dB / range) * rr.getHeight(); };
+
+    auto& e = processor.dsp;
+    const int W = r.getWidth(), cols = 600;   // 5 ms × 600 = 3 秒
+    const int end = e.histWrite.load (std::memory_order_acquire);
+    auto at = [&] (std::atomic<float>* h, int back) { return h[(end - 1 - back + 4 * dt::Engine::histSize) % dt::Engine::histSize].load (std::memory_order_relaxed); };
+    std::vector<float> va ((size_t) W), vb ((size_t) W), vi ((size_t) W);
+    for (int x = 0; x < W; ++x)
     {
-        g.setColour (text.withAlpha (0.8f));
-        g.drawText (name, r.removeFromTop (16), juce::Justification::centred);
-        auto valR = r.removeFromBottom (16);
-        g.drawText ("-" + juce::String (db, 1), valR, juce::Justification::centred);
-        g.setColour (juce::Colours::black.withAlpha (0.45f));
-        g.fillRect (r);
-        const float range = 20.0f;
-        const int h = (int) std::round (r.getHeight() * juce::jlimit (0.0f, 1.0f, db / range));
-        g.setColour (col);
-        g.fillRect (r.withHeight (h));
-        const int hy = r.getY() + (int) std::round (r.getHeight() * juce::jlimit (0.0f, 1.0f, hold / range));
-        g.setColour (text);
-        g.fillRect (r.getX(), hy - 1, r.getWidth(), 2);
-        g.setColour (text.withAlpha (0.15f));
-        for (int d = 5; d < 20; d += 5)
-        {
-            const int y = r.getY() + r.getHeight() * d / 20;
-            g.drawHorizontalLine (y, (float) r.getX(), (float) r.getRight());
-        }
-    };
-    drawBar (m.removeFromLeft (bw), showAtk, holdAtk, "ATTACK", accent);
-    m.removeFromLeft (10);
-    drawBar (m.removeFromLeft (bw), showBody, holdBody, "BODY", juce::Colour (0xff6fb4ff));
+        // x = 0 が一番古い。この 1 ピクセルにかかる列の最大値（一瞬のトゲが平均で消えないように）
+        const int c0 = cols - 1 - (x * cols) / W, c1 = juce::jmax (cols - 1 - ((x + 1) * cols) / W, 0);
+        float a = 0, b = 0, in = -100;
+        for (int c = c1; c <= c0; ++c) { a = juce::jmax (a, at (e.histAtk, c)); b = juce::jmax (b, at (e.histBody, c)); in = juce::jmax (in, at (e.histIn, c)); }
+        va[(size_t) x] = a; vb[(size_t) x] = b; vi[(size_t) x] = in;
+    }
+
+    // 入口の波形（天井から -36 〜 +12 dB を、真ん中から上下に）
+    const float cy = rr.getCentreY(), half = rr.getHeight() * 0.5f;
+    juce::Path wave;
+    wave.startNewSubPath (rr.getX(), cy);
+    for (int x = 0; x < W; ++x) wave.lineTo (rr.getX() + (float) x + 0.5f, cy - half * juce::jlimit (0.0f, 1.0f, (vi[(size_t) x] + 36.0f) / 48.0f));
+    for (int x = W - 1; x >= 0; --x) wave.lineTo (rr.getX() + (float) x + 0.5f, cy + half * juce::jlimit (0.0f, 1.0f, (vi[(size_t) x] + 36.0f) / 48.0f));
+    wave.closeSubPath();
+    g.setColour (text.withAlpha (0.16f));
+    g.fillPath (wave);
+
+    g.setColour (text.withAlpha (0.12f));
+    for (int d = 6; d < 18; d += 6) g.drawHorizontalLine ((int) yOf ((float) d), rr.getX(), rr.getRight());
+
+    // BODY の帯（なめらか）
+    juce::Path band;
+    band.startNewSubPath (rr.getX(), rr.getY());
+    for (int x = 0; x < W; ++x) band.lineTo (rr.getX() + (float) x + 0.5f, yOf (vb[(size_t) x]));
+    band.lineTo (rr.getRight(), rr.getY());
+    band.closeSubPath();
+    g.setColour (blue.withAlpha (0.7f));
+    g.fillPath (band);
+
+    // ATTACK のトゲ（帯の下に続けて）。切っていない所は何も描かない
+    g.setColour (accent);
+    for (int x = 0; x < W; ++x)
+        if (va[(size_t) x] > 0.05f)
+            g.drawVerticalLine (r.getX() + x, yOf (vb[(size_t) x]), juce::jmax (yOf (vb[(size_t) x]) + 1.0f, yOf (vb[(size_t) x] + va[(size_t) x])));
+
+    g.setColour (text.withAlpha (0.4f));
+    g.setFont (juce::FontOptions (10.0f));
+    g.drawText ("-6", juce::Rectangle<float> (rr.getX() + 2, yOf (6.0f) - 12, 30, 12), juce::Justification::centredLeft);
+    g.drawText ("-12", juce::Rectangle<float> (rr.getX() + 2, yOf (12.0f) - 12, 30, 12), juce::Justification::centredLeft);
 }
 
 void DrumTransientEditor::resized()
@@ -145,6 +209,8 @@ void DrumTransientEditor::resized()
     linkBtn.setBounds (top.removeFromRight (64));
     top.removeFromRight (14);
     factory.setBounds (top.removeFromRight (200));
+    top.removeFromRight (14);
+    learnBtn.setBounds (top.removeFromRight (110));
 
     area = area.reduced (10, 8);
     meterArea = area.removeFromRight (meterW);
