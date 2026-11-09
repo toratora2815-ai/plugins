@@ -35,6 +35,7 @@ IN → BASS → THICK → BODY → COMP（または OTT）→ SOFT CLIP → CRUN
 - **シンセを大きく**: THICK 45%、OTT にして 8〜12 dB
 - **ボーカルの粒をそろえる**: COMP 8 dB、BODY 20%
 - **ボーカルに荒さ**: CRUNCH 15〜25%、MIX 50%
+- **キック・スネアの迫力**: 後ろに Drum Transient を挿して、両方のプリセットから「キック迫力」「キック迫力 808」「スネア迫力」（Drum Transient の README に説明）
 - **思い切り歪ませる**: IN を +6〜+12 dB まで上げる（LOUD が 0 dBFS を超えないようにしてくれるので、OUT で音量を戻す）
 
 ## Plugin Link
