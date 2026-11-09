@@ -39,6 +39,6 @@ Forge Strip / Forge Mixer は独自の種類 200 / 201（ForgeStrip/Source/Forge
 - 遅れ（process の latency 引数）の分、入口の測り値を 2^17 サンプルのリングで遅らせる
 - ボタンは PresetBar::showGainMatch（プリセット欄の左端、幅 116）。その ID は Presets::exclude でプリセット・取り消しの対象外。PresetBar は狭いとき（中身 400 px 未満）< > を隠す
 - 前からある Horizon Spread `autoGain`（±6 dB）、Fire Box `unity`（4 秒平均で追う）、Mod Host `autoGain`（約 0.5 秒で追う）は DSP そのまま、ボタンだけ showGainMatch に移した
-- 出口のつまみ（OUTPUT / VOLUME など）も打ち消す（本人の「音量に何の影響も与えない」のとおり。触った後に測り直して数秒で戻る）
+- 出口のつまみ（OUTPUT / VOLUME など）も打ち消す（本人の「音量に何の影響も与えない」のとおり。触った後に測り直して数秒で戻る）。2026-11-09 本人に確認して「今のままでいい」
 - 数値テスト: build/gmtest/main.cpp（コミットしない）。DSP 検査係の検査用ホストは scratchpad にあった（消える）
 - 分かっている限界: Elder Verb の 49 秒のような長い響きを MIX 0.95 で使うと、3 秒の残り窓に入らない尾の分だけ +3 dB ほど大きくなる（MIX 0.85 なら +0.24 dB）
