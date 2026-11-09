@@ -505,16 +505,18 @@ void StringGrid::rebuild()
 
     float maxCents = 0, lo = 1e9f, hi = -1e9f;
     int n = 0, noString = 0;
+    int baseLayer = Kit::slotSoft;   // the level spread is shown for the softest picking layer recorded
+    for (int L : { (int) Kit::slotSoft, (int) Kit::slotMedium, (int) Kit::slotHard }) if (kit->count (L) > 0) { baseLayer = L; break; }
     for (auto& s : kit->samples)
     {
         if (s.slot == Kit::slotBrush) continue;
         ++n;
         maxCents = juce::jmax (maxCents, std::abs (s.cents));
-        if (s.rawRms > 0 && s.slot == Kit::slotSoft) { const float db = juce::Decibels::gainToDecibels (s.rawRms); lo = juce::jmin (lo, db); hi = juce::jmax (hi, db); }
+        if (s.rawRms > 0 && s.slot == baseLayer) { const float db = juce::Decibels::gainToDecibels (s.rawRms); lo = juce::jmin (lo, db); hi = juce::jmax (hi, db); }
         if (s.string >= 1 && s.fret >= 0 && s.fret < frets)
         {
             auto& c = cells[s.string][s.fret];
-            const int layer = s.slot == Kit::slotSoft ? 0 : (s.slot == Kit::slotHard ? 1 : 2);
+            const int layer = s.slot == Kit::slotSoft ? 0 : (s.slot == Kit::slotMedium ? 1 : (s.slot == Kit::slotHard ? 2 : 3));
             c.rec[layer] = true;
             c.any = true;
             c.cents = s.cents;
@@ -523,7 +525,8 @@ void StringGrid::rebuild()
     }
 
     // where every note comes from (soft layer, else hard, else mute)
-    const int layer = kit->count (Kit::slotSoft) > 0 ? Kit::slotSoft : (kit->count (Kit::slotHard) > 0 ? Kit::slotHard : Kit::slotMute);
+    int layer = Kit::slotMute;
+    for (int L : { Kit::slotSoft, Kit::slotMedium, Kit::slotHard }) if (kit->count (L) > 0) { layer = L; break; }
     for (int s = 1; s <= 6; ++s)
         for (int f = 0; f < frets; ++f)
         {
@@ -539,7 +542,7 @@ void StringGrid::rebuild()
         }
 
     summary = juce::String (n) + " notes  |  " + jp (u8"音程の補正 最大 ") + juce::String (juce::roundToInt (maxCents)) + jp (u8" セント")
-            + (hi > lo ? "  |  " + jp (u8"弱いピッキングの音量差 ") + juce::String (hi - lo, 1) + jp (u8" dB → そろえた") : juce::String());
+            + (hi > lo ? "  |  " + juce::String (baseLayer == Kit::slotSoft ? "SOFT" : baseLayer == Kit::slotMedium ? "MEDIUM" : "HARD") + jp (u8" の音量差 ") + juce::String (hi - lo, 1) + jp (u8" dB → そろえた") : juce::String());
     if (noString > 0) summary << "  |  " << noString << jp (u8" 音は弦が分からず（録る順番を確認）");
 }
 
@@ -573,8 +576,9 @@ juce::String StringGrid::describe (int s, int f) const
     {
         t << jp (u8"録音あり");
         if (c.rec[0]) t << " soft";
-        if (c.rec[1]) t << " hard";
-        if (c.rec[2]) t << " mute";
+        if (c.rec[1]) t << " medium";
+        if (c.rec[2]) t << " hard";
+        if (c.rec[3]) t << " mute";
         t << jp (u8"、音程を ") << juce::String (-c.cents, 0) << jp (u8" セント直した");
     }
     else if (c.srcFret >= 0 || c.srcString > 0)
@@ -639,13 +643,14 @@ void StringGrid::paint (juce::Graphics& g)
             }
 
             const float d = juce::jmin (cr.getWidth(), cr.getHeight()) * 0.42f;
-            const juce::Colour lc[3] { Pal::guitar, Pal::amp, Pal::reverb };
+            const juce::Colour lc[4] { Pal::guitar, Pal::drive, Pal::amp, Pal::reverb };
             int k = 0;
-            for (int L = 0; L < 3; ++L)
+            const float step = juce::jmin (d * 0.75f, (cr.getWidth() - 6.0f - d) / 3.0f);
+            for (int L = 0; L < 4; ++L)
                 if (c.rec[L])
                 {
                     g.setColour (lc[L]);
-                    g.fillEllipse (cr.getX() + 3.0f + (float) k * (d * 0.75f), cr.getCentreY() - d * 0.5f, d, d);
+                    g.fillEllipse (cr.getX() + 3.0f + (float) k * step, cr.getCentreY() - d * 0.5f, d, d);
                     ++k;
                 }
         }
@@ -662,10 +667,10 @@ void StringGrid::paint (juce::Graphics& g)
     // legend
     g.setFont (juce::FontOptions (11.0f));
     auto lg = juce::Rectangle<float> (b.getX(), b.getBottom() + 1.0f, b.getWidth(), 12.0f);
-    const juce::Colour lc[3] { Pal::guitar, Pal::amp, Pal::reverb };
-    const char* ln[3] { "soft", "hard", "mute" };
-    float x = lg.getRight() - 180.0f;
-    for (int L = 0; L < 3; ++L)
+    const juce::Colour lc[4] { Pal::guitar, Pal::drive, Pal::amp, Pal::reverb };
+    const char* ln[4] { "soft", "medium", "hard", "mute" };
+    float x = lg.getRight() - 240.0f;
+    for (int L = 0; L < 4; ++L)
     {
         g.setColour (lc[L]);
         g.fillEllipse (x, lg.getY() + 2.0f, 8.0f, 8.0f);
@@ -772,13 +777,14 @@ void PlaySettings::resized()
 
 //==============================================================================
 MyGuitarPage::MyGuitarPage (AIOGuitarProcessor& p)
-    : soft  (p, Kit::slotSoft,  "SOFT PICKING", jp (u8"弱く弾いた単音。カポ 0・3・6・9・12（1〜3 弦は 15 も）で、6 弦→1 弦、各弦ダウン→アップ。低い弦は 6〜8 秒伸ばす"), Pal::guitar),
-      hard  (p, Kit::slotHard,  "HARD PICKING", jp (u8"強く弾いた単音（あとからで OK）。録り方は SOFT と同じ。強い打ち込み（ベロシティ 80 以上）で鳴る"), Pal::amp),
-      mute  (p, Kit::slotMute,  "PALM MUTE",    jp (u8"ブリッジミュートの単音。6・5・4 弦を 0・3・6・9 で、6→4 弦、各弦ダウン→アップ"), Pal::reverb),
-      brush (p, Kit::slotBrush, "BRUSHING",     jp (u8"全弦ミュートのストローク。ダウン、アップ…と交互に 8 回ほど、少し間を空けて。C1 = ダウン、C#1 = アップ"), Pal::cab),
+    : soft   (p, Kit::slotSoft,   "SOFT PICKING",   jp (u8"そっと弾いた単音（あとからで OK）。録り方は MEDIUM と同じ。ベロシティ 1〜60"), Pal::guitar),
+      medium (p, Kit::slotMedium, "MEDIUM PICKING", jp (u8"いつもの強さの単音（まずここ）。カポ 0〜15、6→1 弦、各弦ダウン→アップ"), Pal::drive),
+      hard   (p, Kit::slotHard,   "HARD PICKING",   jp (u8"アクセントで思い切り（あとからで OK）。録り方は MEDIUM と同じ。101〜127"), Pal::amp),
+      mute   (p, Kit::slotMute,   "PALM MUTE",      jp (u8"ブリッジミュートの単音。6〜4 弦を 0・3・6・9 で、各弦ダウン→アップ"), Pal::reverb),
+      brush  (p, Kit::slotBrush,  "BRUSHING",       jp (u8"全弦ミュートのストローク。交互に 8 回。C1 = ダウン、C#1 = アップ"), Pal::cab),
       kit (p, Pal::guitar), grid (p), settings (p, Pal::guitar), articulations (p, Pal::drive), guide (p)
 {
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &soft, &hard, &mute, &brush, &kit, &grid, &settings, &articulations })
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &soft, &medium, &hard, &mute, &brush, &kit, &grid, &settings, &articulations })
         addAndMakeVisible (*c);
     addChildComponent (guide);
     kit.onGuide = [this] { showGuide (true); };
@@ -789,9 +795,10 @@ MyGuitarPage::MyGuitarPage (AIOGuitarProcessor& p)
         {
             juce::PopupMenu m;
             m.addSectionHeader (juce::String (s) + jp (u8"弦 ") + juce::String (f) + jp (u8"F を録る（ダウンとアップ）"));
-            m.addItem (1, "SOFT PICKING");
-            m.addItem (2, "HARD PICKING");
-            m.addItem (3, "PALM MUTE");
+            m.addItem (1 + Kit::slotSoft,   "SOFT PICKING");
+            m.addItem (1 + Kit::slotMedium, "MEDIUM PICKING");
+            m.addItem (1 + Kit::slotHard,   "HARD PICKING");
+            m.addItem (1 + Kit::slotMute,   "PALM MUTE");
             m.showMenuAsync (juce::PopupMenu::Options(), [this, s, f] (int r)
             {
                 if (r <= 0) return;
@@ -806,7 +813,7 @@ void MyGuitarPage::showGuide (bool show)
     guideShown = show;
     if (! show) guide.stop();
     guide.setVisible (show);
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &soft, &hard, &mute, &brush, &kit, &settings, &articulations })
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &soft, &medium, &hard, &mute, &brush, &kit, &settings, &articulations })
         c->setVisible (! show);
     resized();
 }
@@ -818,8 +825,8 @@ void MyGuitarPage::resized()
     auto row1 = r.removeFromTop (170); r.removeFromTop (gap);
     const int kitW = 230;
     kit.setBounds (row1.removeFromRight (kitW)); row1.removeFromRight (gap);
-    const int w = (row1.getWidth() - 3 * gap) / 4;
-    for (auto* c : { &soft, &hard, &mute, &brush }) { c->setBounds (row1.removeFromLeft (w)); row1.removeFromLeft (gap); }
+    const int w = (row1.getWidth() - 4 * gap) / 5;
+    for (auto* c : { &soft, &medium, &hard, &mute, &brush }) { c->setBounds (row1.removeFromLeft (w)); row1.removeFromLeft (gap); }
     grid.setBounds (r.removeFromTop (214)); r.removeFromTop (gap);
     settings.setBounds (r.removeFromTop (118)); r.removeFromTop (gap);
     articulations.setBounds (r);
@@ -835,35 +842,9 @@ void MyGuitarPage::resized()
 //==============================================================================
 AIOGuitarEditor::AIOGuitarEditor (AIOGuitarProcessor& p)
     : AudioProcessorEditor (&p), proc (p),
-      myGuitarPage (p), scorePage (p), effectsPage (p),
-      amp    (p.apvts, "AMP",          Pal::amp),
-      cab    (p.apvts, "CAB",          Pal::cab),
-      reverb (p.apvts, "REVERB / OUT", Pal::reverb)
+      myGuitarPage (p), scorePage (p), effectsPage (p), ampPage (p)
 {
     setLookAndFeel (&lnf);
-
-    amp.addToggle ("ampOn");
-    amp.addCombo ("ampChannel");
-    amp.addKnob ("ampGain", "Gain");
-    amp.addKnob ("ampBass", "Bass");
-    amp.addKnob ("ampMid", "Middle");
-    amp.addKnob ("ampTreble", "Treble");
-    amp.addKnob ("ampPresence", "Presence");
-    amp.addKnob ("ampMaster", "Master");
-
-    cab.addToggle ("cabOn");
-    cab.addCombo ("cabType");
-    cab.addKnob ("cabMic", "Mic Tone");
-
-    reverb.addKnob ("revMix", "Mix");
-    reverb.addKnob ("revSize", "Size");
-    reverb.addKnob ("outGain", "Output");
-
-    for (auto* c : { &amp, &cab, &reverb }) ampPage.addAndMakeVisible (*c);
-    ampNote.setText (jp (u8"仮の画面です。アンプ・キャビ・マイクの種類と位置まで選べる画面に作り直します（AmpliTube・Amp Designer を測って合わせ込み中）"), juce::dontSendNotification);
-    ampNote.setColour (juce::Label::textColourId, Pal::dim);
-    ampNote.setFont (juce::FontOptions (13.0f));
-    ampPage.addAndMakeVisible (ampNote);
 
     addAndMakeVisible (myGuitarPage);
     addChildComponent (scorePage);
@@ -956,13 +937,4 @@ void AIOGuitarEditor::resized()
     effectsPage.setBounds (page);
     ampPage.setBounds (page);
 
-    {
-        auto a = ampPage.getLocalBounds();
-        ampNote.setBounds (a.removeFromTop (28));
-        auto row = a.removeFromTop (200);
-        amp.setBounds (row); a.removeFromTop (8);
-        auto row2 = a.removeFromTop (200);
-        reverb.setBounds (row2.removeFromRight (360)); row2.removeFromRight (8);
-        cab.setBounds (row2);
-    }
 }

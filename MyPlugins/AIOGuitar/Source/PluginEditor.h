@@ -3,6 +3,7 @@
 #include "PluginProcessor.h"
 #include "ScorePage.h"
 #include "EffectsPage.h"
+#include "AmpPage.h"
 #include "RecordGuide.h"
 
 //==============================================================================
@@ -140,7 +141,7 @@ public:
     std::function<void (int string, int fret)> onRedo;
 
 private:
-    struct Cell { bool rec[3] {}; float cents = 0; int srcString = 0, srcFret = -1, shift = 0; bool any = false; };
+    struct Cell { bool rec[4] {}; float cents = 0; int srcString = 0, srcFret = -1, shift = 0; bool any = false; };
     void timerCallback() override;
     void rebuild();
     juce::Rectangle<float> board() const;
@@ -191,7 +192,7 @@ public:
     void resized() override;
 private:
     void showGuide (bool show);
-    SlotCard soft, hard, mute, brush;
+    SlotCard soft, medium, hard, mute, brush;
     KitCard kit;
     StringGrid grid;
     PlaySettings settings;
@@ -218,12 +219,10 @@ private:
     AIOLookAndFeel lnf;
 
     juce::TextButton tabs[4] { juce::TextButton ("MY GUITAR"), juce::TextButton ("SCORE"), juce::TextButton ("EFFECTS"), juce::TextButton ("AMP") };
-    juce::Component ampPage;
     MyGuitarPage myGuitarPage;
     ScorePage scorePage;
     EffectsPage effectsPage;
-    Section amp, cab, reverb;
-    juce::Label ampNote;
+    AmpPage ampPage;
     juce::ComboBox presetBox;
     int page = 0;
 

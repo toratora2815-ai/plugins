@@ -9,9 +9,13 @@
 
 namespace Kit
 {
-enum Slot { slotSoft = 0, slotHard, slotMute, slotBrush, numSlots };
-inline const char* slotName (int s) { static const char* n[] { "Soft picking", "Hard picking", "Palm mute", "Brushing" }; return n[s]; }
+// slotMedium was added later (2026-11-09): it is last so kits saved before keep their numbers
+enum Slot { slotSoft = 0, slotHard, slotMute, slotBrush, slotMedium, numSlots };
+inline const char* slotName (int s) { static const char* n[] { "Soft picking", "Hard picking", "Palm mute", "Brushing", "Medium picking" }; return n[s]; }
 inline bool isPicked (int slot) { return slot != slotBrush; }
+inline bool isOpenPicking (int slot) { return slot == slotSoft || slot == slotMedium || slot == slotHard; }
+// the order the layers are shown in (soft -> medium -> hard -> mute -> brush)
+constexpr int kLayerOrder[numSlots] { slotSoft, slotMedium, slotHard, slotMute, slotBrush };
 
 // standard tuning, string 1 (high E) .. 6 (low E); same as kOpenString in Articulations.h
 constexpr int kOpen[7] { 0, 64, 59, 55, 50, 45, 40 };
@@ -43,7 +47,7 @@ struct GuitarKit
     juce::ValueTree encoded;          // cached serialised form (FLAC), built once
 
     int count (int slot) const { return (int) std::count_if (samples.begin(), samples.end(), [slot] (const Sample& s) { return s.slot == slot; }); }
-    bool hasNotes() const { return count (slotSoft) + count (slotHard) + count (slotMute) > 0; }
+    bool hasNotes() const { return count (slotSoft) + count (slotMedium) + count (slotHard) + count (slotMute) > 0; }
 };
 
 //==============================================================================
@@ -359,6 +363,26 @@ inline SliceResult slice (const juce::AudioBuffer<float>& in, double sr, int slo
     }
     if (onsets.empty()) { res.message = "No notes found. Leave a short silence between notes."; return res; }
 
+    // the recording's noise (hum, hiss): what is there before the first pick, else the quietest 2 % of the 30 ms averages.
+    // A note is cut where it has died into it (otherwise the hum after the hand mute stays in the sample and,
+    // turned up by a drive, ends with a "buzz - click")
+    float noiseDb = -200.0f;
+    {
+        const int pre = onsets.front() / fr - 1;
+        if (pre >= 2)
+        {
+            std::vector<float> q (envS.begin() + 1, envS.begin() + pre);
+            std::sort (q.begin(), q.end());
+            noiseDb = q[q.size() / 2];
+        }
+        else
+        {
+            std::vector<float> q (envS);
+            std::sort (q.begin(), q.end());
+            noiseDb = q[q.size() / 50];
+        }
+    }
+
     int upDown = 0;
     for (size_t k = 0; k < onsets.size(); ++k)
     {
@@ -368,12 +392,16 @@ inline SliceResult slice (const juce::AudioBuffer<float>& in, double sr, int slo
         end = juce::jmin (end, on + maxLen);
         if (end - on < (int) (sr * (brushing ? 0.05 : (slot == slotMute ? 0.15 : 0.3)))) continue;
 
-        // trim the tail once it stays 60 dB below this note's peak (or into the next pick)
+        // trim the tail once it stays (60 ms) 60 dB below this note's peak or within 8 dB of the noise
         float segPeak = -200.0f;
         for (int f = on / fr; f < end / fr; ++f) segPeak = juce::jmax (segPeak, env[(size_t) f]);
+        const float thr = juce::jmax (segPeak - 60.0f, noiseDb + 8.0f);
         int tail = end;
-        for (int f = on / fr + 4; f < end / fr; ++f)
-            if (env[(size_t) f] < segPeak - 60.0f) { tail = f * fr; break; }
+        for (int f = on / fr + 4, below = 0; f < end / fr; ++f)
+        {
+            below = envS[(size_t) f] < thr ? below + 1 : 0;
+            if (below >= 12) { tail = (f - 11) * fr; break; }
+        }
         end = juce::jmax (on + (int) (sr * 0.05), tail);
 
         Sample s;
@@ -397,7 +425,8 @@ inline SliceResult slice (const juce::AudioBuffer<float>& in, double sr, int slo
         const int a = juce::jmax (0, on - pre);
         s.audio.setSize (1, end - a);
         for (int i = a; i < end; ++i) s.audio.setSample (0, i - a, x[(size_t) i]);
-        const int fin = juce::jmin (pre, s.audio.getNumSamples()), fout = juce::jmin ((int) (sr * 0.015), s.audio.getNumSamples());
+        // fade in over the 3 ms before the pick; fade out over 80 ms (what is left at the end is mostly noise)
+        const int fin = juce::jmin (pre, s.audio.getNumSamples()), fout = juce::jmin ((int) (sr * 0.08), s.audio.getNumSamples() / 3);
         s.audio.applyGainRamp (0, 0, fin, 0.0f, 1.0f);
         s.audio.applyGainRamp (0, s.audio.getNumSamples() - fout, fout, 1.0f, 0.0f);
         res.samples.push_back (std::move (s));
@@ -427,9 +456,12 @@ inline SliceResult slice (const juce::AudioBuffer<float>& in, double sr, int slo
 }
 
 //==============================================================================
-// Level matching: every note of a layer is brought to that layer's median loudness;
-// the whole kit is then scaled so soft picking sits at a fixed level (hard picking and
-// brushing keep their recorded level relative to it).
+// Level matching: every note of a layer is brought to that layer's median loudness (+/-12 dB at most).
+// The picking layers (soft / medium / hard) are then put at the SAME level: loudness comes from the
+// velocity curve only and the layers change the tone (a hard pick still sounds harder: sharper attack,
+// brighter), so there is no level step where one layer hands over to the next, and recording days
+// with different interface gain do not matter. Palm mute and brushing keep their recorded level
+// relative to MEDIUM (else SOFT, else HARD).
 inline void normalise (GuitarKit& kit, bool matchLevels)
 {
     auto median = [] (std::vector<float> v) { if (v.empty()) return 0.0f; std::sort (v.begin(), v.end()); return v[v.size() / 2]; };
@@ -440,16 +472,44 @@ inline void normalise (GuitarKit& kit, bool matchLevels)
         for (auto& s : kit.samples) if (s.slot == sl && s.rawRms > 0) r.push_back (s.rawRms);
         med[sl] = median (r);
     }
-    const float ref = med[slotSoft] > 0 ? med[slotSoft] : (med[slotHard] > 0 ? med[slotHard] : med[slotBrush]);
-    const float target = juce::Decibels::decibelsToGain (med[slotSoft] > 0 ? -24.0f : -18.0f);
+    // the reference layer: MEDIUM when there is one (recorded first, so adding SOFT / HARD later changes nothing),
+    // else SOFT, else HARD
+    int base = -1;
+    for (int L : { (int) slotMedium, (int) slotSoft, (int) slotHard }) if (med[L] > 0) { base = L; break; }
+    const float ref = base >= 0 ? med[base] : med[slotMute] > 0 ? med[slotMute] : med[slotBrush];
+    const float target = juce::Decibels::decibelsToGain (-21.0f);   // picking notes: -21 dB RMS before the velocity curve
     const float global = ref > 0 ? target / ref : 1.0f;
     for (auto& s : kit.samples)
     {
         float g = global;
+        if (isOpenPicking (s.slot) && base >= 0 && med[s.slot] > 0)
+            g *= med[base] / med[s.slot];                               // the layers at one level
         if (matchLevels && s.rawRms > 0 && med[s.slot] > 0)
             g *= juce::jlimit (0.25f, 4.0f, med[s.slot] / s.rawRms);   // at most +/-12 dB
         s.gain = g;
     }
+}
+
+//==============================================================================
+// which picking layer a velocity (0..1) plays; layers that were not recorded are skipped.
+// soft + medium + hard: velocity 1-60 soft, 61-100 medium, 101-127 hard (80-100, the most used, is medium).
+// soft + hard only: the old split at velocity 79. A missing layer is covered by its neighbour.
+constexpr float kSoftTop = 60.5f / 127.0f, kHardBottom = 100.5f / 127.0f;
+inline int layerForVelocity (const GuitarKit& kit, float vel)
+{
+    const bool s = kit.count (slotSoft) > 0, m = kit.count (slotMedium) > 0, h = kit.count (slotHard) > 0;
+    if (s && m && h) return vel < kSoftTop ? slotSoft : (vel >= kHardBottom ? slotHard : slotMedium);
+    if (s && h) return vel > 0.62f ? slotHard : slotSoft;
+    if (s && m) return vel < kSoftTop ? slotSoft : slotMedium;
+    if (m && h) return vel >= kHardBottom ? slotHard : slotMedium;
+    if (s) return slotSoft;
+    if (m) return slotMedium;
+    if (h) return slotHard;
+    return slotMute;
+}
+inline int pickingLayers (const GuitarKit& kit)
+{
+    return (kit.count (slotSoft) > 0 ? 1 : 0) + (kit.count (slotMedium) > 0 ? 1 : 0) + (kit.count (slotHard) > 0 ? 1 : 0);
 }
 
 //==============================================================================

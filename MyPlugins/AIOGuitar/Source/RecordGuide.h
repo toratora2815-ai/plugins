@@ -12,7 +12,7 @@ namespace GuideUI
     const juce::Colour bg { 0xff15161a }, panel { 0xff22242b }, panelHi { 0xff2c2f38 }, text { 0xffe8e6e1 }, dim { 0xff8b8d96 },
                        accent { 0xffe8a33d }, ok { 0xff4cc46a }, bad { 0xffe05a47 }, rec { 0xffff3b30 };
     inline juce::String jp (const char* s) { return juce::String (juce::CharPointer_UTF8 (s)); }
-    inline const char* layerName (int slot) { static const char* n[] { "SOFT PICKING", "HARD PICKING", "PALM MUTE", "BRUSHING" }; return n[slot]; }
+    inline const char* layerName (int slot) { static const char* n[] { "SOFT PICKING", "HARD PICKING", "PALM MUTE", "BRUSHING", "MEDIUM PICKING" }; return n[juce::jlimit (0, Kit::numSlots - 1, slot)]; }
     inline const char* stringName (int s) { static const char* n[] { "", "1 (E)", "2 (B)", "3 (G)", "4 (D)", "5 (A)", "6 (E)" }; return n[juce::jlimit (0, 6, s)]; }
 
     // the stand-alone app mutes its input by default (feedback guard). The guide unmutes it: the plugin
@@ -41,14 +41,15 @@ public:
     explicit GuidePanel (AIOGuitarProcessor& p) : proc (p)
     {
         using namespace GuideUI;
-        const char* names[] { "SOFT", "HARD", "MUTE", "BRUSH" };
-        for (int i = 0; i < 4; ++i)
+        const char* names[] { "SOFT", "HARD", "MUTE", "BRUSH", "MEDIUM" };
+        for (int i = 0; i < Kit::numSlots; ++i)   // shown soft, medium, hard, mute, brush
         {
-            auto* b = layerButtons.add (new juce::TextButton (names[i]));
+            const int layer = Kit::kLayerOrder[i];
+            auto* b = layerButtons.add (new juce::TextButton (names[layer]));
             b->setClickingTogglesState (false);
             b->setColour (juce::TextButton::buttonOnColourId, accent);
             b->setColour (juce::TextButton::textColourOnId, bg);
-            b->onClick = [this, i] { start (i); };
+            b->onClick = [this, layer] { start (layer); };
             addAndMakeVisible (b);
         }
         settingsButton.onClick = [] { GuideUI::showAudioSettings(); };
@@ -238,9 +239,14 @@ public:
             : jp (u8"・1 回だけ弾いて、鳴り終わるまで伸ばす（低い弦は 6〜8 秒）。手でミュートしたら次へ進みます") + "\n"
               + jp (u8"・ほかの弦は鳴らさない（前の弦は手でミュート）") + "\n"
               + jp (u8"・音程が少しずれていても大丈夫（あとで自動で直します）。半音以上ずれたら弦かカポを確認");
+        if (st.slot == Kit::slotSoft)   tips << "\n" << jp (u8"・強さ: そっと（弦がやさしく鳴るくらい）");
+        if (st.slot == Kit::slotMedium) tips << "\n" << jp (u8"・強さ: いつもコードやリフを弾くときの強さ");
+        if (st.slot == Kit::slotHard)   tips << "\n" << jp (u8"・強さ: アクセントで思い切り");
+        if (Kit::isOpenPicking (st.slot))
+            tips << "\n" << jp (u8"・SOFT / MEDIUM / HARD でピック・弾く位置・ピックアップ・トーン・入力のゲインを変えない");
         tips << "\n" << jp (u8"・スペースキーで一時停止 / 再開");
         if (! warnings.isEmpty()) tips << "\n" << jp (u8"・気になる点 ") << warnings.size() << jp (u8" 件（最後にまとめて出します）");
-        g.drawFittedText (tips, body.withTrimmedBottom (4), juce::Justification::topLeft, 8);
+        g.drawFittedText (tips, body.withTrimmedBottom (4), juce::Justification::topLeft, 10);
     }
 
     void resized() override
@@ -253,7 +259,7 @@ public:
         top.removeFromRight (6);
         inputBox.setBounds (top.removeFromRight (110));
         top.removeFromRight (16);
-        for (int i = 3; i >= 0; --i) { layerButtons[i]->setBounds (top.removeFromRight (78)); top.removeFromRight (4); }
+        for (int i = Kit::numSlots - 1; i >= 0; --i) { layerButtons[i]->setBounds (top.removeFromRight (i == 1 ? 84 : 66)); top.removeFromRight (4); }
         auto bottom = r.removeFromBottom (34);
         backButton.setBounds (bottom.removeFromLeft (130));
         bottom.removeFromLeft (8);
@@ -271,7 +277,7 @@ private:
         pending.clear(); warnings.clear(); status = {}; statusColour = GuideUI::dim;
         lastAcceptedNote = -1;
         pauseButton.setButtonText (GuideUI::jp (u8"一時停止"));
-        for (int i = 0; i < 4; ++i) layerButtons[i]->setToggleState (i == slot, juce::dontSendNotification);
+        for (int i = 0; i < Kit::numSlots; ++i) layerButtons[i]->setToggleState (Kit::kLayerOrder[i] == slot, juce::dontSendNotification);
         GuideUI::unmuteInput();
         sr = proc.getSampleRateNow();
         detector.prepare (sr, slot == Kit::slotBrush);
@@ -379,14 +385,21 @@ private:
             return;
         }
         const auto& st = steps[(size_t) index];
-        float softDb = 0.0f;
-        if (st.slot == Kit::slotHard)
+        // the same note in the layers under / over this one (to warn when they sound alike)
+        auto layerDb = [this, &st] (int layer)
+        {
+            float db = 0.0f;
             if (auto kit = proc.getKit())
                 for (auto& s : kit->samples)
-                    if (s.slot == Kit::slotSoft && s.string == st.string && s.fret == st.capo && s.up == st.up)
-                        softDb = juce::Decibels::gainToDecibels (s.rawRms);
+                    if (s.slot == layer && s.string == st.string && s.fret == st.capo && s.up == st.up && s.rawRms > 0)
+                        db = juce::Decibels::gainToDecibels (s.rawRms);
+            return db;
+        };
+        float belowDb = 0.0f, aboveDb = 0.0f;
+        if (st.slot == Kit::slotHard)   { belowDb = layerDb (Kit::slotMedium); if (belowDb == 0.0f) belowDb = layerDb (Kit::slotSoft); }
+        if (st.slot == Kit::slotMedium) { belowDb = layerDb (Kit::slotSoft); aboveDb = layerDb (Kit::slotHard); }
         const int prev = singleMode ? -1 : lastAcceptedNote;
-        auto r = Guide::judge (take, sr, st, capoWait ? -1 : prev, softDb);
+        auto r = Guide::judge (take, sr, st, capoWait ? -1 : prev, belowDb, aboveDb);
         if (debugTakes)
         {
             juce::AudioBuffer<float> bb (1, (int) take.size());

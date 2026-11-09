@@ -55,6 +55,7 @@ struct VoiceParams
     int   articulation = artNormal;   // latched by keyswitches (audio thread only)
     int   nextString   = 0;           // string chosen for the note being started (audio thread only)
     int   nextStrumUp  = -1;          // the note is part of a strum: 0 down-stroke take, 1 up-stroke take, -1 any
+    int   nextLayerVel = 0;           // strummed: the stroke's velocity 1..127 chooses the layer (0 = the note's own)
     unsigned rrCounter = 0;           // round-robin for recorded takes (audio thread only)
     int   lastTake[7] { -1, -1, -1, -1, -1, -1, -1 };   // last take used per string (audio thread only)
 
@@ -163,7 +164,12 @@ struct StringAllocator
 class GuitarSynth : public juce::Synthesiser
 {
 public:
-    explicit GuitarSynth (VoiceParams& p) : params (p) { strings.reset(); std::fill (std::begin (strumUpForNote), std::end (strumUpForNote), -1); }
+    explicit GuitarSynth (VoiceParams& p) : params (p)
+    {
+        strings.reset();
+        std::fill (std::begin (strumUpForNote), std::end (strumUpForNote), -1);
+        std::fill (std::begin (strumVelForNote), std::end (strumVelForNote), 0);
+    }
 
     static bool isKeyswitch (int note) noexcept
     {
@@ -191,6 +197,7 @@ public:
         }
     }
     int strumUpForNote[128];   // set by the strummer just before a note starts (-1 = not strummed)
+    int strumVelForNote[128];  // ... and the stroke's velocity (0 = not strummed)
 
     void setCurrentPlaybackSampleRate (double sr) override
     {
@@ -235,7 +242,8 @@ public:
             for (int k = 1; k <= 6; ++k) chokeString (k);   // a muted brush stops whatever rings ("chak")
         params.nextString = s;
         params.nextStrumUp = juce::isPositiveAndBelow (note, 128) ? strumUpForNote[note] : -1;
-        if (juce::isPositiveAndBelow (note, 128)) strumUpForNote[note] = -1;
+        params.nextLayerVel = juce::isPositiveAndBelow (note, 128) ? strumVelForNote[note] : 0;
+        if (juce::isPositiveAndBelow (note, 128)) { strumUpForNote[note] = -1; strumVelForNote[note] = 0; }
         const int latched = params.articulation;
         params.articulation = juce::jlimit (0, (int) numArticulations - 1, art);   // this note only
         juce::Synthesiser::noteOn (channel, note, velocity);

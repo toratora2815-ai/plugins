@@ -1,6 +1,6 @@
 #pragma once
-// EFFECTS ページ: ペダルボード。今は Porch Drive（ドライブ）と Wool Fuzz（ファズ）。
-// 中身は単体プラグインと同じ音。⇄ で順番を入れ替え、フットスイッチで ON/OFF（OFF は計算しない）。
+// EFFECTS ページ: ペダルボード。Cotton Comp（コンプ、いちばん前に固定）→ Porch Drive（ドライブ）と Wool Fuzz（ファズ）。
+// ドライブとファズは単体プラグインと同じ音で、⇄ で順番を入れ替え。フットスイッチで ON/OFF（OFF は計算しない）。
 #include "PluginProcessor.h"
 
 class PedalPanel : public juce::Component
@@ -102,11 +102,14 @@ class EffectsPage : public juce::Component, private juce::Timer
 public:
     explicit EffectsPage (AIOGuitarProcessor& p)
         : proc (p),
+          comp (p.apvts, "COTTON COMP", "compressor", "ccOn", { { "ccComp", "COMP" }, { "ccLevel", "LEVEL" }, { "ccBlend", "BLEND" } },
+                { juce::Colour (0xffe9e4d8), juce::Colour (0xff2d5c58), juce::Colour (0xff3a8a80) }),
           drive (p.apvts, "PORCH DRIVE", "overdrive", "pdOn", { { "pdLevel", "LEVEL" }, { "pdTone", "TONE" }, { "pdGain", "GAIN" } },
                  { juce::Colour (0xff2f6fb3), juce::Colour (0xff10284a), juce::Colour (0xff8fd0ff) }),
           fuzz (p.apvts, "WOOL FUZZ", "fuzz", "wfOn", { { "wfSustain", "SUSTAIN" }, { "wfTone", "TONE" }, { "wfVolume", "VOLUME" } },
                 { juce::Colour (0xffb8b2a4), juce::Colour (0xff8a1c1c), juce::Colour (0xff8a1c1c) })
     {
+        addAndMakeVisible (comp);
         addAndMakeVisible (drive);
         addAndMakeVisible (fuzz);
         swap.setTooltip (juce::String (juce::CharPointer_UTF8 (u8"ペダルの順番を入れ替える")));
@@ -126,7 +129,7 @@ public:
         g.fillRoundedRectangle (r.withTrimmedTop (34.0f), 12.0f);
         g.setColour (juce::Colour (0xff8b8d96));
         g.setFont (juce::FontOptions (13.0f));
-        g.drawText (juce::String (juce::CharPointer_UTF8 (u8"単体の Porch Drive・Wool Fuzz と同じ音。OFF のペダルは計算しません。音が鳴っていない間は EFFECTS と AMP を休ませます")),
+        g.drawText (juce::String (juce::CharPointer_UTF8 (u8"コンプはいちばん前に固定。ドライブ・ファズは単体の Porch Drive・Wool Fuzz と同じ音。OFF のペダルは計算しません。鳴っていない間は休ませます")),
                     r.removeFromTop (30.0f).withTrimmedLeft (4.0f), juce::Justification::centredLeft);
         if (proc.fxSleeping.load())
         {
@@ -151,9 +154,12 @@ private:
         auto r = getLocalBounds().withTrimmedTop (50).reduced (20, 20);
         board = r;
         r.removeFromLeft (50); r.removeFromRight (70);
-        const int pedalW = juce::jmin (300, (r.getWidth() - 90) / 2), pedalH = juce::jmin (440, r.getHeight());
-        auto row = r.withSizeKeepingCentre (pedalW * 2 + 90, pedalH);
-        auto first = row.removeFromLeft (pedalW), mid = row.removeFromLeft (90), second = row;
+        const int gapW = 36, swapW = 76;
+        const int pedalW = juce::jmin (280, (r.getWidth() - gapW - swapW) / 3), pedalH = juce::jmin (440, r.getHeight());
+        auto row = r.withSizeKeepingCentre (pedalW * 3 + gapW + swapW, pedalH);
+        comp.setBounds (row.removeFromLeft (pedalW));
+        row.removeFromLeft (gapW);
+        auto first = row.removeFromLeft (pedalW), mid = row.removeFromLeft (swapW), second = row;
         const bool fuzzFirst = proc.apvts.getRawParameterValue ("pedalOrder")->load() > 0.5f;
         (fuzzFirst ? fuzz : drive).setBounds (first);
         (fuzzFirst ? drive : fuzz).setBounds (second);
@@ -170,7 +176,7 @@ private:
     }
 
     AIOGuitarProcessor& proc;
-    PedalPanel drive, fuzz;
+    PedalPanel comp, drive, fuzz;
     juce::TextButton swap { juce::String (juce::CharPointer_UTF8 (u8"⇄")) };
     juce::Rectangle<int> board;
     bool shownOrder = false, shownSleep = false;

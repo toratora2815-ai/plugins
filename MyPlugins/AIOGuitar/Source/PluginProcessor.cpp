@@ -47,6 +47,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
                                   juce::StringArray { "Top 3", "Top 4", "All" }, 1));
 
     // ---- EFFECTS: Porch Drive / Wool Fuzz (same ranges and defaults as the stand-alone plugins)
+    l.add (std::make_unique<APB> (juce::ParameterID { "ccOn", 1 }, "Comp On", false));
+    l.add (std::make_unique<APF> (juce::ParameterID { "ccComp", 1 }, "Comp Amount", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
+    l.add (std::make_unique<APF> (juce::ParameterID { "ccLevel", 1 }, "Comp Level", juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f, fmt (" dB", 1)));
+    l.add (std::make_unique<APF> (juce::ParameterID { "ccBlend", 1 }, "Comp Blend", juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 100.0f, fmt (" %", 0)));
     l.add (std::make_unique<APB> (juce::ParameterID { "pdOn", 1 }, "Drive On", false));
     l.add (std::make_unique<APF> (juce::ParameterID { "pdGain", 1 }, "Drive Gain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 4.0f, fmt ("", 1)));
     l.add (std::make_unique<APF> (juce::ParameterID { "pdTone", 1 }, "Drive Tone", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
@@ -60,9 +64,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
 
     // ---- Amp
     l.add (std::make_unique<APB> (juce::ParameterID { "ampOn", 1 }, "Amp On", true));
-    l.add (std::make_unique<APC> (juce::ParameterID { "ampChannel", 1 }, "Amp Channel",
-                                  juce::StringArray { "Clean", "Crunch", "Lead" }, 1));
-    l.add (knob ("ampGain",     "Amp Gain", 5.0f));
+    l.add (std::make_unique<APC> (juce::ParameterID { "ampModel", 1 }, "Amp Model", ampsim::modelNames(), 3));
+    l.add (knob ("ampGain",     "Amp Gain", 4.0f));
     l.add (knob ("ampBass",     "Bass", 5.0f));
     l.add (knob ("ampMid",      "Middle", 5.0f));
     l.add (knob ("ampTreble",   "Treble", 5.0f));
@@ -71,9 +74,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
 
     // ---- Cabinet
     l.add (std::make_unique<APB> (juce::ParameterID { "cabOn", 1 }, "Cab On", true));
-    l.add (std::make_unique<APC> (juce::ParameterID { "cabType", 1 }, "Cab Type",
-                                  juce::StringArray { "4x12 Closed", "2x12 Combo", "1x12 Open" }, 0));
-    l.add (knob ("cabMic", "Mic Tone", 5.0f));
+    l.add (std::make_unique<APC> (juce::ParameterID { "cabType", 1 }, "Cab Type", ampsim::cabNames(), 2));
+    l.add (std::make_unique<APC> (juce::ParameterID { "cabMicType", 1 }, "Mic", ampsim::micNames(), 0));
+    l.add (knob ("cabPos",  "Mic Position", 3.0f));
+    l.add (knob ("cabDist", "Mic Distance", 2.0f));
 
     // ---- Pitch wheel
     l.add (std::make_unique<APF> (juce::ParameterID { "bendUp", 1 }, "Wheel Bend Up",
@@ -103,7 +107,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
 
     // ---- Reverb / Output
     l.add (std::make_unique<APF> (juce::ParameterID { "revMix", 1 }, "Reverb Mix",
-                                  juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.12f, fmt ("", 2)));
+                                  juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f, fmt ("", 2)));   // off: reverbs go after AIO Guitar
     l.add (std::make_unique<APF> (juce::ParameterID { "revSize", 1 }, "Reverb Size",
                                   juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.5f, fmt ("", 2)));
     l.add (std::make_unique<APF> (juce::ParameterID { "outGain", 1 }, "Output",
@@ -227,6 +231,7 @@ void AIOGuitarProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     chain.prepare (sampleRate, samplesPerBlock);
     pedals.prepare (sampleRate, samplesPerBlock);
     pedals.setOrderNow (get ("pedalOrder") > 0.5f);
+    pedals.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));
     pedals.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
     pedals.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
     setLatencySamples (chain.getLatencySamples() + pedals.latency());
@@ -258,11 +263,8 @@ void AIOGuitarProcessor::readParams()
     strumSet.upStrings = (int) get ("upStrings") + 3;   // 3, 4, 5 (= all)
     strumSet.humanize = voiceParams.humanize;
 
-    fx.gateThresh  = -80.0f;   // the old gate / comp / drive of FXChain are not used (EFFECTS has the real pedals)
-    fx.compOn      = false;
-    fx.drvOn       = false;
     fx.ampOn       = get ("ampOn") > 0.5f;
-    fx.ampChannel  = (int) get ("ampChannel");
+    fx.ampModel    = (int) get ("ampModel");
     fx.ampGain     = get ("ampGain");
     fx.ampBass     = get ("ampBass");
     fx.ampMid      = get ("ampMid");
@@ -271,7 +273,9 @@ void AIOGuitarProcessor::readParams()
     fx.ampMaster   = get ("ampMaster");
     fx.cabOn       = get ("cabOn") > 0.5f;
     fx.cabType     = (int) get ("cabType");
-    fx.cabMic      = get ("cabMic");
+    fx.cabMicType  = (int) get ("cabMicType");
+    fx.cabPos      = get ("cabPos");
+    fx.cabDist     = get ("cabDist");
     fx.revMix      = get ("revMix");
     fx.revSize     = get ("revSize");
     fx.outGain     = get ("outGain");
@@ -454,8 +458,10 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         buffer.applyGain (volume.getTargetValue());
 
     // ---- EFFECTS (pedals) -> AMP. Nothing playing and the tails gone: skip all of it (saves CPU)
+    pedals.comp.setOn (get ("ccOn") > 0.5f);
     pedals.drive.setOn (get ("pdOn") > 0.5f);
     pedals.fuzz.setOn (get ("wfOn") > 0.5f);
+    pedals.comp.setParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));
     pedals.drive.setParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
     pedals.fuzz.setParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
 
@@ -466,15 +472,21 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     fxSleeping.store (sleeping);
     if (sleeping)
     {
+        fx.offline = isNonRealtime();
+        chain.rest (fx, n);
+        pedals.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));    // the next note starts as set
+        pedals.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
+        pedals.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
         buffer.clear();
         return;
     }
     if (buffer.getNumChannels() >= 2)
         pedals.process (buffer.getArrayOfWritePointers(), n, get ("pedalOrder") > 0.5f);
+    fx.offline = isNonRealtime();
     chain.process (buffer, n, fx);
 
-    // with AMP and CAB both off the pedals come out raw (up to +26 dBFS): round off the top
-    if (! fx.ampOn && ! fx.cabOn)
+    // safety on the way out: linear up to -6 dBFS, rounded off above, never over 0 dBFS
+    // (the pedals alone reach +26 dBFS, a clean amp turned all the way up +7)
         for (int c = 0; c < buffer.getNumChannels(); ++c)
         {
             auto* d = buffer.getWritePointer (c);
@@ -755,6 +767,18 @@ void AIOGuitarProcessor::getStateInformation (juce::MemoryBlock& destData)
     auto state = apvts.copyState();
     state.setProperty ("program", currentProgram, nullptr);
     state.removeChild (state.getChildWithName ("KIT"), nullptr);
+    state.removeChild (state.getChildWithName ("CABIR"), nullptr);
+    {
+        const juce::ScopedLock sl (irLock);
+        if (cabIR.getNumSamples() > 0)
+        {
+            juce::ValueTree ir ("CABIR");
+            ir.setProperty ("name", cabIRName, nullptr);
+            ir.setProperty ("rate", cabIRRate, nullptr);
+            ir.setProperty ("data", juce::var (juce::MemoryBlock (cabIR.getReadPointer (0), sizeof (float) * (size_t) cabIR.getNumSamples())), nullptr);
+            state.appendChild (ir, nullptr);
+        }
+    }
     juce::MemoryOutputStream mos (destData, false);
     mos.writeInt (0x47494f41);   // "AIOG"
     mos.writeInt (3);
@@ -780,6 +804,37 @@ void AIOGuitarProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     if (! tree.hasType (apvts.state.getType())) return;
     currentProgram = tree.getProperty ("program", 0);
+    // projects saved before the AMP page was rebuilt (2026-11-09): channel -> model, the old cabinet numbers
+    {
+        auto param = [&tree] (const char* id) { for (auto c : tree) if (c.hasType ("PARAM") && c["id"].toString() == id) return c; return juce::ValueTree(); };
+        auto oldCh = param ("ampChannel");
+        if (oldCh.isValid() && ! param ("ampModel").isValid())
+        {
+            const int ch = juce::jlimit (0, 2, (int) (float) oldCh["value"]);
+            juce::ValueTree m ("PARAM"); m.setProperty ("id", "ampModel", nullptr); m.setProperty ("value", (float) (ch == 0 ? 0 : (ch == 1 ? 3 : 4)), nullptr);
+            tree.appendChild (m, nullptr);
+            if (auto cab = param ("cabType"); cab.isValid() && ! param ("cabMicType").isValid())
+            {
+                const int old = juce::jlimit (0, 2, (int) (float) cab["value"]);   // 4x12 Closed, 2x12 Combo, 1x12 Open
+                cab.setProperty ("value", (float) (old == 0 ? 2 : (old == 1 ? 1 : 0)), nullptr);
+            }
+        }
+    }
+    const auto irTree = tree.getChildWithName ("CABIR");
+    tree.removeChild (irTree, nullptr);
+    if (! irTree.isValid())
+    {
+        const juce::ScopedLock sl (irLock);
+        cabIR.setSize (0, 0); cabIRName = {};
+        chain.getCab().clearIR();
+    }
+    if (irTree.isValid())
+        if (auto* mb = irTree["data"].getBinaryData(); mb != nullptr && mb->getSize() >= sizeof (float) * 16)
+        {
+            juce::AudioBuffer<float> b (1, (int) (mb->getSize() / sizeof (float)));
+            std::memcpy (b.getWritePointer (0), mb->getData(), sizeof (float) * (size_t) b.getNumSamples());
+            setCabIR (std::move (b), (double) irTree.getProperty ("rate", 48000.0), irTree["name"].toString());
+        }
     apvts.replaceState (tree);
 
     // make sure every parameter object (incl. booleans) holds exactly the restored value
@@ -811,3 +866,50 @@ void AIOGuitarProcessor::previewNote (int note, int string, bool on)
 juce::AudioProcessorEditor* AIOGuitarProcessor::createEditor() { return new AIOGuitarEditor (*this); }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new AIOGuitarProcessor(); }
+
+//==============================================================================
+// Cabinet IR (CAB "Loaded IR"): mono, at most 2 s, kept in the project
+juce::String AIOGuitarProcessor::loadCabIR (const juce::File& file)
+{
+    juce::AudioFormatManager fm;
+    fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (file));
+    if (r == nullptr) return juce::String (juce::CharPointer_UTF8 (u8"読めないファイルです"));
+    const int len = (int) juce::jmin<juce::int64> (r->lengthInSamples, (juce::int64) (r->sampleRate * 0.5));   // a cabinet IR is < 0.25 s; longer ones cost CPU for nothing
+    if (len < 16) return juce::String (juce::CharPointer_UTF8 (u8"短すぎます"));
+    juce::AudioBuffer<float> in ((int) r->numChannels, len);
+    r->read (&in, 0, len, 0, true, true);
+    juce::AudioBuffer<float> mono (1, len);
+    mono.clear();
+    for (int c = 0; c < in.getNumChannels(); ++c) mono.addFrom (0, 0, in, c, 0, len, 1.0f / (float) in.getNumChannels());
+    if (mono.getMagnitude (0, 0, len) < 1.0e-6f) return juce::String (juce::CharPointer_UTF8 (u8"無音のファイルです"));
+    setCabIR (std::move (mono), r->sampleRate, file.getFileNameWithoutExtension());
+    if (auto* p = apvts.getParameter ("cabType")) p->setValueNotifyingHost (p->convertTo0to1 ((float) (ampsim::numCabs - 1)));
+    return {};
+}
+
+void AIOGuitarProcessor::setCabIR (juce::AudioBuffer<float>&& ir, double rate, const juce::String& name)
+{
+    // the silent end costs CPU for nothing: cut where it stays 80 dB under the peak (+5 ms).
+    // Here, so IRs saved in projects before this was added are cut too
+    if (const int len = ir.getNumSamples(); len > 0)
+    {
+        const float peak = ir.getMagnitude (0, 0, len);
+        int last = len - 1;
+        while (last > 0 && std::abs (ir.getSample (0, last)) < peak * 1.0e-4f) --last;
+        ir.setSize (1, juce::jmin (len, last + 1 + (int) (rate * 0.005)), true, false, true);
+    }
+    {
+        const juce::ScopedLock sl (irLock);
+        cabIR.makeCopyOf (ir);
+        cabIRRate = rate;
+        cabIRName = name;
+    }
+    chain.getCab().loadIR (std::move (ir), rate);
+}
+
+juce::String AIOGuitarProcessor::getCabIRName() const
+{
+    const juce::ScopedLock sl (irLock);
+    return cabIRName;
+}

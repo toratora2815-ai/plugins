@@ -218,8 +218,47 @@ namespace
     }
 }
 
+// AMP probe: RenderTest --amp <in.wav> <out.wav> model gain bass mid treble presence master cabOn cab mic pos dist
+// (to compare with Amp Designer: the same test signal through both, build/AmpLab/analyse_ad.py)
+static int ampProbe (int argc, char** argv)
+{
+    if (argc < 15) { std::cout << "usage: --amp in out model gain bass mid treble presence master cabOn cab mic pos dist" << std::endl; return 2; }
+    juce::AudioFormatManager fm; fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (juce::File (argv[2])));
+    if (r == nullptr) return 3;
+    juce::AudioBuffer<float> b (2, (int) r->lengthInSamples);
+    r->read (&b, 0, b.getNumSamples(), 0, true, true);
+    if (r->numChannels == 1) b.copyFrom (1, 0, b, 0, 0, b.getNumSamples());
+    FXChain ch; FXParams fp;
+    auto f = [&] (int i) { return (float) juce::String (argv[i]).getDoubleValue(); };
+    fp.ampOn = f (4) >= 0.0f; fp.ampModel = juce::jmax (0, (int) f (4)); fp.ampGain = f (5); fp.ampBass = f (6); fp.ampMid = f (7); fp.ampTreble = f (8);
+    fp.ampPresence = f (9); fp.ampMaster = f (10); fp.cabOn = f (11) > 0.5f; fp.cabType = (int) f (12); fp.cabMicType = (int) f (13);
+    fp.cabPos = f (14); fp.cabDist = argc > 15 ? f (15) : 2.0f; fp.revMix = 0.0f;
+    ch.prepare (r->sampleRate, 512);
+    for (int pos = 0; pos < b.getNumSamples(); pos += 512)
+    {
+        const int n = juce::jmin (512, b.getNumSamples() - pos);
+        juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, n);
+        ch.process (blk, n, fp);
+    }
+    // undo the oversampling latency so the output lines up with the input
+    const int lat = ch.getLatencySamples();
+    juce::AudioBuffer<float> o (2, b.getNumSamples());
+    o.clear();
+    for (int c = 0; c < 2; ++c) o.copyFrom (c, 0, b, c, lat, b.getNumSamples() - lat);
+    juce::File out (argv[3]); out.deleteFile();
+    if (auto os = out.createOutputStream())
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), r->sampleRate, 2, 32, {}, 0));
+        if (w) { os.release(); w->writeFromAudioSampleBuffer (o, 0, o.getNumSamples()); }
+    }
+    return 0;
+}
+
 int main (int argc, char** argv)
 {
+    if (argc > 1 && juce::String (argv[1]) == "--amp") return ampProbe (argc, argv);
     juce::ScopedJuceInitialiser_GUI init;
     const juce::File outDir (argc > 1 ? juce::String (argv[1]) : juce::File::getCurrentWorkingDirectory().getFullPathName());
     outDir.createDirectory();
@@ -305,7 +344,9 @@ int main (int argc, char** argv)
         setP (proc, "stringMode", 1);
         auto out = render (proc, { { 0.01, juce::MidiMessage::noteOn (1, 64, 0.6f) }, { 0.5, juce::MidiMessage::noteOn (1, 69, 0.6f) },
                                    { 1.2, juce::MidiMessage::noteOff (1, 64) }, { 1.2, juce::MidiMessage::noteOff (1, 69) } }, 1.4, sr);
-        const float f = pitchOf (out, (int) (0.7 * sr), sr);
+        std::vector<float> xs ((size_t) out.getNumSamples());
+        for (int i = 0; i < out.getNumSamples(); ++i) xs[(size_t) i] = out.getSample (0, i);
+        const float f = Kit::detail::measurePitch (xs, (int) (0.7 * sr), (int) (1.15 * sr), sr, false);   // tuner-like (YIN reads stiff strings sharp)
         check (std::abs (1200.0 * std::log2 (f / noteHz (69))) < 10.0, "same string: only the new note sounds (" + juce::String (f, 1) + " Hz, want " + juce::String (noteHz (69), 1) + ")");
         const float jump = maxJump (out, (int) (0.49 * sr), (int) (0.53 * sr)), level = out.getMagnitude (0, (int) (0.3 * sr), (int) (0.2 * sr));
         check (jump < level * 0.5f, "choke is click-free (jump " + juce::String (jump, 4) + " vs level " + juce::String (level, 3) + ")");
@@ -596,6 +637,358 @@ int main (int argc, char** argv)
         }
         setP (proc, "revMix", 0.12f);
         setP (proc, "strumOn", 1);
+    }
+
+    // ---- COTTON COMP (compressor in front of the drive / fuzz)
+    std::cout << "== cotton comp ==" << std::endl;
+    {
+        // the DSP alone: a sine at a fixed level, gain measured once it has settled
+        auto through = [&] (float comp, float level, float blend, float inDb, double hz, bool noise = false)
+        {
+            pedal::CottonCompDSP c;
+            c.prepare (sr, 512, 2);
+            c.setParams (comp, level, blend, true);
+            const int total = (int) (1.5 * sr);
+            juce::AudioBuffer<float> b (2, total);
+            juce::Random nr (7);
+            const float a = juce::Decibels::decibelsToGain (inDb);
+            for (int i = 0; i < total; ++i)
+            {
+                const float v = noise ? a * 1.7f * (nr.nextFloat() * 2.0f - 1.0f) : a * (float) std::sin (6.283185307 * hz * i / sr);
+                b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+            juce::AudioBuffer<float> in (b);
+            for (int pos = 0; pos < total; pos += 512) { float* d[2] { b.getWritePointer (0, pos), b.getWritePointer (1, pos) }; c.process (d, 2, juce::jmin (512, total - pos)); }
+            const int s0 = (int) (1.0 * sr), len = total - s0;
+            return std::make_pair (juce::Decibels::gainToDecibels (b.getRMSLevel (0, s0, len) / juce::jmax (1.0e-12f, in.getRMSLevel (0, s0, len))), b);
+        };
+        // 1) squashes: inputs 24 dB apart come out much closer together
+        const float lo = through (10, 0, 100, -30, 196).first - 30.0f + 0.0f, hi = through (10, 0, 100, -6, 196).first - 6.0f;
+        juce::ignoreUnused (lo, hi);
+        const float outLo = -30.0f + through (10, 0, 100, -30, 196).first, outHi = -6.0f + through (10, 0, 100, -6, 196).first;
+        check (outHi - outLo < 9.0f, "COMP 10: inputs 24 dB apart come out " + juce::String (outHi - outLo, 1) + " dB apart");
+        const float outLo5 = -30.0f + through (5, 0, 100, -30, 196).first, outHi5 = -6.0f + through (5, 0, 100, -6, 196).first;
+        check (outHi5 - outLo5 > outHi - outLo + 3.0f && outHi5 - outLo5 < 20.0f, "COMP 5 squashes less (" + juce::String (outHi5 - outLo5, 1) + " dB apart)");
+        // 2) the lift is capped at +20 dB, noise-level sound is not lifted
+        float maxLift = -100;
+        for (float inDb : { -58.0f, -55.0f, -50.0f, -45.0f, -40.0f }) maxLift = juce::jmax (maxLift, through (10, 0, 100, inDb, 330).first);
+        check (maxLift <= 20.5f && maxLift > 15.0f, "lift at most +20 dB (" + juce::String (maxLift, 1) + " dB at most)");
+        const float noiseLift = through (10, 0, 100, -80, 0, true).first, hum = through (10, 0, 100, -78, 60).first;
+        check (noiseLift < 1.0f && hum < 1.0f, "hiss (-80 dBFS) and hum (-78 dBFS) are not lifted (" + juce::String (noiseLift, 1) + " / " + juce::String (hum, 1) + " dB)");
+        // 3) COMP 0 is nearly transparent, BLEND 0 is the dry sound, LEVEL moves the output
+        check (std::abs (through (0, 0, 100, -14, 440).first) < 1.0f, "COMP 0: about unity at -14 dBFS (" + juce::String (through (0, 0, 100, -14, 440).first, 2) + " dB)");
+        check (std::abs (through (10, 0, 0, -30, 440).first) < 0.05f, "BLEND 0 = the dry sound");
+        check (std::abs (through (5, 6, 100, -20, 440).first - through (5, 0, 100, -20, 440).first - 6.0f) < 0.1f, "LEVEL +6 dB adds 6 dB");
+        // 4) low E keeps its shape (no ripple distortion from the detector): harmonic 2 and 3 far below
+        {
+            auto [g, b] = through (10, 0, 100, -10, 82.41);
+            juce::ignoreUnused (g);
+            auto bandAt = [&] (double f)
+            {
+                double re = 0, im = 0; const int s0 = (int) (1.0 * sr), len = (int) (0.4 * sr);
+                for (int i = 0; i < len; ++i) { const double w = 0.5 - 0.5 * std::cos (6.283185307 * i / len), x = b.getSample (0, s0 + i) * w;
+                                                re += x * std::cos (6.283185307 * f * i / sr); im += x * std::sin (6.283185307 * f * i / sr); }
+                return 10.0 * std::log10 (re * re + im * im + 1e-30);
+            };
+            const double h1 = bandAt (82.41), h2 = bandAt (164.8), h3 = bandAt (247.2);
+            check (h2 < h1 - 40.0 && h3 < h1 - 40.0, "low E squashed hard stays clean (2nd " + juce::String (h2 - h1, 0) + " dB, 3rd " + juce::String (h3 - h1, 0) + " dB)");
+        }
+        // 4b) real hiss (gaussian) and hum at -70 dBFS RMS are not lifted
+        {
+            auto liftOf = [&] (bool hum)
+            {
+                pedal::CottonCompDSP c; c.prepare (sr, 512, 2); c.setParams (10, 0, 100, true);
+                const int total = (int) (2.0 * sr);
+                juce::AudioBuffer<float> b (2, total);
+                juce::Random nr (11);
+                const float a = juce::Decibels::decibelsToGain (-70.0f);
+                for (int i = 0; i < total; ++i)
+                {
+                    float v;
+                    if (hum) v = a * 1.41421f * (float) (std::sin (6.283185307 * 60.0 * i / sr) * 0.8 + std::sin (6.283185307 * 180.0 * i / sr) * 0.6);
+                    else { float g = 0; for (int k = 0; k < 12; ++k) g += nr.nextFloat(); v = a * (g - 6.0f); }   // ~gaussian, RMS = a
+                    b.setSample (0, i, v); b.setSample (1, i, v);
+                }
+                juce::AudioBuffer<float> in (b);
+                for (int pos = 0; pos < total; pos += 512) { float* d[2] { b.getWritePointer (0, pos), b.getWritePointer (1, pos) }; c.process (d, 2, juce::jmin (512, total - pos)); }
+                const int s0 = (int) (1.0 * sr), len = total - s0;
+                return juce::Decibels::gainToDecibels (b.getRMSLevel (0, s0, len) / in.getRMSLevel (0, s0, len));
+            };
+            const float hiss = liftOf (false), hum70 = liftOf (true);
+            check (hiss <= 3.0f && hum70 <= 3.0f, "COMP 10: gaussian hiss / hum at -70 dBFS RMS lifted at most 3 dB (" + juce::String (hiss, 1) + " / " + juce::String (hum70, 1) + " dB)");
+        }
+        // 4c) a quiet note gets its lift from the start (no 1-2 s swell), a second pick does not jump out
+        {
+            auto pluckGain = [&] (bool second, bool compOn, float peakDb, std::vector<float>* outP = nullptr)
+            {
+                pedal::CottonCompDSP c; c.prepare (sr, 512, 2); c.setParams (10, 0, 100, true);
+                const int total = (int) (3.0 * sr), at2 = (int) (1.2 * sr);
+                juce::AudioBuffer<float> b (2, total);
+                b.clear();
+                auto add = [&] (int at)
+                {
+                    for (int i = at; i < total; ++i)
+                    {
+                        const double t = (i - at) / sr;
+                        const double v = std::exp (-t / 0.9) * (std::sin (6.283185307 * 110.0 * t) + 0.5 * std::sin (6.283185307 * 220.0 * t + 1.0) + 0.3 * std::sin (6.283185307 * 330.0 * t))
+                                         * juce::jmin (1.0, t / 0.002);
+                        b.setSample (0, i, b.getSample (0, i) + (float) (v * juce::Decibels::decibelsToGain (peakDb) / 1.6));
+                    }
+                };
+                add (0);
+                if (second) add (at2);
+                b.copyFrom (1, 0, b, 0, 0, total);
+                juce::AudioBuffer<float> in (b);
+                if (compOn)
+                    for (int pos = 0; pos < total; pos += 512) { float* d[2] { b.getWritePointer (0, pos), b.getWritePointer (1, pos) }; c.process (d, 2, juce::jmin (512, total - pos)); }
+                if (outP) { outP->resize ((size_t) total); for (int i = 0; i < total; ++i) (*outP)[(size_t) i] = b.getSample (0, i); }
+                auto gainIn = [&] (double t0, double t1) { const int a0 = (int) (t0 * sr), n0 = (int) ((t1 - t0) * sr);
+                                                           return juce::Decibels::gainToDecibels (b.getRMSLevel (0, a0, n0) / juce::jmax (1.0e-9f, in.getRMSLevel (0, a0, n0))); };
+                return std::make_pair (gainIn (0.01, 0.05), gainIn (0.4, 0.8));
+            };
+            const auto q = pluckGain (false, true, -32.0f);
+            check (q.second - q.first < 6.0f && q.first > 4.0f, "COMP 10, quiet note (peak -32 dBFS): lifted from the start (" + juce::String (q.first, 1) + " dB at 10-50 ms, "
+                   + juce::String (q.second, 1) + " dB at 0.4-0.8 s)");
+            std::vector<float> on2, off2;
+            pluckGain (true, true, -14.0f, &on2); pluckGain (true, false, -14.0f, &off2);
+            auto pk = [&] (const std::vector<float>& v, double t0, double t1) { float m = 0; for (int i = (int) (t0 * sr); i < (int) (t1 * sr); ++i) m = juce::jmax (m, std::abs (v[(size_t) i])); return juce::Decibels::gainToDecibels (m); };
+            const float first = pk (on2, 0.0, 0.03), second = pk (on2, 1.2, 1.23), sustain = pk (on2, 1.0, 1.19), offSecond = pk (off2, 1.2, 1.23);
+            check (std::abs (second - first) < 3.0f && second < offSecond + 3.0f && second - sustain < 11.0f,
+                   "COMP 10: a second pick over a ringing note does not jump out (1st " + juce::String (first, 1) + ", 2nd " + juce::String (second, 1)
+                   + ", ringing " + juce::String (sustain, 1) + ", comp off " + juce::String (offSecond, 1) + " dBFS)");
+        }
+        // 5) nothing odd with silence / full scale / DC
+        {
+            pedal::CottonCompDSP c; c.prepare (sr, 512, 2); c.setParams (10, 12, 100, true);
+            juce::AudioBuffer<float> b (2, 4096);
+            bool fine = true;
+            for (float v : { 0.0f, 1.0f, -1.0f, 0.5f })
+            {
+                for (int i = 0; i < 4096; ++i) { const float x = (v == 1.0f && (i & 1)) ? -1.0f : v; b.setSample (0, i, x); b.setSample (1, i, x); }
+                for (int k = 0; k < 8; ++k) { float* d[2] { b.getWritePointer (0, k * 512), b.getWritePointer (1, k * 512) }; c.process (d, 2, 512); }
+                for (int i = 0; i < 4096; ++i) fine = fine && std::isfinite (b.getSample (0, i)) && std::abs (b.getSample (0, i)) < 8.0f;
+            }
+            check (fine, "silence / full scale / DC: finite and bounded");
+        }
+
+        // in the plugin: a note through the comp (ON vs OFF) - longer sustain, about the same loudness at LEVEL 0
+        setP (proc, "revMix", 0.0f); setP (proc, "strumOn", 0); setP (proc, "ampOn", 0); setP (proc, "cabOn", 0);
+        setP (proc, "kitHuman", 0.0f);
+        auto note = [] { return std::vector<Ev> { { 0.01, juce::MidiMessage::noteOn (1, 45, 0.8f) }, { 2.8, juce::MidiMessage::noteOff (1, 45) } }; };
+        render (proc, {}, 0.3, sr);
+        auto dry = render (proc, note(), 3.0, sr);
+        setP (proc, "ccOn", 1); setP (proc, "ccComp", 7);
+        render (proc, {}, 0.3, sr);
+        auto wet = render (proc, note(), 3.0, sr);
+        const float dryDrop = rmsDb (dry, 0.05, 0.3, sr) - rmsDb (dry, 2.0, 2.5, sr), wetDrop = rmsDb (wet, 0.05, 0.3, sr) - rmsDb (wet, 2.0, 2.5, sr);
+        check (wetDrop < dryDrop - 6.0f, "comp: the note sustains longer (decay 0.2 s -> 2.2 s: " + juce::String (dryDrop, 1) + " dB dry, " + juce::String (wetDrop, 1) + " dB with comp)");
+        check (std::abs (rmsDb (wet, 0.05, 1.5, sr) - rmsDb (dry, 0.05, 1.5, sr)) < 4.0f, "comp at LEVEL 0: about the same loudness ("
+               + juce::String (rmsDb (dry, 0.05, 1.5, sr), 1) + " / " + juce::String (rmsDb (wet, 0.05, 1.5, sr), 1) + " dB)");
+        check (allFinite (wet), "comp in the plugin: no NaN");
+        writeWav (outDir.getChildFile ("comp_dry.wav"), dry, sr);
+        writeWav (outDir.getChildFile ("comp_on.wav"), wet, sr);
+
+        // switching the comp while a note rings: no click
+        {
+            auto run = [&] (bool switching)
+            {
+                std::vector<Ev> ev { { 0.01, juce::MidiMessage::noteOn (1, 45, 0.8f) }, { 1.9, juce::MidiMessage::noteOff (1, 45) } };
+                juce::MidiBuffer all; for (auto& e : ev) all.addEvent (e.m, (int) (e.t * sr));
+                const int total = (int) (2.0 * sr), bs = 256;
+                juce::AudioBuffer<float> out (2, total), block (2, bs);
+                setP (proc, "ccOn", switching ? 0 : 1);
+                proc.prepareToPlay (sr, bs);
+                for (int pos = 0; pos < total; pos += bs)
+                {
+                    if (switching && pos == (int) (0.6 * sr) / bs * bs) setP (proc, "ccOn", 1);
+                    if (pos == (int) (1.2 * sr) / bs * bs) setP (proc, "ccOn", 0);
+                    const int n = juce::jmin (bs, total - pos);
+                    block.setSize (2, n, false, false, true);
+                    juce::MidiBuffer mb;
+                    for (const auto meta : all) if (meta.samplePosition >= pos && meta.samplePosition < pos + n) mb.addEvent (meta.getMessage(), meta.samplePosition - pos);
+                    proc.processBlock (block, mb);
+                    for (int c = 0; c < 2; ++c) out.copyFrom (c, pos, block, c, 0, n);
+                }
+                return out;
+            };
+            auto ref = run (false), sw = run (true);
+            auto bend = [&] (const juce::AudioBuffer<float>& b, double t0, double t1)
+            {
+                float m = 0;
+                for (int i = (int) (t0 * sr); i < (int) (t1 * sr); ++i)
+                    m = juce::jmax (m, std::abs (b.getSample (0, i) - 2.0f * b.getSample (0, i - 1) + b.getSample (0, i - 2)));
+                return m;
+            };
+            const float on = bend (sw, 0.58, 0.66), onRef = juce::jmax (bend (ref, 0.58, 0.66), bend (sw, 0.45, 0.57));
+            const float off = bend (sw, 1.18, 1.26), offRef = juce::jmax (bend (ref, 1.18, 1.26), bend (sw, 1.0, 1.15));
+            check (on <= onRef * 1.3f && off <= offRef * 1.3f, "comp on / off while playing: no click (bends " + juce::String (on, 4) + " vs " + juce::String (onRef, 4)
+                   + ", off " + juce::String (off, 4) + " vs " + juce::String (offRef, 4) + ")");
+        }
+        setP (proc, "ccOn", 0); setP (proc, "ccComp", 5);
+        setP (proc, "kitHuman", 0.5f);
+        setP (proc, "ampOn", 1); setP (proc, "cabOn", 1);
+        setP (proc, "revMix", 0.12f); setP (proc, "strumOn", 1);
+    }
+
+    // ---- MEDIUM layer: velocity -> layer, no level step at the hand-overs
+    std::cout << "== medium layer ==" << std::endl;
+    {
+        // three recordings of the same notes: medium 6 dB louder, hard 12 dB louder and brighter
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (softFile));
+        juce::AudioBuffer<float> sb ((int) rd->numChannels, (int) rd->lengthInSamples);
+        rd->read (&sb, 0, sb.getNumSamples(), 0, true, true);
+        auto variant = [&] (const char* name, float db, float bright)
+        {
+            std::vector<float> x ((size_t) sb.getNumSamples());
+            float prev = 0;
+            for (int i = 0; i < sb.getNumSamples(); ++i) { const float v = sb.getSample (0, i); x[(size_t) i] = juce::Decibels::decibelsToGain (db) * (v + bright * (v - prev)); prev = v; }
+            auto f = outDir.getChildFile (name);
+            writeMono (f, x, rd->sampleRate);
+            return f;
+        };
+        AIOGuitarProcessor p3;
+        p3.prepareToPlay (sr, 256);
+        p3.loadRecordingNow (Kit::slotSoft, softFile);
+        p3.loadRecordingNow (Kit::slotMedium, variant ("fake_medium.wav", 6.0f, 0.3f));
+        p3.loadRecordingNow (Kit::slotHard, variant ("fake_hard.wav", 12.0f, 0.8f));
+        auto k3 = p3.getKit();
+        check (k3->count (Kit::slotMedium) == (int) softTruth.size(), "medium picking: " + juce::String (k3->count (Kit::slotMedium)) + " / " + juce::String ((int) softTruth.size()) + " notes cut");
+        auto L = [&] (int vel) { return Kit::layerForVelocity (*k3, (float) vel / 127.0f); };
+        check (L (1) == Kit::slotSoft && L (60) == Kit::slotSoft && L (61) == Kit::slotMedium && L (100) == Kit::slotMedium && L (101) == Kit::slotHard && L (127) == Kit::slotHard,
+               "velocity 1-60 soft, 61-100 medium, 101-127 hard");
+        // only medium (+ palm mute): every velocity plays medium, never the palm mute
+        {
+            Kit::GuitarKit only;
+            for (auto& s : k3->samples) if (s.slot == Kit::slotMedium) only.samples.push_back (s);
+            for (auto& s : kit->samples) if (s.slot == Kit::slotMute) only.samples.push_back (s);
+            check (Kit::layerForVelocity (only, 0.1f) == Kit::slotMedium && Kit::layerForVelocity (only, 1.0f) == Kit::slotMedium && Kit::pickingLayers (only) == 1,
+                   "a kit with only MEDIUM: every velocity plays medium (not the palm mute)");
+            Kit::GuitarKit sh;
+            for (auto& s : k3->samples) if (s.slot != Kit::slotMedium) sh.samples.push_back (s);
+            check (Kit::layerForVelocity (sh, 78.0f / 127.0f) == Kit::slotSoft && Kit::layerForVelocity (sh, 80.0f / 127.0f) == Kit::slotHard, "SOFT + HARD only: hard from velocity 79-80 as before");
+        }
+        // the layers sit at one level: going one velocity step over a hand-over is not a jump
+        for (const char* id : { "revMix" }) setP (p3, id, 0.0f);
+        setP (p3, "strumOn", 0); setP (p3, "ampOn", 0); setP (p3, "cabOn", 0); setP (p3, "kitHuman", 0.0f);
+        auto lvl = [&] (int vel)
+        {
+            render (p3, {}, 0.5, sr);
+            auto o = render (p3, { { 0.01, juce::MidiMessage::noteOn (1, 52, (juce::uint8) vel) }, { 0.6, juce::MidiMessage::noteOff (1, 52) } }, 0.7, sr);
+            return rmsDb (o, 0.02, 0.5, sr);
+        };
+        const float s60 = lvl (60), m61 = lvl (61), m100 = lvl (100), h101 = lvl (101), h127 = lvl (127), s20 = lvl (20);
+        check (std::abs (m61 - s60) < 1.5f && std::abs (h101 - m100) < 1.5f, "no level step at the hand-overs (60->61 " + juce::String (m61 - s60, 1) + " dB, 100->101 "
+               + juce::String (h101 - m100, 1) + " dB; recorded 6 / 6 dB apart)");
+        check (h127 > s20 + 6.0f, "loudness still follows velocity (20: " + juce::String (s20, 1) + " dB, 127: " + juce::String (h127, 1) + " dB)");
+        // palm mute keeps its level when SOFT is added after MEDIUM (the recommended order)
+        {
+            AIOGuitarProcessor pm; pm.prepareToPlay (sr, 256);
+            pm.loadRecordingNow (Kit::slotMedium, outDir.getChildFile ("fake_medium.wav"));
+            pm.loadRecordingNow (Kit::slotMute, muteFile);
+            float before = 0, after = 0;
+            for (auto& smp : pm.getKit()->samples) if (smp.slot == Kit::slotMute) { before = smp.gain; break; }
+            pm.loadRecordingNow (Kit::slotSoft, softFile);
+            for (auto& smp : pm.getKit()->samples) if (smp.slot == Kit::slotMute) { after = smp.gain; break; }
+            check (std::abs (juce::Decibels::gainToDecibels (after / before)) < 0.1f, "adding SOFT after MEDIUM leaves the palm mute level alone ("
+                   + juce::String (juce::Decibels::gainToDecibels (after / before), 2) + " dB)");
+        }
+        // a project saved before the AMP page was rebuilt: channel Lead -> Modern High Gain, cabinet 4x12 Closed stays 4x12 Closed
+        {
+            AIOGuitarProcessor pm; pm.prepareToPlay (sr, 256);
+            juce::MemoryBlock mb; pm.getStateInformation (mb);
+            juce::MemoryInputStream mis (mb, false);
+            mis.readInt(); const int ver = mis.readInt();
+            auto tree = juce::ValueTree::readFromStream (mis);
+            auto kitT = juce::ValueTree::readFromStream (mis);
+            auto scoreT = juce::ValueTree::readFromStream (mis);
+            for (int i = tree.getNumChildren(); --i >= 0;)
+            {
+                auto c = tree.getChild (i);
+                const auto id = c["id"].toString();
+                if (id == "ampModel" || id == "cabMicType") tree.removeChild (i, nullptr);
+                if (id == "cabType") c.setProperty ("value", 0.0f, nullptr);   // old 0 = 4x12 Closed
+            }
+            juce::ValueTree oc ("PARAM"); oc.setProperty ("id", "ampChannel", nullptr); oc.setProperty ("value", 2.0f, nullptr); tree.appendChild (oc, nullptr);
+            juce::MemoryBlock old;
+            { juce::MemoryOutputStream mos (old, false); mos.writeInt (0x47494f41); mos.writeInt (ver); tree.writeToStream (mos); kitT.writeToStream (mos); scoreT.writeToStream (mos); }
+            AIOGuitarProcessor p2; p2.prepareToPlay (sr, 256);
+            p2.setStateInformation (old.getData(), (int) old.getSize());
+            const int mdl = (int) p2.apvts.getRawParameterValue ("ampModel")->load(), cab = (int) p2.apvts.getRawParameterValue ("cabType")->load();
+            check (mdl == 4 && cab == 2, "old project: channel Lead -> Modern High Gain, cabinet 4x12 Closed kept (" + juce::String (mdl) + ", " + juce::String (cab) + ")");
+        }
+        // the output never goes over 0 dBFS (clean amp all the way up, OUTPUT +12)
+        {
+            setP (p3, "ampOn", 1); setP (p3, "cabOn", 1); setP (p3, "ampModel", 0); setP (p3, "ampGain", 10); setP (p3, "ampMaster", 10); setP (p3, "outGain", 12);
+            auto o = render (p3, { { 0.01, juce::MidiMessage::noteOn (1, 40, (juce::uint8) 127) }, { 0.01, juce::MidiMessage::noteOn (1, 52, (juce::uint8) 127) },
+                                   { 0.8, juce::MidiMessage::noteOff (1, 40) }, { 0.8, juce::MidiMessage::noteOff (1, 52) } }, 1.0, sr);
+            check (o.getMagnitude (0, o.getNumSamples()) <= 1.0f, "output never over 0 dBFS (clean, GAIN / MASTER 10, OUTPUT +12: peak " + juce::String (juce::Decibels::gainToDecibels (o.getMagnitude (0, o.getNumSamples())), 2) + " dBFS)");
+            setP (p3, "outGain", 0);
+            // after playing loud through a high-gain amp, the tail dies away and the effects rest (no tiny tone left running)
+            setP (p3, "ampModel", 4);
+            render (p3, { { 0.01, juce::MidiMessage::noteOn (1, 40, (juce::uint8) 127) }, { 0.6, juce::MidiMessage::noteOff (1, 40) } }, 0.8, sr);
+            render (p3, {}, 4.0, sr);
+            check (p3.fxSleeping.load(), "after a loud high-gain note the amp comes to rest");
+            {
+                auto first = [&] (int fromModel)
+                {
+                    setP (p3, "ampModel", (float) fromModel); render (p3, {}, 3.0, sr);
+                    setP (p3, "ampModel", 1); render (p3, {}, 0.1, sr);   // changed while resting
+                    auto o = render (p3, { { 0.0, juce::MidiMessage::noteOn (1, 45, (juce::uint8) 100) }, { 0.3, juce::MidiMessage::noteOff (1, 45) } }, 0.4, sr);
+                    render (p3, {}, 3.0, sr);
+                    if (std::getenv ("DBG")) std::cout << "      from " << fromModel << ": " << rmsDb (o, 0.0, 0.005, sr) << " " << rmsDb (o, 0.005, 0.015, sr) << " "
+                                                       << rmsDb (o, 0.015, 0.03, sr) << " " << rmsDb (o, 0.05, 0.1, sr) << " " << rmsDb (o, 0.1, 0.3, sr) << std::endl;
+                    return rmsDb (o, 0.005, 0.015, sr) - rmsDb (o, 0.05, 0.1, sr);   // the start against the same note later (takes alternate)
+                };
+                // each note alternates down / up takes: a throw-away note in between so both cases play the same take
+                auto spare = [&] { render (p3, { { 0.0, juce::MidiMessage::noteOn (1, 45, (juce::uint8) 100) }, { 0.2, juce::MidiMessage::noteOff (1, 45) } }, 0.3, sr); };
+                const float changed = first (4); spare();
+                const float same = first (1); spare();
+                const float changed2 = first (4); spare();
+                const float same2 = first (1);
+                if (std::getenv ("DBG")) std::cout << "      resting: changed " << changed << " / " << changed2 << ", same " << same << " / " << same2 << std::endl;
+                check (std::abs (changed - same) < 1.5f, "model changed while resting: the next note starts right away (start vs later " + juce::String (changed, 1) + " / " + juce::String (same, 1) + " dB)");
+            }
+            // OUTPUT and a cabinet IR changed while resting: the next note starts exactly as set
+            {
+                auto spare = [&] { render (p3, { { 0.0, juce::MidiMessage::noteOn (1, 45, (juce::uint8) 100) }, { 0.2, juce::MidiMessage::noteOff (1, 45) } }, 0.3, sr); };
+                auto noteNow = [&] { auto o = render (p3, { { 0.0, juce::MidiMessage::noteOn (1, 45, (juce::uint8) 100) }, { 0.3, juce::MidiMessage::noteOff (1, 45) } }, 0.4, sr);
+                                     render (p3, {}, 3.0, sr); return o; };
+                setP (p3, "outGain", 0); render (p3, {}, 3.0, sr);
+                auto ref = noteNow(); spare();
+                setP (p3, "outGain", -12); render (p3, {}, 0.2, sr);      // changed while resting
+                auto quiet = noteNow(); spare();
+                const float d0 = rmsDb (quiet, 0.0, 0.03, sr) - rmsDb (ref, 0.0, 0.03, sr), d1 = rmsDb (quiet, 0.1, 0.3, sr) - rmsDb (ref, 0.1, 0.3, sr);
+                check (std::abs (d0 - d1) < 0.5f && std::abs (d1 + 12.0f) < 0.5f, "OUTPUT changed while resting: the first 30 ms already at the new level ("
+                       + juce::String (d0, 1) + " / " + juce::String (d1, 1) + " dB)");
+                setP (p3, "outGain", 0);
+                // an IR loaded while resting
+                juce::AudioBuffer<float> irb (1, 2400);
+                for (int i = 0; i < 2400; ++i) irb.setSample (0, i, (float) (std::exp (-i / 150.0) * std::sin (i * 0.21)));
+                auto irFile = outDir.getChildFile ("test_ir.wav");
+                { std::vector<float> v (2400); for (int i = 0; i < 2400; ++i) v[(size_t) i] = irb.getSample (0, i); writeMono (irFile, v, 48000.0); }
+                setP (p3, "ampModel", 0); setP (p3, "ampGain", 3); render (p3, {}, 3.0, sr);
+                p3.setNonRealtime (true);   // this test renders much faster than real time, like a bounce: then it waits for the IR
+                const auto err = p3.loadCabIR (irFile);
+                render (p3, {}, 0.3, sr);                                     // still resting: the IR gets ready meanwhile
+                auto first = noteNow(); spare();
+                auto later = noteNow(); spare();
+                juce::ignoreUnused (later);
+                auto again = noteNow();   // same take as "first" (one note in between)
+                const float a = rmsDb (first, 0.0, 0.1, sr), b = rmsDb (again, 0.0, 0.1, sr);
+                p3.setNonRealtime (false);
+                check (err.isEmpty() && std::abs (a - b) < 0.5f, "IR loaded while resting: the first note already through the IR (" + juce::String (a, 1) + " / " + juce::String (b, 1) + " dB)");
+                setP (p3, "cabType", 2); render (p3, {}, 3.0, sr);
+            }
+            setP (p3, "ampGain", 4); setP (p3, "ampMaster", 5); setP (p3, "ampModel", 3);
+        }
+        // the guide records 66 medium notes, like soft
+        check (Guide::buildSteps (Kit::slotMedium).size() == 66, "RECORD GUIDE: MEDIUM is 66 notes (" + juce::String ((int) Guide::buildSteps (Kit::slotMedium).size()) + ")");
+        // state keeps the medium layer
+        juce::MemoryBlock mb3; p3.getStateInformation (mb3);
+        AIOGuitarProcessor p4; p4.prepareToPlay (sr, 256); p4.setStateInformation (mb3.getData(), (int) mb3.getSize());
+        auto k4 = p4.getKit();
+        check (k4 != nullptr && k4->count (Kit::slotMedium) == k3->count (Kit::slotMedium), "state restore keeps the MEDIUM layer");
     }
 
     // ================= STRUM =================
@@ -1091,7 +1484,7 @@ int main (int argc, char** argv)
 
     // ---- AMP / CAB on and off while a note rings: no click (2nd difference vs the steady sound around it)
     {
-        FXChain ch; FXParams fp; fp.revMix = 0.0f; fp.compOn = false; fp.drvOn = false; fp.ampChannel = 1; fp.cabOn = true;
+        FXChain ch; FXParams fp; fp.revMix = 0.0f; fp.ampModel = 3; fp.cabOn = true;
         ch.prepare (48000.0, 256);
         const int total = 48000;
         juce::AudioBuffer<float> b (2, total);
@@ -1100,22 +1493,294 @@ int main (int argc, char** argv)
         {
             fp.ampOn = ! (pos >= 12288 && pos < 24576);
             fp.cabOn = ! (pos >= 30720 && pos < 38912);
-            juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, 256);
-            ch.process (blk, 256, fp);
+            const int nn = juce::jmin (256, total - pos);
+            juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, nn);
+            ch.process (blk, nn, fp);
         }
         auto bend = [&] (int a, int e) { float m = 0; for (int i = juce::jmax (2, a); i < e; ++i) m = juce::jmax (m, std::abs (b.getSample (0, i) - 2.0f * b.getSample (0, i - 1) + b.getSample (0, i - 2))); return m; };
-        const float steady = juce::jmax (bend (4000, 12000), juce::jmax (bend (14000, 24000), bend (26000, 30000)));
+        // the steady sound of every state the test goes through (amp + cab, cab only, amp only)
+        const float steady = juce::jmax (juce::jmax (bend (4000, 12000), bend (14000, 24000)), juce::jmax (bend (26000, 30000), bend (32000, 38000)));
+        if (std::getenv ("DBG")) std::cout << "      steady " << bend (4000, 12000) << " " << bend (14000, 24000) << " " << bend (26000, 30000) << " " << bend (32000, 38000) << std::endl;
         float sw = 0;
-        for (int at : { 12288, 24576, 30720, 38912 }) sw = juce::jmax (sw, bend (at - 50, at + 900));
+        for (int at : { 12288, 24576, 30720, 38912 })
+        {
+            sw = juce::jmax (sw, bend (at - 50, at + 900));
+            if (std::getenv ("DBG")) std::cout << "      switch at " << at << ": " << bend (at - 50, at + 900) << std::endl;
+        }
         check (sw < steady * 3.0f, "AMP / CAB switched while playing: no click (" + juce::String (sw, 4) + " vs steady " + juce::String (steady, 4) + ")");
+    }
+
+    // ---- AMP: silence in -> silence out when it starts (no pop), model switch while playing (no bang),
+    //      IR handed to the audio thread / no old sound when coming back to it, NaN recovery, 192 kHz
+    std::cout << "== amp ==" << std::endl;
+    {
+        auto runChain = [] (FXChain& ch, FXParams& fp, juce::AudioBuffer<float>& b, int bs = 256)
+        {
+            for (int pos = 0; pos < b.getNumSamples(); pos += bs)
+            {
+                const int n = juce::jmin (bs, b.getNumSamples() - pos);
+                juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, n);
+                ch.process (blk, n, fp);
+            }
+        };
+        float worstPop = 0;
+        for (int m = 0; m < ampsim::numModels; ++m)
+        {
+            FXChain ch; FXParams fp; fp.ampModel = m; fp.ampGain = 10; fp.ampMaster = 10; fp.revMix = 0;
+            ch.prepare (48000.0, 256);
+            juce::AudioBuffer<float> b (2, 9600); b.clear();
+            runChain (ch, fp, b);
+            worstPop = juce::jmax (worstPop, b.getMagnitude (0, 0, b.getNumSamples()));
+        }
+        check (worstPop < 1.0e-5f, "AMP starting (every model, GAIN 10 MASTER 10): silence stays silence (" + juce::String (juce::Decibels::gainToDecibels (worstPop + 1e-12f), 1) + " dBFS)");
+
+        // model switch while a note plays: the first 40 ms after the switch are not louder than the new model itself
+        auto sine = [] (juce::AudioBuffer<float>& b, float level)
+        {
+            for (int i = 0; i < b.getNumSamples(); ++i) { const float v = level * (float) std::sin (6.283185307 * 196.0 * i / 48000.0); b.setSample (0, i, v); b.setSample (1, i, v); }
+        };
+        float worstJump = -100;
+        for (auto [from, to] : { std::pair<int,int> { 4, 0 }, { 1, 0 }, { 3, 4 }, { 0, 4 } })
+        {
+            FXChain ch; FXParams fp; fp.ampModel = from; fp.ampGain = 5; fp.revMix = 0; fp.cabOn = true;
+            ch.prepare (48000.0, 256);
+            juce::AudioBuffer<float> b (2, 48000); sine (b, 0.5f);
+            for (int pos = 0; pos < b.getNumSamples(); pos += 256)
+            {
+                if (pos == 24064) fp.ampModel = to;
+                const int nn = juce::jmin (256, b.getNumSamples() - pos);
+                juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, nn);
+                ch.process (blk, nn, fp);
+            }
+            FXChain ref; FXParams rp = fp; rp.ampModel = to;
+            ref.prepare (48000.0, 256);
+            juce::AudioBuffer<float> r (2, 48000); sine (r, 0.5f);
+            runChain (ref, rp, r);
+            // the 40 ms after the switch: never louder than the louder of the two models playing steadily
+            const float after = b.getMagnitude (0, 24064, 1920), steady = juce::jmax (r.getMagnitude (0, 36000, 9600), b.getMagnitude (0, 12000, 12000));
+            worstJump = juce::jmax (worstJump, juce::Decibels::gainToDecibels (after / steady));
+        }
+        check (worstJump < 1.5f, "AMP model switched while playing: no bang (at most " + juce::String (worstJump, 1) + " dB over the louder model)");
+
+        // IR: loaded (handed to the audio thread), used, and no old sound when switching back to it from a box
+        {
+            FXChain ch; FXParams fp; fp.ampOn = false; fp.cabOn = true; fp.cabType = ampsim::numCabs - 1; fp.revMix = 0;
+            ch.prepare (48000.0, 256);
+            juce::AudioBuffer<float> ir (1, 2400); ir.clear();
+            for (int i = 0; i < 2400; ++i) ir.setSample (0, i, (float) (std::exp (-i / 300.0) * std::sin (i * 0.3)));
+            ch.getCab().loadIR (std::move (ir), 48000.0);
+            juce::AudioBuffer<float> b (2, 48000);
+            juce::Random nr (3);
+            for (int i = 0; i < 48000; ++i) { const float v = 0.1f * (nr.nextFloat() * 2 - 1); b.setSample (0, i, v); b.setSample (1, i, v); }
+            runChain (ch, fp, b);
+            for (int k = 0; k < 20; ++k) juce::MessageManager::getInstance()->runDispatchLoopUntil (10);   // JUCE loads it in the background
+            juce::AudioBuffer<float> b2 (2, 48000);
+            for (int i = 0; i < 48000; ++i) { const float v = 0.1f * (nr.nextFloat() * 2 - 1); b2.setSample (0, i, v); b2.setSample (1, i, v); }
+            runChain (ch, fp, b2);
+            check (ch.getCab().irLoaded() && b2.getRMSLevel (0, 24000, 24000) > 0.001f, "Loaded IR: handed over and used");
+            fp.cabType = 2;                                   // box, with noise
+            juce::AudioBuffer<float> b3 (2, 24000);
+            for (int i = 0; i < 24000; ++i) { const float v = 0.1f * (nr.nextFloat() * 2 - 1); b3.setSample (0, i, v); b3.setSample (1, i, v); }
+            runChain (ch, fp, b3);
+            juce::AudioBuffer<float> sil (2, 24000); sil.clear();
+            runChain (ch, fp, sil);                           // silence
+            fp.cabType = ampsim::numCabs - 1;                 // back to the IR, still silent
+            juce::AudioBuffer<float> back (2, 9600); back.clear();
+            runChain (ch, fp, back);
+            check (back.getMagnitude (0, 0, 9600) < 1.0e-4f, "back to the Loaded IR in silence: no old sound (" + juce::String (juce::Decibels::gainToDecibels (back.getMagnitude (0, 0, 9600) + 1e-12f), 1) + " dBFS)");
+        }
+
+        // REVERB just above 0 does not change the dry level, and turning it back to 0 makes no step
+        {
+            FXChain ch; FXParams fp; fp.ampOn = false; fp.cabOn = false; fp.revMix = 0.0f;
+            ch.prepare (48000.0, 256);
+            juce::AudioBuffer<float> b (2, 48000 * 2); sine (b, 0.1f);
+            for (int pos = 0; pos < b.getNumSamples(); pos += 256)
+            {
+                fp.revMix = (pos >= 24064 && pos < 48128) ? 0.002f : 0.0f;
+                const int nn = juce::jmin (256, b.getNumSamples() - pos);
+                juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, nn);
+                ch.process (blk, nn, fp);
+            }
+            const float off = juce::Decibels::gainToDecibels (b.getRMSLevel (0, 12000, 9600)), on = juce::Decibels::gainToDecibels (b.getRMSLevel (0, 36000, 9600)),
+                        after = juce::Decibels::gainToDecibels (b.getRMSLevel (0, 72000, 9600));
+            check (std::abs (on - off) < 0.5f && std::abs (after - off) < 0.5f, "REVERB 0 -> 0.002 -> 0: the dry sound keeps its level ("
+                   + juce::String (off, 1) + " / " + juce::String (on, 1) + " / " + juce::String (after, 1) + " dB)");
+        }
+
+        // the first IR, loaded while playing in "Loaded IR": never the bare amp at +9 dB while it gets ready
+        {
+            FXChain ch; FXParams fp; fp.ampModel = 4; fp.ampGain = 8; fp.cabType = ampsim::numCabs - 1; fp.revMix = 0;
+            ch.prepare (48000.0, 256);
+            juce::AudioBuffer<float> b (2, 48000 * 2); sine (b, 0.3f);
+            juce::AudioBuffer<float> ir (1, 2400);
+            for (int i = 0; i < 2400; ++i) ir.setSample (0, i, (float) (std::exp (-i / 200.0) * std::sin (i * 0.15)));
+            for (int pos = 0; pos < b.getNumSamples(); pos += 256)
+            {
+                if (pos == 24064) { juce::AudioBuffer<float> c (ir); ch.getCab().loadIR (std::move (c), 48000.0); }
+                const int nn = juce::jmin (256, b.getNumSamples() - pos);
+                juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, nn);
+                ch.process (blk, nn, fp);
+                if (pos % 2048 == 0) juce::MessageManager::getInstance()->runDispatchLoopUntil (1);
+            }
+            const float before = b.getMagnitude (0, 12000, 12000), during = b.getMagnitude (0, 24064, 9600), steady = b.getMagnitude (0, 72000, 24000);
+            check (during <= juce::jmax (before, steady) * 1.12f, "first IR loaded while playing: no bare-amp burst (" + juce::String (juce::Decibels::gainToDecibels (during), 1)
+                   + " dBFS vs " + juce::String (juce::Decibels::gainToDecibels (before), 1) + " before / " + juce::String (juce::Decibels::gainToDecibels (steady), 1) + " after)");
+        }
+
+        // cabinet / mic type switched while playing: no click (2nd difference vs the steady sound)
+        {
+            FXChain ch; FXParams fp; fp.ampModel = 0; fp.ampGain = 2; fp.cabType = 1; fp.cabMicType = 1; fp.revMix = 0;
+            ch.prepare (48000.0, 256);
+            juce::AudioBuffer<float> b (2, 48000 * 2);
+            for (int i = 0; i < b.getNumSamples(); ++i) { const float v = 0.2f * (float) std::sin (6.283185307 * 110.0 * i / 48000.0); b.setSample (0, i, v); b.setSample (1, i, v); }
+            for (int pos = 0; pos < b.getNumSamples(); pos += 256)
+            {
+                if (pos >= 24064) fp.cabType = 2;
+                if (pos >= 48128) fp.cabMicType = 2;
+                if (pos >= 72192) fp.cabPos = 10;
+                const int nn = juce::jmin (256, b.getNumSamples() - pos);
+                juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, nn);
+                ch.process (blk, nn, fp);
+            }
+            auto bend = [&] (int a0, int e0) { float m = 0; for (int i = a0; i < e0; ++i) m = juce::jmax (m, std::abs (b.getSample (0, i) - 2.0f * b.getSample (0, i - 1) + b.getSample (0, i - 2))); return m; };
+            const float steady = juce::jmax (juce::jmax (bend (12000, 24000), bend (36000, 48000)), juce::jmax (bend (60000, 72000), bend (84000, 96000)));
+            const float sw = juce::jmax (bend (24064 - 50, 24064 + 1500), bend (48128 - 50, 48128 + 1500));
+            const float glide = bend (72192 - 50, 72192 + 2500);
+            check (sw < steady * 1.5f, "cabinet / mic changed while playing: no click (" + juce::String (sw, 6) + " vs steady " + juce::String (steady, 6) + ")");
+            // POSITION 0 -> 10 at once glides in 40 ms: what is left is around -80 dBFS (a pure sine shows every bit of it)
+            check (glide < steady * 3.0f, "POSITION jumped 0 -> 10 while playing: glides without a click (" + juce::String (glide, 6) + ")");
+        }
+
+        // IR A in use -> removed -> the same-length IR B loaded twice in a row (real-time pace): B is used within 0.5 s,
+        // never stuck on the stand-in cabinet and never the removed A
+        {
+            auto makeIR = [] (double w) { juce::AudioBuffer<float> ir (1, 2400); for (int i = 0; i < 2400; ++i) ir.setSample (0, i, (float) (std::exp (-i / 200.0) * std::sin (i * w))); return ir; };
+            auto runRealtime = [&] (FXChain& ch, FXParams& fp, juce::AudioBuffer<float>& b, int from, int to)
+            {
+                for (int pos = from; pos < to; pos += 256)
+                {
+                    const int nn = juce::jmin (256, to - pos);
+                    juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, nn);
+                    ch.process (blk, nn, fp);
+                    juce::Thread::sleep (5);
+                }
+            };
+            FXChain ch; FXParams fp; fp.ampModel = 0; fp.ampGain = 2; fp.cabType = ampsim::numCabs - 1; fp.revMix = 0;
+            ch.prepare (48000.0, 256);
+            juce::AudioBuffer<float> b (2, 48000 * 2); sine (b, 0.2f);
+            ch.getCab().loadIR (makeIR (0.31), 48000.0);
+            runRealtime (ch, fp, b, 0, 24064);
+            ch.getCab().clearIR();
+            runRealtime (ch, fp, b, 24064, 36096);
+            ch.getCab().loadIR (makeIR (0.07), 48000.0);
+            ch.getCab().loadIR (makeIR (0.07), 48000.0);
+            runRealtime (ch, fp, b, 36096, 96000);
+            FXChain ref; FXParams rp = fp;
+            ref.prepare (48000.0, 256);
+            ref.getCab().loadIR (makeIR (0.07), 48000.0);
+            juce::AudioBuffer<float> r (2, 96000); sine (r, 0.2f);
+            runRealtime (ref, rp, r, 0, 96000);
+            double diff = 0, sig = 0;
+            for (int i = 72000; i < 96000; ++i) { diff += std::pow (b.getSample (0, i) - r.getSample (0, i), 2); sig += std::pow (r.getSample (0, i), 2); }
+            const double dDb = 10.0 * std::log10 (diff / sig + 1e-20);
+            check (dDb < -30.0, "IR removed, then the same-length IR loaded twice: the new IR plays within 0.75 s (difference " + juce::String (dDb, 1) + " dB)");
+        }
+
+        // a loaded IR: changing the mic does nothing (no dip)
+        {
+            FXChain ch; FXParams fp; fp.ampModel = 0; fp.ampGain = 2; fp.cabType = ampsim::numCabs - 1; fp.revMix = 0;
+            ch.prepare (48000.0, 256);
+            juce::AudioBuffer<float> ir (1, 2400);
+            for (int i = 0; i < 2400; ++i) ir.setSample (0, i, (float) (std::exp (-i / 200.0) * std::sin (i * 0.15)));
+            ch.getCab().loadIR (std::move (ir), 48000.0);
+            juce::AudioBuffer<float> b (2, 48000 * 2); sine (b, 0.2f);
+            for (int pos = 0; pos < b.getNumSamples(); pos += 256)
+            {
+                if (pos >= 60160) fp.cabMicType = 1;
+                const int nn = juce::jmin (256, b.getNumSamples() - pos);
+                juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, nn);
+                ch.process (blk, nn, fp);
+                if (pos % 2048 == 0) juce::MessageManager::getInstance()->runDispatchLoopUntil (1);
+            }
+            float lo = 1e9f; for (int w = 60160; w < 60160 + 4800; w += 240) lo = juce::jmin (lo, b.getRMSLevel (0, w, 240));
+            const float steady = b.getRMSLevel (0, 48000, 9600);
+            check (lo > steady * 0.85f, "loaded IR: changing the mic does nothing (lowest " + juce::String (juce::Decibels::gainToDecibels (lo / steady), 1) + " dB)");
+        }
+
+        // tone knobs stopped at noon / thrown across noon: no tick (clean amp, no cabinet, a pure 110 Hz tone)
+        {
+            FXChain ch; FXParams fp; fp.ampModel = 0; fp.ampGain = 2; fp.cabOn = false; fp.revMix = 0; fp.ampBass = 2;
+            ch.prepare (48000.0, 256);
+            juce::AudioBuffer<float> b (2, 48000 * 3);
+            for (int i = 0; i < b.getNumSamples(); ++i) { const float v = 0.2f * (float) std::sin (6.283185307 * 110.0 * i / 48000.0); b.setSample (0, i, v); b.setSample (1, i, v); }
+            for (int pos = 0; pos < b.getNumSamples(); pos += 256)
+            {
+                fp.ampBass = pos < 48128 ? 2.0f : (pos < 96256 ? 8.0f : 5.0f);   // 2 -> 8 (across noon), then 8 -> 5 (stop at noon)
+                fp.ampPresence = pos < 72192 ? 5.0f : 10.0f;                      // presence thrown 5 -> 10
+                const int nn = juce::jmin (256, b.getNumSamples() - pos);
+                juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, nn);
+                ch.process (blk, nn, fp);
+            }
+            auto bend = [&] (int a0, int e0) { float m = 0; for (int i = a0; i < e0; ++i) m = juce::jmax (m, std::abs (b.getSample (0, i) - 2.0f * b.getSample (0, i - 1) + b.getSample (0, i - 2))); return m; };
+            const float steady = juce::jmax (juce::jmax (bend (24000, 48000), bend (60000, 72000)), juce::jmax (bend (84000, 96000), bend (120000, 144000)));
+            if (std::getenv ("DBG"))
+            {
+                std::cout << "      knob steady " << bend (24000, 48000) << " " << bend (60000, 72000) << " " << bend (84000, 96000) << " " << bend (120000, 144000) << std::endl;
+                int at = 0; float m = 0;
+                for (int i = 2; i < b.getNumSamples(); ++i) { const float d = std::abs (b.getSample (0, i) - 2.0f * b.getSample (0, i - 1) + b.getSample (0, i - 2)); if (d > m) { m = d; at = i; } }
+                std::cout << "      knob worst at " << at << " = " << m << "  samples:";
+                for (int i = at - 3; i <= at + 3 && i < b.getNumSamples(); ++i) std::cout << " " << b.getSample (0, i);
+                std::cout << "  len " << b.getNumSamples() << std::endl;
+            }
+            float worst = 0;
+            for (int at : { 48128, 72192, 96256 })
+            {
+                worst = juce::jmax (worst, bend (at - 50, at + 4800));
+                if (std::getenv ("DBG"))
+                {
+                    std::cout << "      knob event at " << at << ": " << bend (at - 50, at + 4800) << "  windows:";
+                    for (int w = at - 480; w < at + 4800; w += 480) std::cout << " " << bend (w, w + 480);
+                    std::cout << std::endl;
+                }
+            }
+            // what is left while a +20 dB treble boost glides in 30 ms is around -70 dB under the tone (a pure sine shows all of it)
+            check (worst < steady * 3.0f, "BASS across / to noon and PRESENCE thrown: no tick (" + juce::String (worst, 6) + " vs steady " + juce::String (steady, 6) + ")");
+        }
+
+        // NaN once: the chain drops that block and plays on
+        {
+            FXChain ch; FXParams fp; fp.ampModel = 3; fp.revMix = 0;
+            ch.prepare (48000.0, 256);
+            juce::AudioBuffer<float> b (2, 48000); sine (b, 0.3f);
+            b.setSample (0, 5000, std::numeric_limits<float>::quiet_NaN());
+            runChain (ch, fp, b);
+            bool fin = true; for (int i = 0; i < 48000; ++i) fin = fin && std::isfinite (b.getSample (0, i)) && std::isfinite (b.getSample (1, i));
+            check (fin && b.getRMSLevel (0, 24000, 24000) > 0.01f, "a NaN in the input: no NaN out, the amp plays on");
+        }
+
+        // 192 kHz project (the amp runs at 768 kHz): same level as at 48 kHz
+        {
+            auto level = [&] (double rate)
+            {
+                FXChain ch; FXParams fp; fp.ampModel = 2; fp.ampGain = 5; fp.revMix = 0;
+                ch.prepare (rate, 512);
+                juce::AudioBuffer<float> b (2, (int) (rate * 3));
+                for (int i = 0; i < b.getNumSamples(); ++i) { const float v = 0.3f * (float) std::sin (6.283185307 * 82.41 * i / rate); b.setSample (0, i, v); b.setSample (1, i, v); }
+                runChain (ch, fp, b, 512);
+                return juce::Decibels::gainToDecibels (b.getRMSLevel (0, (int) (rate * 2), (int) rate));
+            };
+            const float l48 = level (48000.0), l192 = level (192000.0);
+            check (std::abs (l192 - l48) < 2.0f, "192 kHz: British Chime as loud as at 48 kHz (" + juce::String (l48, 1) + " / " + juce::String (l192, 1) + " dB)");
+        }
     }
 
     // ---- latency: the same with the amp on or off (an impulse through the chain lands at the same place)
     {
         auto impulseAt = [&] (bool ampOn)
         {
-            FXChain ch; FXParams fp; fp.ampOn = ampOn; fp.cabOn = false; fp.revMix = 0.0f; fp.compOn = false; fp.drvOn = false;
-            fp.ampChannel = 0; fp.ampGain = 0.0f;
+            FXChain ch; FXParams fp; fp.ampOn = ampOn; fp.cabOn = false; fp.revMix = 0.0f;
+            fp.ampModel = 0; fp.ampGain = 0.0f;
             ch.prepare (48000.0, 256);
             juce::AudioBuffer<float> b (2, 256);
             b.clear(); b.setSample (0, 10, 0.01f); b.setSample (1, 10, 0.01f);
@@ -1195,6 +1860,11 @@ int main (int argc, char** argv)
                 if (b->getButtonText() == "EFFECTS") b->triggerClick();
         for (int i = 0; i < 3; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
         snap ("editor_effects.png");
+        for (auto* c : ed->getChildren())
+            if (auto* b = dynamic_cast<juce::TextButton*> (c))
+                if (b->getButtonText() == "AMP") b->triggerClick();
+        for (int i = 0; i < 3; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+        snap ("editor_amp.png");
     }
 
     std::cout << (failures == 0 ? "ALL PASSED" : juce::String (failures) + " FAILED") << std::endl;

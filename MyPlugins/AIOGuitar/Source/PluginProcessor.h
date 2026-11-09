@@ -36,7 +36,7 @@ public:
     bool acceptsMidi() const override  { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 3.0; }
+    double getTailLengthSeconds() const override { return 6.0; }   // the reverb at SIZE 1 needs ~5.5 s to die away
 
     int getNumPrograms() override;
     int getCurrentProgram() override { return currentProgram; }
@@ -53,6 +53,10 @@ public:
     // Cut a recording into notes/strokes in the background and put them into a slot.
     void loadRecording (int slot, const juce::File& file, std::function<void (juce::String)> onDone);
     juce::String loadRecordingNow (int slot, const juce::File& file);   // synchronous (tests)
+
+    // CAB "Loaded IR": a speaker cabinet impulse response (message thread). Returns an error, or empty when loaded
+    juce::String loadCabIR (const juce::File& file);
+    juce::String getCabIRName() const;
     void clearSlot (int slot);
     bool saveKit (const juce::File& file);
     juce::String loadKit (const juce::File& file);
@@ -129,6 +133,11 @@ private:
     int quietSamples = 0;
     float lastOutPeak = 1.0f;
     FXParams fx;
+    void setCabIR (juce::AudioBuffer<float>&& ir, double rate, const juce::String& name);
+    juce::CriticalSection irLock;          // message thread only (state save vs. loading)
+    juce::AudioBuffer<float> cabIR;        // what was loaded, kept for the project
+    double cabIRRate = 48000.0;
+    juce::String cabIRName;
 
     // kit hand-over: message thread -> audio thread without locking the audio thread
     std::shared_ptr<Kit::GuitarKit> editKit;                    // message thread

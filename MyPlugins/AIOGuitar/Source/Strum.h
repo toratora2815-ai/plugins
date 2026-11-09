@@ -95,7 +95,9 @@ public:
                 if (msg.isNoteOn() && juce::isPositiveAndBelow (msg.getNoteNumber(), 128))
                 {
                     synth.strumUpForNote[msg.getNoteNumber()] = upForDelayed[msg.getNoteNumber()];
+                    synth.strumVelForNote[msg.getNoteNumber()] = velForDelayed[msg.getNoteNumber()];
                     upForDelayed[msg.getNoteNumber()] = -1;
+                    velForDelayed[msg.getNoteNumber()] = 0;
                 }
                 out.addEvent (msg, (int) juce::jmax ((juce::int64) 0, t));
                 queue[(size_t) i] = queue[(size_t) --queueCount];
@@ -115,6 +117,7 @@ public:
         for (auto& d : delayOf) for (auto& v : d) v = -1;
         for (auto& d : dropped) for (auto& v : d) v = false;
         for (auto& v : upForDelayed) v = -1;
+        for (auto& v : velForDelayed) v = 0;
         for (auto& v : origPpq) v = -1.0;
         group.active = false;
     }
@@ -154,7 +157,11 @@ private:
             if (q.msg.isNoteOn() && q.time > clock + pos)
             {
                 const int nn = q.msg.getNoteNumber();
-                if (juce::isPositiveAndBelow (nn, 128)) { synth.strumUpForNote[nn] = upForDelayed[nn]; upForDelayed[nn] = -1; }
+                if (juce::isPositiveAndBelow (nn, 128))
+                {
+                    synth.strumUpForNote[nn] = upForDelayed[nn]; upForDelayed[nn] = -1;
+                    synth.strumVelForNote[nn] = velForDelayed[nn]; velForDelayed[nn] = 0;
+                }
                 out.addEvent (q.msg, pos);
                 queue[(size_t) i] = queue[(size_t) --queueCount];
                 continue;
@@ -175,6 +182,7 @@ private:
         {
             pullOffBefore (ch, nn, clock + pos, true, pos);
             synth.strumUpForNote[nn] = dir;
+            synth.strumVelForNote[nn] = vel;   // the layer (soft / medium / hard) follows the whole stroke, not the string's level
             out.addEvent (on, pos);
             delayOf[ch - 1][nn] = -1;
         }
@@ -182,6 +190,7 @@ private:
         {
             pullOffBefore (ch, nn, clock + pos + delay, false, pos);
             upForDelayed[nn] = dir;
+            velForDelayed[nn] = vel;
             enqueue (clock + pos + delay, on);
             delayOf[ch - 1][nn] = delay;
         }
@@ -333,6 +342,7 @@ private:
     int delayOf[16][128] {};
     bool dropped[16][128] {};
     int upForDelayed[128] { };
+    int velForDelayed[128] { };   // the stroke's velocity (chooses the layer), for strings that start later
     double origPpq[128] {};
     int pendingDir = -1;
     int keyDirFor[128] {};
@@ -343,6 +353,7 @@ public:
     Strummer()
     {
         for (auto& v : upForDelayed) v = -1;
+        for (auto& v : velForDelayed) v = 0;
         for (auto& v : keyDirFor) v = -1;
         for (auto& v : origPpq) v = -1.0;
         for (auto& d : delayOf) for (auto& v : d) v = -1;

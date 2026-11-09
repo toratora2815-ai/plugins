@@ -65,13 +65,9 @@ public:
         }
         else
         {
-            int slot = Kit::slotSoft;
-            if (usingMuteLayer) slot = Kit::slotMute;
-            else
-            {
-                const bool hasSoft = kit->count (Kit::slotSoft) > 0, hasHard = kit->count (Kit::slotHard) > 0;
-                if ((vel > 0.62f && hasHard) || ! hasSoft) slot = hasHard ? Kit::slotHard : Kit::slotMute;
-            }
+            // a strummed string: the layer from the whole stroke's velocity (its own is a little lower per string)
+            const float layerVel = params.nextLayerVel > 0 ? (float) params.nextLayerVel / 127.0f : vel;
+            const int slot = usingMuteLayer ? (int) Kit::slotMute : Kit::layerForVelocity (*kit, layerVel);
             n = Kit::candidates (*kit, slot, midiNote, string, cand, 8);
             // strummed: down-strokes use the down takes, up-strokes the up takes (when recorded)
             if (params.nextStrumUp >= 0 && n > 1)
@@ -104,11 +100,11 @@ public:
         const float rLevel = (rng.nextFloat() * 2.0f - 1.0f) * h, rTone = (rng.nextFloat() * 2.0f - 1.0f) * h;
         pos = (double) (rng.nextFloat() * h * 0.0006f * (float) sample->sampleRate);
 
-        // velocity -> level (and brightness when only one picking layer was recorded)
+        // velocity -> level (and brightness when only one picking layer was recorded). The layers sit at one
+        // level, so the loudness comes from here: VELOCITY 0.7 = about 20 dB from velocity 20 to 127
         const float sens = params.kitVelSens;
-        gain = sample->gain * (1.0f - sens * (1.0f - std::pow (vel, 1.4f)))
-             * juce::Decibels::decibelsToGain (0.8f * rLevel);
-        const bool oneLayer = kit->count (Kit::slotSoft) == 0 || kit->count (Kit::slotHard) == 0;
+        gain = sample->gain * juce::Decibels::decibelsToGain (-28.0f * sens * std::pow (1.0f - vel, 1.3f) + 0.8f * rLevel);
+        const bool oneLayer = Kit::pickingLayers (*kit) < 2;
         const float bright = brush || usingMuteLayer || ! oneLayer ? 1.0f : juce::jlimit (0.0f, 1.0f, 0.35f + 0.65f * vel);
         toneCut = 1800.0f * std::pow (2.0f, bright * 3.5f) * std::pow (2.0f, 0.25f * rTone);   // 1.8 kHz .. 20 kHz
 

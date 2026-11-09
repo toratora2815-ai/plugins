@@ -1,9 +1,11 @@
 #pragma once
-// EFFECTS ページのペダル。中身は単体プラグインと同じ音の部品（WoolFuzzDSP / PorchDriveDSP）。
+// EFFECTS ページのペダル。中身は単体プラグインと同じ音の部品（WoolFuzzDSP / PorchDriveDSP）と、
+// AIO Guitar だけのコンプ（CottonCompDSP、いちばん前に固定）。
 // OFF のペダルは計算しない（タイミングをそろえる短い遅らせだけ）。ON/OFF は 15 ms でつなぐ。
 #include <JuceHeader.h>
 #include "WoolFuzzDSP.h"
 #include "PorchDriveDSP.h"
+#include "CottonCompDSP.h"
 
 template <typename DSP>
 class PedalSlot
@@ -91,17 +93,18 @@ private:
 
 struct PedalBoard
 {
+    PedalSlot<pedal::CottonCompDSP> comp;    // Cotton Comp (always first)
     PedalSlot<pedal::PorchDriveDSP> drive;   // Porch Drive
     PedalSlot<pedal::WoolFuzzDSP>   fuzz;    // Wool Fuzz
 
     void prepare (double sr, int maxBlock)
     {
-        drive.prepare (sr, maxBlock); fuzz.prepare (sr, maxBlock);
+        comp.prepare (sr, maxBlock); drive.prepare (sr, maxBlock); fuzz.prepare (sr, maxBlock);
         fadeLen = juce::jmax (1, (int) (sr * 0.005));
         fadePos = 0; fadeState = 0;
     }
-    int latency() const { return drive.latency() + fuzz.latency(); }
-    bool anyRunning() const { return drive.isRunning() || fuzz.isRunning(); }
+    int latency() const { return comp.latency() + drive.latency() + fuzz.latency(); }
+    bool anyRunning() const { return comp.isRunning() || drive.isRunning() || fuzz.isRunning(); }
     bool isFuzzFirst() const { return fuzzFirst; }
     void setOrderNow (bool fuzzFirstNow) { fuzzFirst = fuzzFirstNow; fadeState = 0; }   // prepare / load: no fade
 
@@ -111,6 +114,7 @@ struct PedalBoard
         if (fadeState == 3) { fuzzFirst = wantFuzzFirst; fadeState = 2; fadePos = 0; }
         if (fadeState == 0 && wantFuzzFirst != fuzzFirst) { fadeState = 1; fadePos = fadeLen; }
 
+        comp.process (data, n);
         if (fuzzFirst) { fuzz.process (data, n); drive.process (data, n); }
         else           { drive.process (data, n); fuzz.process (data, n); }
 

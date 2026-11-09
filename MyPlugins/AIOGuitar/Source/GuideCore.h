@@ -295,8 +295,9 @@ inline float energyAt (const std::vector<float>& x, int a, int b, double sr, dou
 }
 
 // prevNote: the note played just before (-1 none) - its string should be muted by now.
-// softRmsDb: for HARD picking, the SOFT take of the same note (0 = none)
-inline Result judge (const std::vector<float>& take, double sr, const Step& st, int prevNote, float softRmsDb)
+// belowDb / aboveDb: loudness of the same note in the layer under / over this one (0 = not recorded):
+// MEDIUM is compared with SOFT and HARD, HARD with MEDIUM (else SOFT)
+inline Result judge (const std::vector<float>& take, double sr, const Step& st, int prevNote, float belowDb, float aboveDb = 0.0f)
 {
     Result r;
     juce::AudioBuffer<float> b (1, (int) take.size());
@@ -425,9 +426,13 @@ inline Result judge (const std::vector<float>& take, double sr, const Step& st, 
         }
         s.string = st.string;
         s.fret = st.capo;
-        if (st.slot == Kit::slotHard && softRmsDb < 0.0f
-            && juce::Decibels::gainToDecibels (s.rawRms) - softRmsDb < 4.0f)
-            r.warnings.add (juce::String (juce::CharPointer_UTF8 (u8"HARD が SOFT とあまり変わらない音があります（もっと強く弾くと差が出ます）")));
+        const float db = juce::Decibels::gainToDecibels (s.rawRms);
+        if (st.slot == Kit::slotHard && belowDb < 0.0f && db - belowDb < 3.0f)
+            r.warnings.add (juce::String (juce::CharPointer_UTF8 (u8"HARD が一つ下の層（MEDIUM か SOFT）とあまり変わらない音があります（もっと強く弾くと差が出ます）")));
+        if (st.slot == Kit::slotMedium && belowDb < 0.0f && db - belowDb < 2.0f)
+            r.warnings.add (juce::String (juce::CharPointer_UTF8 (u8"MEDIUM が SOFT とあまり変わらない音があります（少し強めに）")));
+        if (st.slot == Kit::slotMedium && aboveDb < 0.0f && aboveDb - db < 2.0f)
+            r.warnings.add (juce::String (juce::CharPointer_UTF8 (u8"MEDIUM が HARD とあまり変わらない音があります（少し弱めに）")));
     }
     r.sample = std::move (s);
     r.ok = true;

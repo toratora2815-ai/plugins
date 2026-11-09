@@ -7,8 +7,9 @@ struct Biquad
 {
     enum Type { LowPass, HighPass, Peak, LowShelf, HighShelf, BandPass };
 
-    float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
-    float z1[2] {}, z2[2] {};
+    // double: at 4x of a 192 kHz project a 20 Hz high-pass pole sits at 0.9998 (float rounds it onto 1.0)
+    double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+    double z1[2] {}, z2[2] {};
 
     void reset() noexcept { z1[0] = z1[1] = z2[0] = z2[1] = 0.0f; }
 
@@ -60,16 +61,17 @@ struct Biquad
             }
         }
 
-        b0 = (float) (B0 / A0); b1 = (float) (B1 / A0); b2 = (float) (B2 / A0);
-        a1 = (float) (A1 / A0); a2 = (float) (A2 / A0);
+        b0 = B0 / A0; b1 = B1 / A0; b2 = B2 / A0;
+        a1 = A1 / A0; a2 = A2 / A0;
     }
 
-    inline float process (float x, int ch) noexcept
+    inline float process (float xIn, int ch) noexcept
     {
-        const float y = b0 * x + z1[ch];
+        const double x = xIn;
+        const double y = b0 * x + z1[ch];
         z1[ch] = b1 * x - a1 * y + z2[ch];
         z2[ch] = b2 * x - a2 * y;
-        return y;
+        return (float) y;
     }
 };
 
