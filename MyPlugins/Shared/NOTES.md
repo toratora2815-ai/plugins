@@ -16,6 +16,7 @@ Fader Pilot / Balance Scope → Mod Host（MOD の種類 LINK）。
 Sample Sculptor は LINK 欄だけ（自然な相手なし）。Kind 3 は前は Velvet Tamer、今は Hush Field
 新しくつなぐときは Kind と送る数値の番号（namespace bs / fp / tamer / gs / ref / out のように）を PluginLink.h に足す
 
+未登録で使っている番号: 17 = AIO Guitar、18 = Vox Chop、19 = Drum Transient、20 = Deca Satu（PluginLink.h には足していない。足すと Shared が変わって全部ビルドになるため）
 空き番号（2026-11-06）: Kind 6 = Reference（プラグイン、削除）、Kind 7 = Nebula（削除）。番号は詰めない・使い回さない
 （kindNebula の名前は残っているが、VocalDuck を受けるのは Lumen Rooms / Elder Verb / Meld Verb）。
 Balance Scope の Reference を待つ処理は 1.3.1 で外した（namespace ref は PluginLink.h に残っているが、使っているものはない）。

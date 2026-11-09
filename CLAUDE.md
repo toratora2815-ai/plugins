@@ -36,7 +36,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Drtr`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -119,6 +119,9 @@
   空間系・歪み・ボコーダー・ケロケロは入れない（自作と Logic 標準を後ろに）。Plugin Link は LINK 欄だけ（Kind 18 は未登録）
 - Drum Transient（DrumTransient）1.0.0 … ドラム専用のトランジェント・リミッター（Uni-L を測って合わせ込み、ドラム用に絞った）。PUSH / PUNCH / BODY / CLIP⇄LIMIT / RELEASE / LOW KEEP / CEILING、LINK・DELTA、
   ATTACK と BODY の 2 本の GR メーター、内蔵プリセット 6 個。遅れ 7.8 ms。GAIN MATCH は下げるだけ（limitBoost 0）。Plugin Link は LINK 欄だけ（Kind 19 は未登録）
+
+- Deca Satu（DecaSatu）1.0.0 … トラック用サチュレーター（本人の Mac の市販サチュレーターを測って合わせ込み）。STYLE A/E/N/T/P・DRIVE・PUNISH・LOW CUT＋THUMP・TONE・HIGH CUT＋STEEP・MIX・OUTPUT。
+  本物の AUTO は GAIN MATCH に統合（ON の間だけ AUTO の量を中で使う）。DSP は DecaSatuDSP.h（JUCE なし、後で Forge Strip に入れられる）。Plugin Link は Gain Stage の LEVEL MATCH だけ（Kind 20 は未登録）。測定の道具は build/decalab
 
 ### 単体 Mac アプリ（.app）
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作
