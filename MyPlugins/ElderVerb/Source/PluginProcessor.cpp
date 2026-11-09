@@ -67,6 +67,7 @@ APVTS::ParameterLayout ElderVerbProcessor::createLayout()
     l.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "mode", 1 }, "Reverb Mode", modeNames(), 0));
     l.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "color", 1 }, "Color", colorNames(), 0));
     // Plugin Link
+    l.add (myp::GainMatch::makeParameter());
     l.add (plink::makeGroupParameter (9));
     l.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "linkDuck", 9 }, "Link Vocal Duck", juce::NormalisableRange<float> (0.0f, 12.0f, 0.1f), 4.0f, juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return juce::String (x, 1) + " dB"; })));
     return l;
@@ -93,6 +94,7 @@ void ElderVerbProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     wetBuf.setSize (2, samplesPerBlock);
     dryGain.reset (sampleRate, 0.05); wetGain.reset (sampleRate, 0.05);
     firstBlock = true; lastMode = -1;
+    gainMatch.prepare (sampleRate, 2, samplesPerBlock);
 }
 
 elder::Params ElderVerbProcessor::currentParams() const
@@ -115,6 +117,7 @@ void ElderVerbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const int n = buffer.getNumSamples();
     if (buffer.getNumChannels() < 2) return;
     if (getTotalNumInputChannels() == 1) buffer.copyFrom (1, 0, buffer, 0, 0, n);
+    gainMatch.measureInput (buffer, 2);
 
     const auto p = currentParams();
     if (p.mode != lastMode)
@@ -141,8 +144,10 @@ void ElderVerbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         const float d = dryGain.getNextValue(), w = wetGain.getNextValue() * duckG;
         L[i] = d * L[i] + w * wl[i];
         R[i] = d * R[i] + w * wr[i];
-        pk[0] = std::max (pk[0], std::abs (L[i])); pk[1] = std::max (pk[1], std::abs (R[i]));
     }
+    // GAIN MATCH（MIX 90〜100% は少しずつ弱め、100% = センド使いでは効かない）
+    gainMatch.process (buffer, 2, getLatencySamples(), (1.0f - m) / 0.1f);
+    for (int i = 0; i < n; ++i) { pk[0] = std::max (pk[0], std::abs (L[i])); pk[1] = std::max (pk[1], std::abs (R[i])); }
     for (int c = 0; c < 2; ++c) outLevel[c].store (std::max (pk[c], outLevel[c].load() * 0.85f));
     for (int c = 2; c < buffer.getNumChannels(); ++c) buffer.clear (c, 0, n);
 }
@@ -152,6 +157,7 @@ void ElderVerbProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     auto state = apvts.copyState();
     state.setProperty ("presetName", presetName, nullptr);
+    gainMatch.saveTo (state);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
 }
 
@@ -161,6 +167,7 @@ void ElderVerbProcessor::setStateInformation (const void* data, int size)
         if (xml->hasTagName (apvts.state.getType()))
         {
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            gainMatch.loadFrom (apvts.state);
             presetName = apvts.state.getProperty ("presetName", "Init").toString();
         }
 }
@@ -176,6 +183,7 @@ void ElderVerbProcessor::applyValues (const std::map<juce::String, float>& v, co
             prm->beginChangeGesture(); prm->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, nv)); prm->endChangeGesture();
         }
     presetName = name;
+    gainMatch.requestRelearn();   // GAIN MATCH: プリセットを読んだら測り直す
 }
 
 juce::File ElderVerbProcessor::vpresetFolder()

@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "PluginLinkJuce.h"
 #include "PresetBar.h"
+#include "GainMatch.h"
 #include "MeldEngine.h"
 #include "Assist.h"
 
@@ -38,8 +39,9 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     myp::Presets myPresets { *this, apvts, "MeldVerb" };   // 自分のプリセット・取り消し
     plink::Link link { plink::kindMeldVerb, apvts };   // Plugin Link
+    myp::GainMatch gainMatch { *this, myPresets };   // GAIN MATCH（入れても音量が変わらない）
     plink::VocalDuck duck;   // Fader Pilot が歌っている間リバーブを下げる
-    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) link.setTrackName (*tp.name); }
+    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) { link.setTrackName (*tp.name); gainMatch.setTrackName (*tp.name); } }
 
     // プリセット
     static juce::StringArray presetNames();

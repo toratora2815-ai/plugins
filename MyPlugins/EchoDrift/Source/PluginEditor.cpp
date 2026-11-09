@@ -171,6 +171,8 @@ EchoDriftEditor::EchoDriftEditor (EchoDriftProcessor& p)
         return lit ? "voice singing: echoes " + juce::String (processor.duck.nowDb(), 1) + " dB" : juce::String ("voice resting: full echoes");
     };
 
+    presetBar.showGainMatch (myp::GainMatch::paramId, [this] { return processor.gainMatch.readout(); },
+                             [this] { return processor.gainMatch.available(); }, "GAIN MATCH: this plugin does not change the loudness (measured after you turn it on or move a knob, locked after 10 s of playing). Not available at MIX 100% (send use)");
     setSize (1000, 600 + footerH);
     updateVisibility();
     startTimerHz (30);
@@ -330,9 +332,18 @@ void EchoDriftEditor::resized()
 void EchoDriftEditor::layoutFooter()
 {
     auto f = getLocalBounds().removeFromBottom (footerH).reduced (8, 5);
-    presetBar.setBounds (f.removeFromRight (presetBar.preferredWidth()).withSizeKeepingCentre (presetBar.preferredWidth(), myp::PresetBar::height));
-    f.removeFromRight (6);
-    linkBar.setBounds (f.withSizeKeepingCentre (f.getWidth(), plink::LinkBar::height));
+    if (footerH < 50)   // 1 段
+    {
+        presetBar.setBounds (f.removeFromRight (presetBar.preferredWidth()).withSizeKeepingCentre (presetBar.preferredWidth(), myp::PresetBar::height));
+        f.removeFromRight (6);
+        linkBar.setBounds (f.withSizeKeepingCentre (f.getWidth(), plink::LinkBar::height));
+    }
+    else
+    {
+        linkBar.setBounds (f.removeFromTop (plink::LinkBar::height));
+        f.removeFromTop (4);
+        presetBar.setBounds (f.removeFromTop (myp::PresetBar::height));
+    }
 }
 
 void EchoDriftEditor::paint (juce::Graphics& g)

@@ -3,6 +3,7 @@
 #include "HushEngine.h"
 #include "PluginLinkJuce.h"
 #include "PresetBar.h"
+#include "GainMatch.h"
 
 class HushFieldProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
 {
@@ -51,7 +52,9 @@ public:
 
     // Plugin Link: Balance Scope の「出すぎの帯域」を強めに処理する / 削っている量を Balance Scope へ
     plink::Link link { plink::kindHushField, apvts };
-    void updateTrackProperties (const TrackProperties& p) override { if (p.name.has_value()) link.setTrackName (*p.name); }
+    // GAIN MATCH（入れても音量が変わらない）。聴くだけのスイッチは動いても測り直さない
+    myp::GainMatch gainMatch { *this, myPresets, { "delta", "scListen", "bandSolo", "bypass" } };
+    void updateTrackProperties (const TrackProperties& p) override { if (p.name.has_value()) { link.setTrackName (*p.name); gainMatch.setTrackName (*p.name); } }
     float linkBoostNow (int i) const { return linkShown[i].load(); }
     float linkHzNow (int i) const { return linkHz[i].load(); }
 

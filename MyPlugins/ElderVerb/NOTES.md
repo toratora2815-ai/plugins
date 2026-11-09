@@ -8,3 +8,4 @@ Elder Verb（ElderVerb）… 70〜80 年代のデジタルリバーブ機材ふ�
 この Mac の .vpreset をプリセットメニューからそのまま読める。エンジンは ElderEngine.h（JUCE なし）: 入口の拡散 4 段 → 粒のかたまり（ATTACK で形と始まり）→ 4 枝の輪。
 モードごとの性格は Source/Profiles.h（tools/measure の fit.py / fitmod.py → genprof.py で自動生成。作業データは build/ElderVerbFit、AU を鳴らす auhost.swift）。
 70s は出口に 12 kHz の 12 次楕円（VintageFilter.h）＋ループ内 12.7 kHz の 1 次。比べ方は tools/measure/compare.py au
+- 1.1.0（2026-11-09）: GAIN MATCH を追加（Shared/GainMatch.h、ID gainMatch、既定 OFF、状態に gainMatchDb を保存）。ボタンはプリセット欄の左端。MIX 0.995 以上は効かない（センド使い）。下の欄を 2 段（footerH 72）に

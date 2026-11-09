@@ -182,6 +182,8 @@ MeldVerbEditor::MeldVerbEditor (MeldVerbProcessor& p)
         lit = processor.duck.nowDb() < -0.1f;
         return lit ? "voice singing: reverb " + juce::String (processor.duck.nowDb(), 1) + " dB" : juce::String ("voice resting: full reverb");
     };
+    presetBar.showGainMatch (myp::GainMatch::paramId, [this] { return processor.gainMatch.readout(); },
+                             [this] { return processor.gainMatch.available(); }, "GAIN MATCH: this plugin does not change the loudness (measured after you turn it on or move a knob, locked after 10 s of playing). Not available at MIX 100% (send use)");
     setSize (1040, 730 + footerH);
     startTimerHz (30);
 }

@@ -46,9 +46,11 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 - **鼻歌**
   - Idea Catcher … 思いついた瞬間を捕まえて、きれいな MIDI に（クオンタイズ・手直し → Logic へドラッグ）
 
-## Plugin Link とプリセット（プラグイン共通）
+## Plugin Link・GAIN MATCH・プリセット（プラグイン共通）
 - 画面のいちばん下の **LINK**（OFF / 1〜4）を同じ番号にしたプラグイン同士が、裏で情報をやりとりします（例: Balance Scope → Hush Field、Fader Pilot → リバーブ、Gain Stage → Wool Fuzz / Porch Drive）
 - その横の帯で、自分のプリセットの保存（SAVE）と、つまみの取り消し・やり直し（UNDO / REDO）ができます
+- その帯の左端の **GAIN MATCH** を ON にすると、そのプラグインを入れても・つまみをいじっても音量が変わりません（音色だけで比べられる）。最初は OFF。
+  付いていないのは、音を変えない Balance Scope、音量を変えるのが仕事の Gain Stage・Fader Pilot、音源の Sample Sculptor・AIO Guitar
 
 ## 入れ方
 ### プラグイン（Logic）

@@ -11,3 +11,4 @@ v1.2.0: AUTO GAIN（標準 ON）、SIDE SOLO、内蔵プリセット11個、帯�
 SHIFT CLASSIC の L/R 選択、DYNAMIC（DYNAMICS タイル）。量のつまみはどのタイルでも右側に置く
 v1.3.0: Plugin Link で Fader Pilot がボーカルを上げている間 SPREAD を下げる（ID linkDuck、+6 dB・100% で半分。プリセットで変わらない）
 v1.3.1: FROM（相手選び）、Plugin Link v2
+- 1.4.0（2026-11-09）: AUTO GAIN の表示名を GAIN MATCH にして、ボタンをプリセット欄の左端に移した（ID autoGain と DSP はそのまま）

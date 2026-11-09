@@ -74,7 +74,7 @@ private:
 
     myp::PresetBar presetBar { processor.myPresets, juce::Colour (0xfff2b35b), juce::Colour (0xff181c24), juce::Colour (0xffe6e9ef) };
 
-    static constexpr int footerH = 40;
+    static constexpr int footerH = 72;   // 2 段（LINK 欄 / GAIN MATCH・プリセット欄）
 
     void layoutFooter();
     juce::Slider duckSlider;

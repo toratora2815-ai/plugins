@@ -15,8 +15,11 @@ WoolFuzzEditor::WoolFuzzEditor (WoolFuzzProcessor& p)
     matchAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, "linkMatch", matchBtn);
     linkBar.extra = &matchBtn; linkBar.extraWidth = 64;
     linkBar.setSources (processor.link, { plink::kindGainStage });
+    presetBar.showGainMatch (myp::GainMatch::paramId, [this] { return processor.gainMatch.readout(); });
     linkBar.status = [this] (bool& lit) -> juce::String
     {
+        if (processor.apvts.getRawParameterValue (myp::GainMatch::paramId)->load() > 0.5f)
+            return "GAIN MATCH is on - LEVEL MATCH paused";
         if (! processor.link.on()) return "LINK OFF - same LINK as Gain Stage to match levels";
         if (! processor.match.sawStage()) return "waiting for Gain Stage (RMS mode)";
         lit = true;

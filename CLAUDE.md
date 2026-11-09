@@ -27,7 +27,7 @@
     - ビルド結果は Artifacts と、Releases の `latest` に置かれる
   - `MyPlugins/<名前>/` … 各プラグイン（CMakeLists.txt, Source/, README.md）
 - 新しいプラグインを足しても build.yml を書き換える必要はない（自動で見つかる）
-- `MyPlugins/Shared/` … プラグイン共通の部品（Plugin Link、PresetBar＝プリセット保存・取り消し）。CMakeLists に `../Shared` を足したものは、Shared を変えると一緒にビルドされる（Shared を変えると 14 個ほど全部ビルドになるので、まとめて変える）
+- `MyPlugins/Shared/` … プラグイン共通の部品（Plugin Link、PresetBar＝プリセット保存・取り消し、GainMatch＝GAIN MATCH）。CMakeLists に `../Shared` を足したものは、Shared を変えると一緒にビルドされる（Shared を変えると 14 個ほど全部ビルドになるので、まとめて変える）
 - 既存プラグインを変えていないときは再ビルド不要（無駄なビルドは走らせない／走ったら止めてよい）
 - Claude 側のブラウザは GitHub にログインしていない。ログインが必要な作業は、本人のいつもの Safari / Chrome で開くよう案内する
 
@@ -48,7 +48,18 @@
     自前のプリセット画面があるもの（Lumen Rooms）は `PresetBar (…, true)` で取り消し・やり直しだけ
   - Plugin Link … `plink::Link link { plink::kind<名前>, apvts };`、ID `linkGroup`（makeGroupParameter）、エディターに LinkBar。
     PluginLink.h に Kind を足し、相性のいい相手と「何を送って何に使うか」を決める（プラグインを 1 つにまとめるのではなく、別々のまま連携）
-  - 画面のいちばん下に「LINK 欄＋プリセット・取り消し欄」（1 段 40 px か 2 段 72 px。LINK 欄に追加のつまみがあって幅 1000 未満なら 2 段）
+  - GAIN MATCH（2026-11-09 本人の指示「ゲインマッチがないのはゴミ」）… `MyPlugins/Shared/GainMatch.h`。ON なら入れても・つまみをいじっても音量が変わらない、OFF なら自由。既定 OFF。
+    レイアウトに `myp::GainMatch::makeParameter()`（ID `gainMatch`、版のヒント 10＝Logic のパラメーター番号をずらさないため）、
+    プロセッサーに `myp::GainMatch gainMatch { *this, myPresets };`（apvts・myPresets より後）、
+    prepareToPlay で `prepare`、processBlock の最初に `measureInput`・最後に `process (buffer, ch, 遅れ, amount)`、状態の保存・読み込みで `saveTo` / `loadFrom`、
+    内蔵プリセットを読む関数の最後で `gainMatch.requestRelearn()`、updateTrackProperties で `gainMatch.setTrackName`、エディターで `presetBar.showGainMatch (myp::GainMatch::paramId, …)`（ボタンはプリセット欄の左端）。
+    測り方は「ON にした時・プラグインの画面でつまみを触った時・プリセットや UNDO を使った時・別のトラックへコピーした時（トラック名で判断）だけ、入口が鳴っている所（と止まってから 3 秒の残り）を K 特性で測る。
+    3 秒でほぼ決まり、10 秒たまったら固定」（追いかけ続けない＝コンプにならない。オートメーションの再生・Logic 側の操作では測り直さない。開き直しても固定した値のまま）。上げるのは +12 dB まで。
+    amount: MIX 90〜100%（センド使い）は少しずつ 0 へ、DELTA・ソロ・BYPASS など比べる元がない間は 0。最後にリミッターがあるなら ON の間 `limitBoost (0)`。
+    内蔵プリセットで全部を初期値に戻す処理からは `gainMatch` を外す。数値テストは build/gmtest/main.cpp（コミットしない）。
+    付けないもの: 音を変えない測定器（Balance Scope）、音量を変えるのが仕事のもの（Gain Stage・Fader Pilot）、入力のない音源（Sample Sculptor・AIO Guitar）。
+    前からある Horizon Spread `autoGain`・Fire Box `unity`・Mod Host `autoGain` は ID はそのまま、表示を GAIN MATCH にして同じ場所に置いた
+  - 画面のいちばん下に「LINK 欄＋GAIN MATCH・プリセット・取り消し欄」（1 段 40 px か 2 段 72 px。GAIN MATCH が入ってプリセット欄が約 550 px になったので、LINK 欄に追加のつまみがあって幅 1200 未満なら 2 段）
 
 ## 専門の係（サブエージェント、`.claude/agents/`）
 - 言われたとおりに作るだけにしない。おかしいと思ったら作る前に反対意見・別案を言う
@@ -81,25 +92,25 @@
 - 参照曲まわりの新機能は Reference Monitor にだけ足す（Balance Scope の REF と二重にしない）。Mod Host は「中のプラグインのつまみを動かす」役。帯域・歪み・自動ゲインはこれ以上足さない（Forge Strip の仕事）
 
 ### プラグイン（AU）
-- Wool Fuzz（WoolFuzz）1.0.0 … ビッグマフ系ファズ。SUSTAIN / TONE / VOLUME。Gain Stage から LEVEL MATCH を受ける
-- Porch Drive（PorchDrive）1.0.0 … BD-2系ブルースドライブ。LEVEL / TONE / GAIN。Gain Stage から LEVEL MATCH を受ける
-- Lumen Rooms（LumenRooms）1.4.0 … 映画・ポップス向けの広くなめらかな部屋のリバーブ（初期反射＋リバーブ、ECHO、EQ、テンポ同期、FREEZE、自前のプリセット画面）。Fader Pilot から VOCAL DUCK
-- Elder Verb（ElderVerb）1.0.0 … 70〜80 年代のデジタルリバーブ機材ふう。22 モード、COLOR 70s/80s/NOW、本物の .vpreset を読める。Fader Pilot から VOCAL DUCK
-- Meld Verb（MeldVerb）1.1.0 … EARLY / PLATE / HALL を三角形の BLEND パッドで混ぜる。SMOOTHING・LEARN・UNMASK、SHAPE タブ。Fader Pilot から VOCAL DUCK
+- Wool Fuzz（WoolFuzz）1.1.0 … ビッグマフ系ファズ。SUSTAIN / TONE / VOLUME。Gain Stage から LEVEL MATCH を受ける
+- Porch Drive（PorchDrive）1.1.0 … BD-2系ブルースドライブ。LEVEL / TONE / GAIN。Gain Stage から LEVEL MATCH を受ける
+- Lumen Rooms（LumenRooms）1.5.0 … 映画・ポップス向けの広くなめらかな部屋のリバーブ（初期反射＋リバーブ、ECHO、EQ、テンポ同期、FREEZE、自前のプリセット画面）。Fader Pilot から VOCAL DUCK
+- Elder Verb（ElderVerb）1.1.0 … 70〜80 年代のデジタルリバーブ機材ふう。22 モード、COLOR 70s/80s/NOW、本物の .vpreset を読める。Fader Pilot から VOCAL DUCK
+- Meld Verb（MeldVerb）1.2.0 … EARLY / PLATE / HALL を三角形の BLEND パッドで混ぜる。SMOOTHING・LEARN・UNMASK、SHAPE タブ。Fader Pilot から VOCAL DUCK
 - Balance Scope（BalanceScope）1.3.1 … 帯域バランス解析。ジャンル別目標カーブ、REF A/B/C、ラウドネス。出すぎの帯域とオケの音量を送り、Hush Field の削り量・Gain Stage の GAIN を表示
-- Horizon Spread（HorizonSpread）1.3.1 … ステレオ感の全部入り（Side だけ加工）。SHAPE / CREATE ページ、AUTO GAIN、内蔵プリセット。Fader Pilot が歌っている間 SPREAD を下げる
-- Hush Field（HushField）1.1.0 … 動的レゾナンス抑制。帯域カーブ 8 本、STEREO L/R・M/S、SC、LINEAR PHASE / LOW LATENCY。Balance Scope の出すぎ帯域を受け、削り量を送る
+- Horizon Spread（HorizonSpread）1.4.0 … ステレオ感の全部入り（Side だけ加工）。SHAPE / CREATE ページ、GAIN MATCH（ID autoGain）、内蔵プリセット。Fader Pilot が歌っている間 SPREAD を下げる
+- Hush Field（HushField）1.2.0 … 動的レゾナンス抑制。帯域カーブ 8 本、STEREO L/R・M/S、SC、LINEAR PHASE / LOW LATENCY。Balance Scope の出すぎ帯域を受け、削り量を送る
 - Fader Pilot（FaderPilot）1.2.0 … ボーカルのフェーダーを自動で上げ下げ（遅延ゼロ）。AUTO RIDE / WRITE / FOLLOW MUSIC。フェーダー位置と「歌っているか」を送る
 - Gain Stage（GainStage）1.1.0 … トラックの入口の音量をワンクリックでそろえる（遅延ゼロ）。LEARN（鳴っている所だけ 5 秒測り GAIN を 1 回入れる）、TARGET / RMS・PEAK / Ø / MONO / SWAP、IN/OUT メーター。結果は apvts.state の "learnInfo"。GAIN / TARGET などを送る
 - Sample Sculptor（SampleSculptor）1.2.0 … サンプル編集（AU 音源 aumu Smsc）。切り取り→PITCH→STRETCH→形→REVERSE→ROOM→DRIVE→TONE→FADE→NORMALIZE、A/B、ドラッグで Logic へ。LINK 欄だけ
-- Echo Drift（EchoDrift）1.2.0 … テープ・BBD・ラジオ・コーラス系 31 スタイルのディレイ（市販の定番ディレイを測って合わせ込み）。SINGLE / DUAL / PING-PONG / RHYTHM。Fader Pilot から VOCAL DUCK
-- Fire Box（FireBox）1.1.0 … 太く・大きくする全部入り（本人の持っている市販プラグインを測って、音の処理を同じ動きに合わせ込み）。IN / BASS / THICK / BODY / COMP⇄OTT / SOFT CLIP / CRUNCH / MIX / LOUD / OUT、UNITY・LIVE・192k・BYPASS。測定の道具は build/fuellab（コミットしない）。Plugin Link は Gain Stage で MATCH
+- Echo Drift（EchoDrift）1.3.0 … テープ・BBD・ラジオ・コーラス系 31 スタイルのディレイ（市販の定番ディレイを測って合わせ込み）。SINGLE / DUAL / PING-PONG / RHYTHM。Fader Pilot から VOCAL DUCK
+- Fire Box（FireBox）1.2.0 … 太く・大きくする全部入り（本人の持っている市販プラグインを測って、音の処理を同じ動きに合わせ込み）。IN / BASS / THICK / BODY / COMP⇄OTT / SOFT CLIP / CRUNCH / MIX / LOUD / OUT、GAIN MATCH（ID unity、4 秒平均で追う）・LIVE・192k・BYPASS。測定の道具は build/fuellab（コミットしない）。Plugin Link は Gain Stage で MATCH
   v1.1.0: OTT 作り直し（88 Hz の分割は Q の違う 2 段ずつ、dB 型検出器を持ち上げ用・下げ用に、OTT 時の MIX のドライも帯域分けを通す、量の表 29 段階）。FUEL との差 量24 dB で −33 dB
-- Mod Host（ModHost）1.1.0 … 好きな AU を中に読み込み、MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS / LINK）でつまみを動かす。3 帯域・DRIVE・MORPH・前後の解析
+- Mod Host（ModHost）1.2.0 … 好きな AU を中に読み込み、MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS / LINK）でつまみを動かす。3 帯域・DRIVE・MORPH・前後の解析
 - AIO Guitar（AIOGuitar）0.1.0 … 本人のエレキをライン録りした音で鳴らす全部入りギター音源（AU 音源 aumu Aiog ＋単体アプリ、CMakeLists の ALSO_APP で AIOGuitar-App.zip も）。
   MY GUITAR（カポで録った数十音 → 弦・フレットを自動判定、音程・音量を自動補正、ダウン/アップ交互、1 弦 1 音、STRUM で和音を弦の順にずらす、単体アプリは RECORD GUIDE で 1 音ずつ案内しながら録る）/ SCORE（タブ譜で 1 音ずつ奏法、FOLLOW LOGIC と PLAY IN SYNC）/ EFFECTS / AMP の 4 ページ。
   2026-11-08 本人の判断で全部入り。EFFECTS は Porch Drive・Wool Fuzz（単体と同じ DSP を WoolFuzzDSP.h・PorchDriveDSP.h で共有。変えたら AIO Guitar もビルド）。AMP は Amp Designer 以上を目指す（まだ仮）。Plugin Link は LINK 欄だけ（Kind 17 は未登録）
-- Forge Strip（ForgeStrip）1.2.1 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Plugin Link の相手だった Forge Mixer は削除（受け取る処理と独自の種類 200 / 201 はソースに残っている）
+- Forge Strip（ForgeStrip）1.3.0 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Plugin Link の相手だった Forge Mixer は削除（受け取る処理と独自の種類 200 / 201 はソースに残っている）
 
 ### 単体 Mac アプリ（.app）
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作

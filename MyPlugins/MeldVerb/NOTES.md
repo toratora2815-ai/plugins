@@ -10,3 +10,4 @@ SendSmoother（SMOOTHING。1 ms ごとに 4.9 ms と 2.78 s の包絡を比べ�
 Assist.h: LEARN（入力の飛び出た帯域 → PRE EQ のベル、低いゴロゴロ → 70 Hz ローカット）、UNMASK（ドライと響きを 1/6 oct で比べ REVERB EQ を決める。apvts.state の子 "UNMASK" に 100% の値、AMOUNT で入れ直す）。
 tools/render_meld.cpp（参考と同じパラメーター番号で書き出し、遅れも 272 サンプルそろえる）、tools/test_meld.cpp（数値テスト）
 v1.1.0: SHAPE タブ（響きごとの DELAY〔PRE-DELAY に足す、0〜500 ms〕/ LOW CUT / HIGH CUT〔2 次〕/ WIDTH〔M/S〕、ID {e,p,h}Delay・LoCut・HiCut・Width。標準は素通しで 1.0.1 とビット単位で同じ）、プリセット「Vocal Depth」
+- 1.2.0（2026-11-09）: GAIN MATCH を追加（Shared/GainMatch.h、ID gainMatch、既定 OFF、状態に gainMatchDb を保存）。ボタンはプリセット欄の左端。Dry/Wet 99.5% 以上は効かない。applyPreset の初期化から gainMatch を外した。下の欄を 2 段（footerH 72）に

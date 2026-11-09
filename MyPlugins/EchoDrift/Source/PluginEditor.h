@@ -45,7 +45,7 @@ private:
     // 画面のいちばん下: Plugin Link と プリセット・取り消し
     plink::LinkBar linkBar { processor.apvts, juce::Colour (0xffffb454), juce::Colour (0xff17140f), juce::Colour (0xffefe6d8) };
     myp::PresetBar presetBar { processor.myPresets, juce::Colour (0xffffb454), juce::Colour (0xff17140f), juce::Colour (0xffefe6d8) };
-    static constexpr int footerH = 40;
+    static constexpr int footerH = 72;   // 2 段（LINK 欄 / GAIN MATCH・プリセット欄）
     void layoutFooter();
     juce::Slider duckSlider;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> duckAtt;

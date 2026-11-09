@@ -70,6 +70,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EchoDriftProcessor::createLa
     ps.push_back (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "repeats", 1 }, "Repeats", 1, 16, 8));
     add ("decay", "Decay", NRange (0, 40, 0.1f), 12, "dB");
     // Plugin Link（LINK の番号・VOCAL DUCK）
+    ps.push_back (myp::GainMatch::makeParameter());
     ps.push_back (plink::makeGroupParameter (1));
     ps.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "linkDuck", 1 }, "Link Vocal Duck", NRange (0.0f, 12.0f, 0.1f), 4.0f,
                                                                juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return juce::String (x, 1) + " dB"; })));
@@ -91,8 +92,9 @@ bool EchoDriftProcessor::isBusesLayoutSupported (const BusesLayout& l) const
     return in == juce::AudioChannelSet::stereo() || in == juce::AudioChannelSet::mono();
 }
 
-void EchoDriftProcessor::prepareToPlay (double sampleRate, int)
+void EchoDriftProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    gainMatch.prepare (sampleRate, 2, samplesPerBlock);
     sr = sampleRate;
     engine.prepare (sampleRate);
     engine.set (readParams());
@@ -157,6 +159,7 @@ void EchoDriftProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const int inCh = getTotalNumInputChannels();
     if (inCh == 1 && buffer.getNumChannels() > 1) buffer.copyFrom (1, 0, buffer, 0, 0, n);
     for (int c = std::max (2, inCh); c < buffer.getNumChannels(); ++c) buffer.clear (c, 0, n);
+    gainMatch.measureInput (buffer, 2);
     float* L = buffer.getWritePointer (0);
     float* R = buffer.getWritePointer (1);
 
@@ -170,6 +173,8 @@ void EchoDriftProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         const int k = std::min (512, n - pos);
         engine.process (L + pos, R + pos, k);
     }
+    // GAIN MATCH（MIX 90〜100% は少しずつ弱め、100% = センド使いでは効かない）
+    gainMatch.process (buffer, 2, 0, (100.0f - apvts.getRawParameterValue ("mix")->load()) / 10.0f);
     levels[2].store (std::max (levels[2].load() * 0.9f, buffer.getMagnitude (0, 0, n)));
     levels[3].store (std::max (levels[3].load() * 0.9f, buffer.getMagnitude (1, 0, n)));
 }
@@ -195,7 +200,7 @@ void EchoDriftProcessor::applyPreset (int index)
 {
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
-            if (r->getParameterID() != "linkGroup" && r->getParameterID() != "linkDuck") r->setValueNotifyingHost (r->getDefaultValue());
+            if (r->getParameterID() != "linkGroup" && r->getParameterID() != "linkDuck" && r->getParameterID() != myp::GainMatch::paramId) r->setValueNotifyingHost (r->getDefaultValue());
     struct KV { const char* id; float v; };
     auto set = [this] (std::initializer_list<KV> kv) { for (auto& x : kv) setParam (x.id, x.v); };
     // style の番号は Profiles.h の並び
@@ -214,18 +219,25 @@ void EchoDriftProcessor::applyPreset (int index)
         case 11: set ({ { "style", 5 }, { "time1", 330 }, { "feedback", 40 }, { "mix", 30 }, { "saturation", 8 }, { "wobble", 130 } }); break;
         default: break;
     }
+    gainMatch.requestRelearn();   // GAIN MATCH: プリセットを読んだら測り直す
 }
 
 //==============================================================================
 void EchoDriftProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
-    if (auto xml = apvts.copyState().createXml()) copyXmlToBinary (*xml, dest);
+    auto st = apvts.copyState();
+    gainMatch.saveTo (st);
+    if (auto xml = st.createXml()) copyXmlToBinary (*xml, dest);
 }
 
 void EchoDriftProcessor::setStateInformation (const void* data, int size)
 {
     if (auto xml = getXmlFromBinary (data, size))
-        if (xml->hasTagName (apvts.state.getType())) apvts.replaceState (juce::ValueTree::fromXml (*xml));
+        if (xml->hasTagName (apvts.state.getType()))
+        {
+            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            gainMatch.loadFrom (apvts.state);
+        }
 }
 
 juce::AudioProcessorEditor* EchoDriftProcessor::createEditor() { return new EchoDriftEditor (*this); }

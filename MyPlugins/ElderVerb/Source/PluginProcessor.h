@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "PluginLinkJuce.h"
 #include "PresetBar.h"
+#include "GainMatch.h"
 #include "ElderEngine.h"
 
 class ElderVerbProcessor : public juce::AudioProcessor
@@ -37,8 +38,9 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     myp::Presets myPresets { *this, apvts, "ElderVerb" };   // 自分のプリセット・取り消し
     plink::Link link { plink::kindElderVerb, apvts };   // Plugin Link
+    myp::GainMatch gainMatch { *this, myPresets };   // GAIN MATCH（入れても音量が変わらない）
     plink::VocalDuck duck;   // Fader Pilot が歌っている間リバーブを下げる
-    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) link.setTrackName (*tp.name); }
+    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) { link.setTrackName (*tp.name); gainMatch.setTrackName (*tp.name); } }
 
     static const juce::StringArray& modeNames();
     static const juce::StringArray& colorNames();

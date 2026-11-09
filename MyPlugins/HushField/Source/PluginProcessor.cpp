@@ -115,6 +115,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout HushFieldProcessor::createLa
         addF (bandId (b, "focus"), n + "Focus", { 0.0f, 100.0f, 1.0f }, 50.0f, focusText);
     }
     // v1.1: Plugin Link
+    v.push_back (myp::GainMatch::makeParameter());
     v.push_back (plink::makeGroupParameter (2));
     v.push_back (std::make_unique<B> (juce::ParameterID { "linkFollow", 2 }, "Link Follow", true));
     return { v.begin(), v.end() };
@@ -141,6 +142,7 @@ void HushFieldProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     wantLatency = lat;
     reportedLatency = lat;
     setLatencySamples (lat);
+    gainMatch.prepare (sampleRate, getTotalNumOutputChannels(), samplesPerBlock);
 }
 
 void HushFieldProcessor::handleAsyncUpdate()
@@ -207,7 +209,10 @@ void HushFieldProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     scConnected = numSc > 0;
     auto s2 = s;
     applyLink (s2, main.getNumSamples());
+    gainMatch.measureInput (main, main.getNumChannels());
     eng.process (main.getArrayOfWritePointers(), main.getNumChannels(), sc, numSc, main.getNumSamples(), s2);
+    // GAIN MATCH（DELTA・SC LISTEN・SOLO・BYPASS の間は効かない）
+    gainMatch.process (main, main.getNumChannels(), lat, (! s.delta && ! s.sidechainListen && s.bandSolo < 0 && ! s.bypass) ? 1.0f : 0.0f);
     publishReduction (main.getNumSamples());
 }
 
@@ -289,6 +294,7 @@ void HushFieldProcessor::getStateInformation (juce::MemoryBlock& destData)
         o.appendChild (otherState.createCopy(), nullptr);
         state.appendChild (o, nullptr);
     }
+    gainMatch.saveTo (state);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
 }
 
@@ -303,6 +309,7 @@ void HushFieldProcessor::setStateInformation (const void* data, int sizeInBytes)
         tree.removeChild (o, nullptr);
         onB = (bool) tree.getProperty ("onB", false);
         apvts.replaceState (tree);
+        gainMatch.loadFrom (apvts.state);
     }
 }
 
@@ -311,9 +318,13 @@ void HushFieldProcessor::switchAB (bool toB)
     if (toB == onB) return;
     auto now = apvts.copyState();
     now.removeChild (now.getChildWithName ("OTHER"), nullptr);
+    auto* gm = apvts.getParameter (myp::GainMatch::paramId);   // GAIN MATCH は A/B で変えない
+    const float gmNow = gm->getValue();
     if (otherState.isValid()) apvts.replaceState (otherState.createCopy());
+    gm->setValueNotifyingHost (gmNow);
     otherState = now;
     onB = toB;
+    gainMatch.requestRelearn();   // GAIN MATCH: プリセットを読んだら測り直す
 }
 
 void HushFieldProcessor::copyAtoB()
@@ -346,7 +357,8 @@ void HushFieldProcessor::applyPreset (int index)
     // まず全部を初期値に
     for (auto* p : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (p))
-            r->setValueNotifyingHost (r->getDefaultValue());
+            if (r->getParameterID() != myp::GainMatch::paramId)   // GAIN MATCH はプリセットで変えない
+                r->setValueNotifyingHost (r->getDefaultValue());
 
     struct BandSet { int shape; float hz, q, gain, slope; };
     auto bands = [&] (std::initializer_list<BandSet> list)
@@ -385,6 +397,7 @@ void HushFieldProcessor::applyPreset (int index)
                 bands ({ { hf::LowCut, 30.0f, 0.7f, 0, 5 } }); break;
         default: break;   // Init = 全部初期値
     }
+    gainMatch.requestRelearn();   // GAIN MATCH: プリセットを読んだら測り直す
 }
 
 juce::AudioProcessorEditor* HushFieldProcessor::createEditor() { return new HushFieldEditor (*this); }

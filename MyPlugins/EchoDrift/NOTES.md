@@ -61,3 +61,4 @@ Shortwave / Tube Reel の SATURATION 12 dB、Diffused、Squawk〔参考は 125% 
 - 1.1.0（2026-11-06）: 奇数・偶数回目の音色差（split）、歪みの周波数ごとの効き方（エンファシス）とコンプの速さをスタイルごとに、
   にじみをループの外へ（左右別の形、時間に関係なく一定、Splattered の最短 213 ms）、時間を変えたときの動きを 0.504 s に
 - 1.0.0（2026-11-06）: 最初の版。31 スタイル、4 モード、テンポ同期、PRIME、WOBBLE、内蔵プリセット 12、Plugin Link（Fader Pilot → VOCAL DUCK）
+- 1.3.0（2026-11-09）: GAIN MATCH を追加（Shared/GainMatch.h、ID gainMatch、既定 OFF、状態に gainMatchDb を保存）。ボタンはプリセット欄の左端。MIX 99.5% 以上は効かない。applyPreset の初期化から gainMatch を外した。下の欄を 2 段（footerH 72）に

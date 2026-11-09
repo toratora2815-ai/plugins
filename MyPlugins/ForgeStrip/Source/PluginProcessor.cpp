@@ -81,6 +81,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ForgeStripProcessor::createL
     addC ("lim_mode", "Limiter Mode", { "Soft", "Smart", "Hard", "Zero Latency" }, 1);
     addF ("lim_ceiling", "Limiter Ceiling", { -20.0f, 0.0f, 0.01f }, -0.3f, db);
     addC ("lim_style", "Limiter Style", { "Clear", "Thick", "Smooth" }, 1);
+    v.push_back (myp::GainMatch::makeParameter());
     v.push_back (plink::makeGroupParameter (1));
     addB ("eq_softsat", "EQ Soft Saturation", false);
 
@@ -409,6 +410,7 @@ void ForgeStripProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     const int lat = eng.latencyFor (s);
     wantLatency = lat; reportedLatency = lat;
     setLatencySamples (lat);
+    gainMatch.prepare (sampleRate, getMainBusNumOutputChannels(), samplesPerBlock);
 }
 
 void ForgeStripProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -452,7 +454,11 @@ void ForgeStripProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     if (lat != wantLatency.load()) { wantLatency = lat; triggerAsyncUpdate(); }
 
     float pin = 0; for (int i = 0; i < n; ++i) pin = juce::jmax (pin, std::abs (L[i]), std::abs (R[i]));
+    gainMatch.measureInput (mainIn, nch);
     eng.process (L, R, n, scL, scR);
+    // GAIN MATCH（BYPASS の間は効かない）。最後のリミッターが ON のときは、天井を超えないよう上げる補正はしない
+    gainMatch.limitBoost (p ("lim_on") > 0.5f ? 0.0f : myp::GainMatch::maxBoostDb);
+    gainMatch.process (mainIn, nch, lat, p ("bypass") < 0.5f ? 1.0f : 0.0f);
     float pout = 0, pl = 0, ph = 0;
     for (int i = 0; i < n; ++i)
     {
@@ -514,7 +520,9 @@ void ForgeStripProcessor::handleAsyncUpdate()
 
 void ForgeStripProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    if (auto xml = apvts.copyState().createXml()) copyXmlToBinary (*xml, destData);
+    auto st = apvts.copyState();
+    gainMatch.saveTo (st);
+    if (auto xml = st.createXml()) copyXmlToBinary (*xml, destData);
 }
 
 void ForgeStripProcessor::setStateInformation (const void* data, int sizeInBytes)
@@ -538,6 +546,7 @@ void ForgeStripProcessor::setStateInformation (const void* data, int sizeInBytes
             }
             tree.removeProperty ("order", nullptr);
             apvts.replaceState (tree);
+            gainMatch.loadFrom (apvts.state);
         }
 }
 

@@ -161,6 +161,7 @@ ModHostEditor::ModHostEditor (ModHostProcessor& p) : AudioProcessorEditor (p), p
     }
     bandsButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff4fd1e8));
     autoAtt = std::make_unique<BA> (proc.apvts, "autoGain", autoButton);
+    autoButton.setVisible (false);   // ボタンは下の欄（PresetBar の GAIN MATCH）に移した。ID は "autoGain" のまま
     bandsAtt = std::make_unique<BA> (proc.apvts, "bands", bandsButton);
 
     // ── MORPH ──
@@ -261,6 +262,12 @@ void ModHostEditor::updateSize()
     const int h = topH + hh + panelH;
     addAndMakeVisible (linkBar);
     addAndMakeVisible (presetBar);
+    presetBar.showGainMatch ("autoGain", [this]
+    {
+        if (proc.apvts.getRawParameterValue ("autoGain")->load() < 0.5f) return juce::String ("GAIN MATCH");
+        const float d = proc.autoGainDb();
+        return "GAIN MATCH " + juce::String (d > 0.05f ? "+" : "") + juce::String (d, 1);
+    }, {}, "GAIN MATCH (was AUTO GAIN): keep the output as loud as the input, so you hear tone, not volume");
     linkBar.setSources (proc.link, { plink::kindFaderPilot, plink::kindBalanceScope });
     linkBar.status = [this] (bool& lit) -> juce::String
     {
@@ -737,8 +744,6 @@ void ModHostEditor::layoutBands (juce::Rectangle<int> p)
     }
     right.removeFromTop (10);
     auto r1 = right.removeFromTop (28);
-    autoButton.setBounds (r1.removeFromLeft (r1.getWidth() / 2 - 3));
-    r1.removeFromLeft (6);
     bandsButton.setBounds (r1);
     right.removeFromTop (6);
     bandInfo = {};   // 下で
@@ -765,7 +770,7 @@ void ModHostEditor::paintBandsInfo (juce::Graphics& g)
         auto a = autoInfoArea.toFloat();
         g.setColour (dim);
         g.setFont (font (11.0f, true));
-        g.drawText ("AUTO GAIN", a.removeFromTop (16.0f), juce::Justification::centredLeft);
+        g.drawText ("GAIN MATCH", a.removeFromTop (16.0f), juce::Justification::centredLeft);
         g.setColour (autoButton.getToggleState() ? outCol : dim.withAlpha (0.6f));
         g.setFont (font (20.0f, true));
         const float d = proc.autoGainDb();

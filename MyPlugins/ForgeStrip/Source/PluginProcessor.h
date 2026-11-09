@@ -3,6 +3,7 @@
 #include "dsp/Strip.h"
 #include "ForgeLink.h"
 #include "PresetBar.h"
+#include "GainMatch.h"
 #include <unordered_map>
 #include <string>
 
@@ -77,7 +78,9 @@ public:
 
     // Plugin Link（Forge Mixer から音量・パン・幅を動かせる）
     plink::Link link { fslink::kindStrip, apvts };
-    void updateTrackProperties (const TrackProperties& p) override { if (p.name.has_value()) link.setTrackName (*p.name); }
+    // GAIN MATCH（ストリップ全体。入れても音量が変わらない）。モジュールごとの AUTO GAIN とは別
+    myp::GainMatch gainMatch { *this, myPresets, { "bypass" } };
+    void updateTrackProperties (const TrackProperties& p) override { if (p.name.has_value()) { link.setTrackName (*p.name); gainMatch.setTrackName (*p.name); } }
     bool mixerConnected() const { return mixerSeen.load(); }
 
 private:

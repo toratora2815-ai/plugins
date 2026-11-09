@@ -178,6 +178,7 @@ APVTS::ParameterLayout LumenRoomsProcessor::createLayout()
     v.push_back (fp ("eqRoll", "EQ Roll-off", freqRange (500.0f, 18000.0f, 4000.0f), 18000.0f, "Hz", 0));
     v.push_back (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "eqSlope", 1 }, "EQ Slope", slopeNames(), 0));
     // Plugin Link（LINK の番号・VOCAL DUCK）
+    v.push_back (myp::GainMatch::makeParameter());
     v.push_back (plink::makeGroupParameter (9));
     v.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "linkDuck", 9 }, "Link Vocal Duck", juce::NormalisableRange<float> (0.0f, 12.0f, 0.1f), 4.0f, juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return juce::String (x, 1) + " dB"; })));
     return { v.begin(), v.end() };
@@ -277,6 +278,7 @@ void LumenRoomsProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     bufR.setSize (2, maxBlock);
     haveRefl = false;
     rebuildReflections();
+    gainMatch.prepare (sr, 2, maxBlock);
 }
 
 void LumenRoomsProcessor::rebuildReflections()
@@ -320,6 +322,7 @@ void LumenRoomsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
             if (auto bpm = pos->getBpm()) hostBpm.store (*bpm);
     if (getTotalNumInputChannels() == 1 && buffer.getNumChannels() > 1)
         buffer.copyFrom (1, 0, buffer, 0, 0, n);
+    gainMatch.measureInput (buffer, 2);
 
     for (int c = 0; c < 2; ++c)
     {
@@ -366,6 +369,9 @@ void LumenRoomsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         }
     }
 
+    // GAIN MATCH（MIX 90〜100% は少しずつ弱め、100% = センド使いでは効かない）
+    gainMatch.process (buffer, 2, getLatencySamples(), (100.0f - p ("mix")) / 10.0f);
+
     for (int c = 0; c < 2; ++c)
     {
         const float pk = buffer.getMagnitude (c, 0, n);
@@ -388,11 +394,12 @@ void LumenRoomsProcessor::setCurrentProgram (int i)
     // まず全部を初期値に戻してから、プリセットの値を入れる
     for (auto* prm : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm))
-            if (rp->getParameterID() != "mix" && rp->getParameterID() != "master")
+            if (rp->getParameterID() != "mix" && rp->getParameterID() != "master" && rp->getParameterID() != myp::GainMatch::paramId)
                 rp->setValueNotifyingHost (rp->getDefaultValue());
     for (auto& kv : presets()[(size_t) i].values)
         if (auto* rp = apvts.getParameter (kv.first))
             rp->setValueNotifyingHost (rp->convertTo0to1 (kv.second));
+    gainMatch.requestRelearn();   // GAIN MATCH: プリセットを読んだら測り直す
 }
 
 LumenRoomsProcessor::ErView LumenRoomsProcessor::getErView() const
@@ -455,11 +462,12 @@ juce::String LumenRoomsProcessor::loadMyPreset (const juce::File& file)
     for (auto c : st)
     {
         const auto id = c.getProperty ("id").toString();
-        if (id.isEmpty() || id == "mix" || id == "master") continue;
+        if (id.isEmpty() || id == "mix" || id == "master" || id == myp::GainMatch::paramId) continue;
         if (auto* rp = apvts.getParameter (id))
             rp->setValueNotifyingHost (rp->convertTo0to1 ((float) (double) c.getProperty ("value")));
     }
     importedName = st.getProperty ("presetName", file.getFileNameWithoutExtension()).toString();
+    gainMatch.requestRelearn();
     return {};
 }
 
@@ -498,7 +506,7 @@ juce::String LumenRoomsProcessor::importPreset (const juce::File& file)
     // まず全部（DRY/WET と OUTPUT 以外）を初期値に戻す
     for (auto* prm : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm))
-            if (rp->getParameterID() != "mix" && rp->getParameterID() != "master")
+            if (rp->getParameterID() != "mix" && rp->getParameterID() != "master" && rp->getParameterID() != myp::GainMatch::paramId)
                 rp->setValueNotifyingHost (rp->getDefaultValue());
 
     struct Map { int id; const char* param; double scale; };
@@ -543,6 +551,7 @@ juce::String LumenRoomsProcessor::importPreset (const juce::File& file)
 
     importedName = st.getProperty ("preset_name", "").toString();
     if (importedName.isEmpty()) importedName = file.getFileNameWithoutExtension();
+    gainMatch.requestRelearn();
     return {};
 }
 
@@ -552,6 +561,7 @@ void LumenRoomsProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("program", currentProgram, nullptr);
     state.setProperty ("imported", importedName, nullptr);
     state.setProperty ("presetKey", presetKey, nullptr);
+    gainMatch.saveTo (state);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
 }
 
@@ -565,6 +575,7 @@ void LumenRoomsProcessor::setStateInformation (const void* data, int size)
             importedName = st.getProperty ("imported", "").toString();
             presetKey = st.getProperty ("presetKey", "").toString();
             apvts.replaceState (st);
+            gainMatch.loadFrom (apvts.state);
         }
 }
 

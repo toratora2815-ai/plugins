@@ -187,7 +187,8 @@ void FireBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     // Plugin Link: 出口を Gain Stage の TARGET にそろえる（MATCH が ON で、同じ LINK に Gain Stage がいるとき）
     if (! bypass)
-        match.process (link, linkMatchOn->load() > 0.5f, buffer.getArrayOfWritePointers(), numCh, n, getSampleRate());
+        match.process (link, linkMatchOn->load() > 0.5f && unityOn->load() < 0.5f,   // GAIN MATCH（unity）が ON なら LEVEL MATCH は止める
+                        buffer.getArrayOfWritePointers(), numCh, n, getSampleRate());
 
     outMeter.process (buffer.getArrayOfReadPointers(), numCh, n);
 }

@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "PluginLinkJuce.h"
 #include "PresetBar.h"
+#include "GainMatch.h"
 #include "PorchDriveDSP.h"   // 音の部分（AIO Guitar の EFFECTS も同じものを使う）
 
 
@@ -40,8 +41,9 @@ public:
 
     plink::Link link { plink::kindPorchDrive, apvts };   // Plugin Link
     plink::LevelMatch match;   // 出口を Gain Stage の TARGET にそろえる
+    myp::GainMatch gainMatch { *this, myPresets };   // GAIN MATCH（入れても音量が変わらない）
 
-    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) link.setTrackName (*tp.name); }
+    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) { link.setTrackName (*tp.name); gainMatch.setTrackName (*tp.name); } }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();

@@ -21,3 +21,24 @@ Sample Sculptor は LINK 欄だけ（自然な相手なし）。Kind 3 は前は
 Balance Scope の Reference を待つ処理は 1.3.1 で外した（namespace ref は PluginLink.h に残っているが、使っているものはない）。
 namespace tamer は今は Hush Field の並び。名前を変えると Shared を使う全部のビルドになるので、次に Shared を触るときに直す。
 Forge Strip / Forge Mixer は独自の種類 200 / 201（ForgeStrip/Source/ForgeLink.h）で、この一覧の外の独立した系統。Forge Mixer は 2026-11-06 に削除したが、200 / 201 は使い回さない。新しい Kind はこれとぶつけない。
+
+## GainMatch.h（GAIN MATCH、2026-11-09）
+全部のエフェクトに付ける「入れても・つまみをいじっても音量が変わらない」ボタン。ID `gainMatch`（既定 OFF、**版のヒント 10**。1 だと Logic の AU パラメーター番号がずれて既存曲のオートメーションが別のつまみに行く）。
+- 測り方: 入口・出口を K 特性（BS.1770 の 2 段、どのサンプルレートでも同じ形）で、チャンネルの平均の 2 乗。100 ms 区切り。
+  入口が −60 dB 以上の区切りと、止まってから 3 秒（tailSeconds）の区切りを、入口・出口の両方で数える（間のある歌＋エコーでも持ち上げすぎない）
+- 測り直しのきっかけ: ON にした時 / parameterGestureChanged の終わり / Presets::onUserChange（画面で触った・プリセット・UNDO・REDO）/ requestRelearn()（内蔵プリセット）/
+  開き直した直後にトラック名（setTrackName）が保存名 "gainMatchTrack" と違う時（= 別のトラックへコピー）。開いている間の改名では測り直さない。
+  ジェスチャーなしの値の変化（オートメーションの再生）では測り直さない。JUCE の AU ではジェスチャーはプラグイン → ホストの一方向だけなので、
+  Logic 側の操作（Smart Controls・コントロール表示・MIDI コントローラー）でも測り直さない。ignoreIds（BYPASS・DELTA など聴くだけのもの）は対象外
+- 0.3 秒（鳴っている所）で仮の補正、10 秒（lockSeconds）で固定。補正は −24〜+12 dB、L/R 同じ、0.4 秒の指数でなめらかに
+- amount（0〜1）: 0 で 0 dB に戻すだけで覚えた値は残す（MIX 100%、DELTA、SOLO、BYPASS）。0.05 以上跳ねたら 60 ms だけ 10 ms の速さで移す。リバーブ・ディレイは (100−MIX)/10
+- limitBoost: 最後にリミッターがあるもの（Forge Strip の lim_on）は上げない。上げたいのに止めているときは readout の末尾に " LIM"
+- 保存: gainMatchDb / gainMatchLocked / gainMatchTrack。loadFrom は atomic の受け取り待ち → process の頭で反映。固定済みなら開き直しても固定のまま
+  （入口の音量で測り直すのはやめた: 歪み系は入口の大きさで補正が変わるので、静かなイントロから再生しただけで Wool Fuzz が −8.9 dB ずれた）。
+  prepare 後の最初のブロックで受け取ったら、いきなりその値から（曲を開いた直後）
+- 遅れ（process の latency 引数）の分、入口の測り値を 2^17 サンプルのリングで遅らせる
+- ボタンは PresetBar::showGainMatch（プリセット欄の左端、幅 116）。その ID は Presets::exclude でプリセット・取り消しの対象外。PresetBar は狭いとき（中身 400 px 未満）< > を隠す
+- 前からある Horizon Spread `autoGain`（±6 dB）、Fire Box `unity`（4 秒平均で追う）、Mod Host `autoGain`（約 0.5 秒で追う）は DSP そのまま、ボタンだけ showGainMatch に移した
+- 出口のつまみ（OUTPUT / VOLUME など）も打ち消す（本人の「音量に何の影響も与えない」のとおり。触った後に測り直して数秒で戻る）
+- 数値テスト: build/gmtest/main.cpp（コミットしない）。DSP 検査係の検査用ホストは scratchpad にあった（消える）
+- 分かっている限界: Elder Verb の 49 秒のような長い響きを MIX 0.95 で使うと、3 秒の残り窓に入らない尾の分だけ +3 dB ほど大きくなる（MIX 0.85 なら +0.24 dB）

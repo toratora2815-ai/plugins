@@ -16,13 +16,15 @@ FireBoxEditor::FireBoxEditor (FireBoxProcessor& p)
     setupKnob (kOut,    "out",      "OUT",       {},            "Output level, after the limiter");
 
     setupSwitch (ottBtn,    ottAtt,    "ott",        "OTT",    "Switch the COMP knob between the compressor and the 3-band OTT");
-    setupSwitch (unityBtn,  unityAtt,  "unity",      "UNITY",  "Keep the output loudness equal to the input (4 s average)");
+    setupSwitch (unityBtn,  unityAtt,  "unity",      "GAIN MATCH", "Keep the output loudness equal to the input (4 s average)");
+    unityBtn.setVisible (false);   // ボタンは下の欄（PresetBar の GAIN MATCH）に移した。ID は "unity" のまま
     setupSwitch (liveBtn,   liveAtt,   "live",       "LIVE",   "Lower latency (shorter look-ahead for COMP / OTT and LOUD)");
     setupSwitch (osBtn,     osAtt,     "oversample", "192k",   "Process at about 192 kHz");
     setupSwitch (bypassBtn, bypassAtt, "bypass",     "BYPASS", "Latency-compensated bypass");
 
     addAndMakeVisible (linkBar);
     addAndMakeVisible (presetBar);
+    presetBar.showGainMatch ("unity", {}, {}, "GAIN MATCH (was UNITY): keep the output loudness equal to the input (4 s average). Gain Stage MATCH pauses while it is on");
     matchBtn.setButtonText ("MATCH");
     matchBtn.setClickingTogglesState (true);
     matchBtn.setTooltip ("Gain Stage (same LINK, before this plugin): keep the output at Gain Stage's TARGET level");
@@ -32,6 +34,7 @@ FireBoxEditor::FireBoxEditor (FireBoxProcessor& p)
     linkBar.setSources (processor.link, { plink::kindGainStage });
     linkBar.status = [this] (bool& lit) -> juce::String
     {
+        if (processor.apvts.getRawParameterValue ("unity")->load() > 0.5f) return "GAIN MATCH is on - LEVEL MATCH paused";
         if (! processor.link.on()) return "LINK OFF - same LINK as Gain Stage to match levels";
         if (! processor.match.sawStage()) return "waiting for Gain Stage (RMS mode)";
         lit = true;
@@ -125,7 +128,7 @@ void FireBoxEditor::resized()
 {
     auto r = getLocalBounds();
     auto top = r.removeFromTop (50).reduced (10, 11);
-    for (auto* b : { &bypassBtn, &osBtn, &liveBtn, &unityBtn })
+    for (auto* b : { &bypassBtn, &osBtn, &liveBtn })
     {
         b->setBounds (top.removeFromRight (70));
         top.removeFromRight (6);

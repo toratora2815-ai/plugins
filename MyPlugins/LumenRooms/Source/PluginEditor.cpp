@@ -292,6 +292,8 @@ LumenRoomsEditor::LumenRoomsEditor (LumenRoomsProcessor& p) : AudioProcessorEdit
         return lit ? "voice singing: reverb " + juce::String (proc.duck.nowDb(), 1) + " dB" : juce::String ("voice resting: full reverb");
     };
 
+    presetBar.showGainMatch (myp::GainMatch::paramId, [this] { return proc.gainMatch.readout(); },
+                             [this] { return proc.gainMatch.available(); }, "GAIN MATCH: this plugin does not change the loudness (measured after you turn it on or move a knob, locked after 10 s of playing). Not available at MIX 100% (send use)");
     setSize (W, H + footerH);
     showPage (juce::jlimit (0, 2, juce::SystemStats::getEnvironmentVariable ("LUMEN_PAGE", "0").getIntValue()));
     worker.request (currentVisualParams());

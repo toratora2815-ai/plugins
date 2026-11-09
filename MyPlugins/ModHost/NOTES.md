@@ -11,3 +11,4 @@ MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS、ModEngine.h は JUCE なし
 v1.1.0: 通り道（Chain.h、JUCE なし、tools/test_chain.cpp）: 3 帯域 LR4（SPLIT LOW/HIGH、SEND LOW/MID/HIGH、ID bands）→ DRIVE → 中 → MIX（元の音はレイテンシー分 Delay）→ AUTO GAIN（ID autoGain）→ OUT。
 Mod Host 自身のつまみも MOD の行き先（番号 internalBase=1<<20 ＋ k、保存は IROUTES）。MORPH（STORE A/B、違うつまみを morph で補間、切り替え式は 0.5 で、保存は MORPH の a/b）。
 Analyzer.h: 入口（遅らせた元の音）と出口を M/S で FFT 4096、BANDS ページで帯域ごとの LEVEL 差・WIDTH（サイドの割合）の差とスペクトル
+- 1.2.0（2026-11-09）: AUTO GAIN の表示名を GAIN MATCH にして、ボタンをプリセット欄の左端に移した（ID autoGain と DSP はそのまま）。下の欄を 2 段（footerH 72）に

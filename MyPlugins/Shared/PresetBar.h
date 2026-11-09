@@ -36,6 +36,13 @@ namespace myp
             return files;
         }
 
+        juce::AudioProcessorValueTreeState& getState() { return state; }
+
+        // 画面で触った・プリセット・取り消しでパラメーターが変わったら呼ぶ（GainMatch が「測り直し」に使う）。メッセージスレッド
+        std::function<void (const juce::StringArray& changedIds)> onUserChange;
+        // プリセット・取り消しで変えないパラメーターを足す（GAIN MATCH のボタンなど）
+        void exclude (const juce::String& id) { extraExcluded.addIfNotAlreadyThere (id); }
+
         juce::String currentName() const { return state.state.getProperty ("mypPreset", "").toString(); }
 
         bool save (const juce::String& rawName)
@@ -76,6 +83,7 @@ namespace myp
                     if (std::abs (v - r->getValue()) > 1.0e-6f) step.push_back ({ r, r->getValue(), v });
                 }
             apply (step, false);
+            notify (step);
             pushUndo (std::move (step));
             state.state.setProperty ("mypPreset", f.getFileNameWithoutExtension(), nullptr);
             return true;
@@ -87,8 +95,8 @@ namespace myp
 
         bool canUndo() const { return ! undoStack.empty(); }
         bool canRedo() const { return ! redoStack.empty(); }
-        void undo() { if (canUndo()) { auto s = std::move (undoStack.back()); undoStack.pop_back(); apply (s, true); redoStack.push_back (std::move (s)); } }
-        void redo() { if (canRedo()) { auto s = std::move (redoStack.back()); redoStack.pop_back(); apply (s, false); undoStack.push_back (std::move (s)); } }
+        void undo() { if (canUndo()) { auto s = std::move (undoStack.back()); undoStack.pop_back(); apply (s, true); notify (s); redoStack.push_back (std::move (s)); } }
+        void redo() { if (canRedo()) { auto s = std::move (redoStack.back()); redoStack.pop_back(); apply (s, false); notify (s); undoStack.push_back (std::move (s)); } }
 
         // 画面の操作の前後で呼ぶ（PresetBar が自動で呼ぶ）
         void snapshot() { snap.clear(); for (auto* p : proc.getParameters()) snap.push_back (p->getValue()); }
@@ -104,15 +112,26 @@ namespace myp
             snap.clear();
             if (! step.empty())
             {
+                notify (step);
                 pushUndo (std::move (step));
                 if (currentName().isNotEmpty() && ! currentName().endsWith (" *"))
                     state.state.setProperty ("mypPreset", currentName() + " *", nullptr);   // 呼び出した後に変えた印
             }
         }
 
-        static bool excluded (const juce::String& id) { return id == "linkGroup"; }
+        bool excluded (const juce::String& id) const   // LINK の番号と GAIN MATCH はプリセット・取り消しで変えない
+        {
+            return id == "linkGroup" || id == "gainMatch" || extraExcluded.contains (id);
+        }
 
     private:
+        void notify (const Step& s)
+        {
+            if (! onUserChange || s.empty()) return;
+            juce::StringArray ids;
+            for (const auto& c : s) ids.add (c.p->getParameterID());
+            onUserChange (ids);
+        }
         void apply (const Step& s, bool backwards)
         {
             for (const auto& c : s)
@@ -135,9 +154,10 @@ namespace myp
         juce::String folderName;
         std::vector<Step> undoStack, redoStack;
         std::vector<float> snap;
+        juce::StringArray extraExcluded;
     };
 
-    // 画面の帯: [↶] [↷]  [◀] [ プリセット名 ▾ ] [▶]  [SAVE]
+    // 画面の帯: [GAIN MATCH]  [↶] [↷]  [◀] [ プリセット名 ▾ ] [▶]  [SAVE]
     class PresetBar : public juce::Component, private juce::Timer
     {
     public:
@@ -174,7 +194,30 @@ namespace myp
         }
 
         // 置くのにちょうどいい幅
-        int preferredWidth() const { return onlyUndo ? 120 : 430; }
+        int preferredWidth() const { return (onlyUndo ? 120 : 430) + (gmParam.isNotEmpty() ? gmWidth + 8 : 0); }
+
+        // GAIN MATCH ボタンを左端に出す（どのプラグインにも付ける。GainMatch.h）
+        //   paramId   = ON/OFF のパラメーター（新しいものは "gainMatch"、前からあるものは "autoGain" / "unity"）
+        //   readout   = ボタンの文字（例 "GAIN MATCH -3.2"）。なくてよい
+        //   available = false のときボタンを灰色にする（MIX 100% など比べる元がないとき）。なくてよい
+        void showGainMatch (const juce::String& paramId, std::function<juce::String()> readout = {},
+                            std::function<bool()> available = {}, const juce::String& tooltip = {})
+        {
+            gmParam = paramId; gmReadout = std::move (readout); gmAvailable = std::move (available);
+            presets.exclude (paramId);   // 前からある autoGain / unity もプリセット・取り消しの対象から外す
+            gmBtn.setClickingTogglesState (true);
+            gmBtn.setColour (juce::TextButton::buttonColourId, panel.brighter (0.12f));
+            gmBtn.setColour (juce::TextButton::buttonOnColourId, accent);
+            gmBtn.setColour (juce::TextButton::textColourOffId, text);
+            gmBtn.setColour (juce::TextButton::textColourOnId, panel);
+            gmBtn.setTooltip (tooltip.isNotEmpty() ? tooltip
+                : "GAIN MATCH: this plugin does not change the loudness. It measures after you turn it on or move a knob "
+                  "(about 3 s, locked after 10 s of playing; automation playback does not re-measure), then holds the correction (playing dynamics stay). Off = level may change");
+            addAndMakeVisible (gmBtn);
+            gmAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (presets.getState(), paramId, gmBtn);
+            refresh();
+            resized();
+        }
 
         ~PresetBar() override
         {
@@ -200,11 +243,21 @@ namespace myp
         void resized() override
         {
             auto r = getLocalBounds().reduced (4, 3);
-            undoBtn.setBounds (r.removeFromLeft (52)); r.removeFromLeft (3);
-            redoBtn.setBounds (r.removeFromLeft (52)); r.removeFromLeft (10);
-            saveBtn.setBounds (r.removeFromRight (58)); r.removeFromRight (6);
-            prevBtn.setBounds (r.removeFromLeft (26)); r.removeFromLeft (3);
-            nextBtn.setBounds (r.removeFromRight (26)); r.removeFromRight (3);
+            if (gmParam.isNotEmpty()) { gmBtn.setBounds (r.removeFromLeft (gmWidth)); r.removeFromLeft (8); }
+            const bool narrow = ! onlyUndo && r.getWidth() < 400;   // 狭いときは < > を隠し UNDO/REDO を細く
+            const int uw = narrow ? 46 : 52;
+            undoBtn.setBounds (r.removeFromLeft (uw)); r.removeFromLeft (3);
+            redoBtn.setBounds (r.removeFromLeft (uw)); r.removeFromLeft (narrow ? 6 : 10);
+            saveBtn.setBounds (r.removeFromRight (narrow ? 50 : 58)); r.removeFromRight (narrow ? 4 : 6);
+            if (! onlyUndo)
+            {
+                prevBtn.setVisible (! narrow); nextBtn.setVisible (! narrow);
+                if (! narrow)
+                {
+                    prevBtn.setBounds (r.removeFromLeft (26)); r.removeFromLeft (3);
+                    nextBtn.setBounds (r.removeFromRight (26)); r.removeFromRight (3);
+                }
+            }
             nameBtn.setBounds (r);
         }
 
@@ -250,6 +303,13 @@ namespace myp
             redoBtn.setEnabled (presets.canRedo());
             auto n = presets.currentName();
             nameBtn.setButtonText (n.isEmpty() ? "(no preset)" : n);
+            if (gmParam.isNotEmpty())
+            {
+                const auto t = gmReadout ? gmReadout() : juce::String ("GAIN MATCH");
+                if (gmBtn.getButtonText() != t) gmBtn.setButtonText (t);
+                const bool av = gmAvailable ? gmAvailable() : true;
+                if (gmBtn.isEnabled() != av) gmBtn.setEnabled (av);
+            }
         }
 
         void step (int dir)
@@ -315,6 +375,12 @@ namespace myp
         juce::Colour accent, panel, text;
         juce::TextButton undoBtn { "UNDO" }, redoBtn { "REDO" },
                          prevBtn { "<" }, nextBtn { ">" }, nameBtn, saveBtn { "SAVE" };
+        juce::TextButton gmBtn { "GAIN MATCH" };
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> gmAtt;
+        juce::String gmParam;
+        std::function<juce::String()> gmReadout;
+        std::function<bool()> gmAvailable;
+        static constexpr int gmWidth = 116;
         juce::Component* watched = nullptr;
         Watcher watcher { *this };
         bool pending = false, onlyUndo = false;

@@ -121,6 +121,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MeldVerbProcessor::createLay
     add ("smoothAmt", "Smoothing Amount", NRange (0, 100, 0.1f), 100, "%");
     add ("unmaskAmt", "Unmask Amount", NRange (0, 100, 0.1f), 70, "%");
     // Plugin Link（LINK の番号・VOCAL DUCK）
+    ps.push_back (myp::GainMatch::makeParameter());
     ps.push_back (plink::makeGroupParameter (9));
     ps.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "linkDuck", 9 }, "Link Vocal Duck", juce::NormalisableRange<float> (0.0f, 12.0f, 0.1f), 4.0f, juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return juce::String (x, 1) + " dB"; })));
     return { ps.begin(), ps.end() };
@@ -158,6 +159,7 @@ void MeldVerbProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     dryBuf.assign ((size_t) std::max (1, samplesPerBlock), 0.0f);
     wetBuf.assign ((size_t) std::max (1, samplesPerBlock), 0.0f);
     setLatencySamples (0);
+    gainMatch.prepare (sampleRate, 2, samplesPerBlock);
 }
 
 const juce::StringArray& MeldVerbProcessor::paramOrder()
@@ -223,6 +225,7 @@ void MeldVerbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     const int inCh = getTotalNumInputChannels();
     if (inCh == 1 && buffer.getNumChannels() > 1) buffer.copyFrom (1, 0, buffer, 0, 0, n);
     for (int c = std::max (2, inCh); c < buffer.getNumChannels(); ++c) buffer.clear (c, 0, n);
+    gainMatch.measureInput (buffer, 2);
     float* L = buffer.getWritePointer (0);
     float* R = buffer.getWritePointer (1);
 
@@ -249,6 +252,8 @@ void MeldVerbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         if (scope.blockSize2 > 0) { std::copy (dryBuf.begin() + scope.blockSize1, dryBuf.begin() + scope.blockSize1 + scope.blockSize2, fifoDry.begin() + scope.startIndex2);
                                     std::copy (wetBuf.begin() + scope.blockSize1, wetBuf.begin() + scope.blockSize1 + scope.blockSize2, fifoWet.begin() + scope.startIndex2); }
     }
+    // GAIN MATCH（Dry/Wet 90〜100% は少しずつ弱め、100% = センド使いでは効かない）
+    gainMatch.process (buffer, 2, 0, (100.0f - p ("mix")) / 10.0f);
     levels[2].store (std::max (levels[2].load() * 0.9f, buffer.getMagnitude (0, 0, n)));
     levels[3].store (std::max (levels[3].load() * 0.9f, buffer.getMagnitude (1, 0, n)));
 }
@@ -373,6 +378,7 @@ void MeldVerbProcessor::finishLearn()
         else msg << "The reverb is not hiding the dry sound - nothing to cut";
     }
     learnProg.store (1.0f);
+    gainMatch.requestRelearn();   // LEARN / UNMASK でつまみが変わったので測り直す
     const juce::ScopedLock l (msgLock); learnMsg = msg;
 }
 
@@ -414,7 +420,7 @@ void MeldVerbProcessor::applyPreset (int index)
     // まず全部を初期値へ
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
-            if (r->getParameterID() != "unmaskAmt") r->setValueNotifyingHost (r->getDefaultValue());
+            if (r->getParameterID() != "unmaskAmt" && r->getParameterID() != myp::GainMatch::paramId) r->setValueNotifyingHost (r->getDefaultValue());
     struct KV { const char* id; float v; };
     auto set = [this] (std::initializer_list<KV> kv) { for (auto& x : kv) setParam (x.id, x.v); };
     switch (index)
@@ -442,18 +448,25 @@ void MeldVerbProcessor::applyPreset (int index)
                         { "predelay", 15 }, { "mix", 25 }, { "smoothOn", 1 } }); break;
         default: break;
     }
+    gainMatch.requestRelearn();   // GAIN MATCH: プリセットを読んだら測り直す
 }
 
 //==============================================================================
 void MeldVerbProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
-    if (auto xml = apvts.copyState().createXml()) copyXmlToBinary (*xml, dest);
+    auto st = apvts.copyState();
+    gainMatch.saveTo (st);
+    if (auto xml = st.createXml()) copyXmlToBinary (*xml, dest);
 }
 
 void MeldVerbProcessor::setStateInformation (const void* data, int size)
 {
     if (auto xml = getXmlFromBinary (data, size))
-        if (xml->hasTagName (apvts.state.getType())) apvts.replaceState (juce::ValueTree::fromXml (*xml));
+        if (xml->hasTagName (apvts.state.getType()))
+        {
+            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            gainMatch.loadFrom (apvts.state);
+        }
 }
 
 juce::AudioProcessorEditor* MeldVerbProcessor::createEditor() { return new MeldVerbEditor (*this); }

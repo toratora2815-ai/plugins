@@ -34,7 +34,8 @@ HorizonSpreadEditor::HorizonSpreadEditor (HorizonSpreadProcessor& p)
     setupToggle (guard, "guard", "GUARD");
     setupToggle (monoCheck, "monoCheck", "MONO CHECK");
     setupToggle (sideSolo, "sideSolo", "SIDE SOLO");
-    setupToggle (autoGain, "autoGain", "AUTO GAIN");
+    setupToggle (autoGain, "autoGain", "GAIN MATCH");
+    autoGain.button.setVisible (false);   // ボタンは下の欄（PresetBar の GAIN MATCH）に移した
     monoCheck.button.setTooltip ("Hold to listen in mono (turn off before bouncing)");
     sideSolo.button.setTooltip ("Listen to the width (Side) only (turn off before bouncing)");
     autoGain.button.setTooltip ("Keep the loudness the same as the original, so wider does not just mean louder");
@@ -128,6 +129,13 @@ HorizonSpreadEditor::HorizonSpreadEditor (HorizonSpreadProcessor& p)
     };
     addAndMakeVisible (linkBar);
     addAndMakeVisible (presetBar);
+    // GAIN MATCH（前の AUTO GAIN。ID は "autoGain" のまま）
+    presetBar.showGainMatch ("autoGain", [this]
+    {
+        if (processor.apvts.getRawParameterValue ("autoGain")->load() < 0.5f) return juce::String ("GAIN MATCH");
+        const float d = processor.engine.getAutoGainDb();
+        return "GAIN MATCH " + juce::String (d > 0.05f ? "+" : "") + juce::String (d, 1);
+    }, {}, "GAIN MATCH: keep the loudness the same as the original, so wider does not just mean louder");
 
     setSize (1180, 672);
     showPage (true);
@@ -280,7 +288,6 @@ void HorizonSpreadEditor::resized()
 
     // 左：SPREAD / MIX / OUTPUT
     {
-        autoGain.button.setBounds (tMaster.bounds.reduced (8).removeFromTop (22).removeFromRight (84));
         auto c = tileContent (tMaster);
         auto bigArea = c.removeFromTop (c.getHeight() - 112);
         placeKnob (spread, bigArea.reduced (10, 0));
@@ -458,7 +465,7 @@ void HorizonSpreadEditor::paint (juce::Graphics& g)
     const float ag = processor.engine.getAutoGainDb();
     const bool agOn = processor.apvts.getRawParameterValue ("autoGain")->load() > 0.5f;
     g.setColour (agOn ? sky.withAlpha (0.8f) : text.withAlpha (0.4f));
-    g.drawText (agOn ? "AUTO GAIN  " + juce::String (ag, 1) + " dB" : "AUTO GAIN  off",
+    g.drawText (agOn ? "GAIN MATCH  " + juce::String (ag, 1) + " dB" : "GAIN MATCH  off",
                 statusArea, juce::Justification::centredRight);
     drawBandMeter (g, bandArea.toFloat());
 }

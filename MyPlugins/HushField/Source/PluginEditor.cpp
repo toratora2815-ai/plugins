@@ -475,6 +475,8 @@ HushFieldEditor::HushFieldEditor (HushFieldProcessor& p)
         return lit ? "Balance Scope: excess -> " + parts.joinIntoString (", ") : juce::String ("Balance Scope: nothing sticking out");
     };
 
+    presetBar.showGainMatch (myp::GainMatch::paramId, [this] { return processor.gainMatch.readout(); },
+                             [this] { return processor.gainMatch.available(); }, "GAIN MATCH: Hush Field does not change the loudness (measured after you turn it on or move a knob, locked after 10 s of playing). Paused while DELTA / SC LISTEN / SOLO / BYPASS");
     setResizable (true, true);
     setResizeLimits (900, 640, 1800, 1240);
     setSize (1040, 700);
@@ -568,10 +570,10 @@ void HushFieldEditor::resized()
 {
     auto area = getLocalBounds().reduced (10);
     {
-        auto foot = area.removeFromBottom (plink::LinkBar::height);
-        presetBar.setBounds (foot.removeFromRight (440).withSizeKeepingCentre (440, myp::PresetBar::height));
-        foot.removeFromRight (8);
-        linkBar.setBounds (foot);
+        // 2 段: 下 = GAIN MATCH・プリセット欄、その上 = LINK 欄
+        presetBar.setBounds (area.removeFromBottom (myp::PresetBar::height).removeFromRight (presetBar.preferredWidth()));
+        area.removeFromBottom (4);
+        linkBar.setBounds (area.removeFromBottom (plink::LinkBar::height));
         area.removeFromBottom (8);
     }
     topBar = area.removeFromTop (38);

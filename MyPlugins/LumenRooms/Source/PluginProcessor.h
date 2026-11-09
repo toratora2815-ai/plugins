@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "PluginLinkJuce.h"
 #include "PresetBar.h"
+#include "GainMatch.h"
 #include "RoomEngine.h"
 #include "ProfileTable.h"
 
@@ -38,8 +39,9 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     myp::Presets myPresets { *this, apvts, "LumenRooms" };   // 自分のプリセット・取り消し
     plink::Link link { plink::kindLumenRooms, apvts };   // Plugin Link
+    myp::GainMatch gainMatch { *this, myPresets };   // GAIN MATCH（入れても音量が変わらない）
     plink::VocalDuck duck;   // Fader Pilot が歌っている間リバーブを下げる
-    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) link.setTrackName (*tp.name); }
+    void updateTrackProperties (const TrackProperties& tp) override { if (tp.name.has_value()) { link.setTrackName (*tp.name); gainMatch.setTrackName (*tp.name); } }
 
     // 画面に出す反射の形（12 個の粒の時刻と強さ）
     struct ErView { float timeMs[12]; float db[12]; float lenMs[12]; };

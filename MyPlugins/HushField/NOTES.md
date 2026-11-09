@@ -9,3 +9,4 @@ soft/hard・DEPTH・DETAIL の量 → 帯ごとの ATTACK/RELEASE（低/高の T
 遅延 2304（LINEAR PHASE 3456、LOW LATENCY 0＝直接たたみこみ）。帯域カーブ 8 本（ID b1〜b8 の used/on/shape/freq/q/gain/slope/focus）、STEREO L/R・M/S、SC、A/B、プリセット 8 個。
 合わせ込みの数値は Tuning（tools/hf_cli.cpp が測定用の CLI）
 v1.1.0: Plugin Link（Balance Scope の出すぎ帯域を linkBands で足す、削り量を 16 帯域で送る）、プリセット保存・取り消し
+- 1.2.0（2026-11-09）: GAIN MATCH を追加（Shared/GainMatch.h、ID gainMatch、既定 OFF、状態に gainMatchDb を保存）。ボタンはプリセット欄の左端。DELTA / SC LISTEN / band solo / BYPASS の間は効かない（その 4 つは動いても測り直さない）。遅れは eng.latencyFor をそのまま渡す。A/B 切替で gainMatch を保つ、applyPreset の初期化から外した。下の欄を 2 段に

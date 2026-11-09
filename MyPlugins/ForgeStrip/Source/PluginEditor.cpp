@@ -693,6 +693,8 @@ ForgeStripEditor::ForgeStripEditor (ForgeStripProcessor& p) : AudioProcessorEdit
     status.setFont (juce::FontOptions (12.0f));
     status.setColour (juce::Label::textColourId, col::dim);
     addAndMakeVisible (status);
+    presetBar.showGainMatch (myp::GainMatch::paramId, [this] { return processor.gainMatch.readout(); },
+                             [this] { return processor.gainMatch.available(); }, "GAIN MATCH (whole strip): Forge Strip does not change the loudness (measured after you turn it on or move a knob, locked after 10 s of playing). The AUTO GAIN in each module is separate");
     setSize (1060, 620 + myp::PresetBar::height);
     showPage (fs::ModEq);
     startTimerHz (10);
