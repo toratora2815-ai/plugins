@@ -45,6 +45,27 @@ HushFieldProcessor::HushFieldProcessor()
                         .withInput  ("Sidechain", juce::AudioChannelSet::stereo(), false)),
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
+    auto raw = [this] (const juce::String& id)
+    {
+        auto* v = apvts.getRawParameterValue (id);
+        jassert (v != nullptr);
+        return v;
+    };
+    prm.mode = raw ("mode");
+    prm.depth = raw ("depth"); prm.detail = raw ("detail"); prm.attack = raw ("attack"); prm.release = raw ("release");
+    prm.detailTiltLow = raw ("detailTiltLow"); prm.detailTiltHigh = raw ("detailTiltHigh");
+    prm.attackTiltLow = raw ("attackTiltLow"); prm.attackTiltHigh = raw ("attackTiltHigh");
+    prm.releaseTiltLow = raw ("releaseTiltLow"); prm.releaseTiltHigh = raw ("releaseTiltHigh");
+    prm.stereoMode = raw ("stereoMode"); prm.stereoLink = raw ("stereoLink"); prm.stereoFocus = raw ("stereoFocus");
+    prm.maxCut = raw ("maxCut"); prm.mix = raw ("mix"); prm.wetTrim = raw ("wetTrim"); prm.outTrim = raw ("outTrim");
+    prm.delta = raw ("delta"); prm.bypass = raw ("bypass");
+    prm.sidechain = raw ("sidechain"); prm.scListen = raw ("scListen");
+    prm.quality = raw ("quality"); prm.lowLatency = raw ("lowLatency"); prm.linearPhase = raw ("linearPhase");
+    prm.bandSolo = raw ("bandSolo");
+    prm.linkFollow = raw ("linkFollow");
+    for (int b = 0; b < hf::numBands; ++b)
+        prm.bands[b] = { raw (bandId (b, "used")), raw (bandId (b, "on")), raw (bandId (b, "shape")), raw (bandId (b, "freq")),
+                         raw (bandId (b, "q")), raw (bandId (b, "gain")), raw (bandId (b, "slope")), raw (bandId (b, "focus")) };
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout HushFieldProcessor::createLayout()
@@ -138,7 +159,9 @@ bool HushFieldProcessor::isBusesLayoutSupported (const BusesLayout& layouts) con
 void HushFieldProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     eng.prepare (sampleRate, samplesPerBlock);
-    const int lat = eng.latencyFor (readSettings());
+    const auto s = readSettings();   // 1 回だけ読む（準備した形と申告する遅れを必ずそろえる）
+    eng.preconfigure (s);            // FFT などの準備はここで（音のスレッドで確保しない）
+    const int lat = eng.latencyFor (s);
     wantLatency = lat;
     reportedLatency = lat;
     setLatencySamples (lat);
@@ -151,38 +174,40 @@ void HushFieldProcessor::handleAsyncUpdate()
     if (lat != reportedLatency.load()) { reportedLatency = lat; setLatencySamples (lat); }
 }
 
+// 音のスレッドから毎ブロック呼ぶ。コンストラクターで取っておいたポインターを読むだけ（文字列もメモリ確保もなし）
 hf::Settings HushFieldProcessor::readSettings() const
 {
-    auto f = [this] (const juce::String& id) { return apvts.getRawParameterValue (id)->load(); };
+    auto f = [] (const std::atomic<float>* v) { return v->load(); };
     hf::Settings s;
-    s.hard = f ("mode") > 0.5f;
-    s.depth = f ("depth"); s.detail = f ("detail"); s.attack = f ("attack"); s.release = f ("release");
-    s.detailTiltLow = f ("detailTiltLow"); s.detailTiltHigh = f ("detailTiltHigh");
-    s.attackTiltLow = f ("attackTiltLow"); s.attackTiltHigh = f ("attackTiltHigh");
-    s.releaseTiltLow = f ("releaseTiltLow"); s.releaseTiltHigh = f ("releaseTiltHigh");
-    s.midSide = f ("stereoMode") > 0.5f;
-    s.stereoLink = f ("stereoLink") * 0.01f;
-    s.stereoFocus = f ("stereoFocus") * 0.01f;
-    const float mc = f ("maxCut");
+    s.hard = f (prm.mode) > 0.5f;
+    s.depth = f (prm.depth); s.detail = f (prm.detail); s.attack = f (prm.attack); s.release = f (prm.release);
+    s.detailTiltLow = f (prm.detailTiltLow); s.detailTiltHigh = f (prm.detailTiltHigh);
+    s.attackTiltLow = f (prm.attackTiltLow); s.attackTiltHigh = f (prm.attackTiltHigh);
+    s.releaseTiltLow = f (prm.releaseTiltLow); s.releaseTiltHigh = f (prm.releaseTiltHigh);
+    s.midSide = f (prm.stereoMode) > 0.5f;
+    s.stereoLink = f (prm.stereoLink) * 0.01f;
+    s.stereoFocus = f (prm.stereoFocus) * 0.01f;
+    const float mc = f (prm.maxCut);
     s.maxCutDb = mc >= 21.95f ? 1000.0f : mc;
-    s.mix = f ("mix") * 0.01f;
-    s.wetTrimDb = f ("wetTrim"); s.outTrimDb = f ("outTrim");
-    s.delta = f ("delta") > 0.5f; s.bypass = f ("bypass") > 0.5f;
-    s.sidechain = f ("sidechain") > 0.5f; s.sidechainListen = f ("scListen") > 0.5f;
-    s.quality = juce::roundToInt (f ("quality"));
-    s.lowLatency = f ("lowLatency") > 0.5f; s.linearPhase = f ("linearPhase") > 0.5f;
-    s.bandSolo = juce::roundToInt (f ("bandSolo")) - 1;
+    s.mix = f (prm.mix) * 0.01f;
+    s.wetTrimDb = f (prm.wetTrim); s.outTrimDb = f (prm.outTrim);
+    s.delta = f (prm.delta) > 0.5f; s.bypass = f (prm.bypass) > 0.5f;
+    s.sidechain = f (prm.sidechain) > 0.5f; s.sidechainListen = f (prm.scListen) > 0.5f;
+    s.quality = juce::roundToInt (f (prm.quality));
+    s.lowLatency = f (prm.lowLatency) > 0.5f; s.linearPhase = f (prm.linearPhase) > 0.5f;
+    s.bandSolo = juce::roundToInt (f (prm.bandSolo)) - 1;
     for (int b = 0; b < hf::numBands; ++b)
     {
         auto& bd = s.bands[b];
-        bd.used = f (bandId (b, "used")) > 0.5f;
-        bd.enabled = f (bandId (b, "on")) > 0.5f;
-        bd.shape = juce::roundToInt (f (bandId (b, "shape")));
-        bd.hz = f (bandId (b, "freq"));
-        bd.q = f (bandId (b, "q"));
-        bd.gain = f (bandId (b, "gain"));
-        bd.slope = f (bandId (b, "slope"));
-        bd.focus = f (bandId (b, "focus")) * 0.01f;
+        const auto& p = prm.bands[b];
+        bd.used = f (p.used) > 0.5f;
+        bd.enabled = f (p.on) > 0.5f;
+        bd.shape = juce::roundToInt (f (p.shape));
+        bd.hz = f (p.freq);
+        bd.q = f (p.q);
+        bd.gain = f (p.gain);
+        bd.slope = f (p.slope);
+        bd.focus = f (p.focus) * 0.01f;
     }
     return s;
 }
@@ -221,7 +246,7 @@ void HushFieldProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 void HushFieldProcessor::applyLink (hf::Settings& s, int numSamples)
 {
     float want[2] = { 0.0f, 0.0f }, lo[2] = { 0, 0 }, hi[2] = { 0, 0 };
-    if (link.on() && apvts.getRawParameterValue ("linkFollow")->load() > 0.5f)
+    if (link.on() && prm.linkFollow->load() > 0.5f)
     {
         plink::Peer p;
         if (link.ep().find (plink::kindBalanceScope, p) && p.v[plink::bs::valid] > 0.5f && p.valuesAgeMs < 5000)

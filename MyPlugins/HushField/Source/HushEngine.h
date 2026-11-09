@@ -210,6 +210,10 @@ namespace hf
             for (auto& a : shownRed) for (auto& v : a) v.store (0.0f);
         }
 
+        // 今の設定に合わせて先に準備しておく（prepareToPlay から。最初のブロックで音のスレッドがメモリを確保しないように）。
+        // process の最初でも同じ確認をするので、呼ばなくても音は同じ
+        void preconfigure (const Settings& s) { configure (s); }
+
         // 遅延（サンプル）。設定（モード）が変わったら変わる
         int latencyFor (const Settings& s) const
         {

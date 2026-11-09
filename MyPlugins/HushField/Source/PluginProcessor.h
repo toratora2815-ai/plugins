@@ -63,6 +63,19 @@ public:
     bool sidechainConnected() const { return scConnected.load(); }
 
 private:
+    // readSettings / applyLink が毎ブロック読むパラメーター。コンストラクターで一度だけ探しておく
+    // （音のスレッドで ID の文字列を作る＝メモリを確保すると、音切れや CPU の跳ねの元になるため）
+    struct BandParams { std::atomic<float>* used, * on, * shape, * freq, * q, * gain, * slope, * focus; };
+    struct Params
+    {
+        std::atomic<float>* mode, * depth, * detail, * attack, * release,
+                          * detailTiltLow, * detailTiltHigh, * attackTiltLow, * attackTiltHigh, * releaseTiltLow, * releaseTiltHigh,
+                          * stereoMode, * stereoLink, * stereoFocus, * maxCut, * mix, * wetTrim, * outTrim,
+                          * delta, * bypass, * sidechain, * scListen, * quality, * lowLatency, * linearPhase, * bandSolo,
+                          * linkFollow;
+        BandParams bands[hf::numBands];
+    } prm {};
+
     hf::Settings readSettings() const;
     void applyLink (hf::Settings& s, int numSamples);
     void publishReduction (int numSamples);

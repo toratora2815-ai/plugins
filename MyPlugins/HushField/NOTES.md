@@ -10,3 +10,4 @@ soft/hard・DEPTH・DETAIL の量 → 帯ごとの ATTACK/RELEASE（低/高の T
 合わせ込みの数値は Tuning（tools/hf_cli.cpp が測定用の CLI）
 v1.1.0: Plugin Link（Balance Scope の出すぎ帯域を linkBands で足す、削り量を 16 帯域で送る）、プリセット保存・取り消し
 - 1.2.0（2026-11-09）: GAIN MATCH を追加（Shared/GainMatch.h、ID gainMatch、既定 OFF、状態に gainMatchDb を保存）。ボタンはプリセット欄の左端。DELTA / SC LISTEN / band solo / BYPASS の間は効かない（その 4 つは動いても測り直さない）。遅れは eng.latencyFor をそのまま渡す。A/B 切替で gainMatch を保つ、applyPreset の初期化から外した。下の欄を 2 段に
+- 1.2.1（2026-11-09）: 音のスレッドでメモリを確保しないように。readSettings / applyLink が毎ブロック ID の文字列を作っていた（512 サンプルで new 約 210 回）のを、コンストラクターで取った `std::atomic<float>*`（prm）を読むだけに。最初のブロックの FFT などの準備（configure）も prepareToPlay の preconfigure へ（prepareToPlay の時点とモードが同じときだけ効く）。音は前とビット単位で同じ（build/hfalloc で 20 場面を比べた）。quality / LINEAR PHASE / LOW LATENCY が prepareToPlay の後で変わったブロック（切り替えた瞬間、Initialize の後に状態を戻した曲の頭、プリセット・UNDO・A/B でモードが変わった直後）は、前と同じく作り直しで確保する（直すなら prepare で最大の大きさを確保しておく）

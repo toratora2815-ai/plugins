@@ -99,7 +99,7 @@
 - Meld Verb（MeldVerb）1.2.0 … EARLY / PLATE / HALL を三角形の BLEND パッドで混ぜる。SMOOTHING・LEARN・UNMASK、SHAPE タブ。Fader Pilot から VOCAL DUCK
 - Balance Scope（BalanceScope）1.3.1 … 帯域バランス解析。ジャンル別目標カーブ、REF A/B/C、ラウドネス。出すぎの帯域とオケの音量を送り、Hush Field の削り量・Gain Stage の GAIN を表示
 - Horizon Spread（HorizonSpread）1.4.0 … ステレオ感の全部入り（Side だけ加工）。SHAPE / CREATE ページ、GAIN MATCH（ID autoGain）、内蔵プリセット。Fader Pilot が歌っている間 SPREAD を下げる
-- Hush Field（HushField）1.2.0 … 動的レゾナンス抑制。帯域カーブ 8 本、STEREO L/R・M/S、SC、LINEAR PHASE / LOW LATENCY。Balance Scope の出すぎ帯域を受け、削り量を送る
+- Hush Field（HushField）1.2.1 … 動的レゾナンス抑制。帯域カーブ 8 本、STEREO L/R・M/S、SC、LINEAR PHASE / LOW LATENCY。Balance Scope の出すぎ帯域を受け、削り量を送る
 - Fader Pilot（FaderPilot）1.2.0 … ボーカルのフェーダーを自動で上げ下げ（遅延ゼロ）。AUTO RIDE / WRITE / FOLLOW MUSIC。フェーダー位置と「歌っているか」を送る
 - Gain Stage（GainStage）1.1.0 … トラックの入口の音量をワンクリックでそろえる（遅延ゼロ）。LEARN（鳴っている所だけ 5 秒測り GAIN を 1 回入れる）、TARGET / RMS・PEAK / Ø / MONO / SWAP、IN/OUT メーター。結果は apvts.state の "learnInfo"。GAIN / TARGET などを送る
 - Sample Sculptor（SampleSculptor）1.2.0 … サンプル編集（AU 音源 aumu Smsc）。切り取り→PITCH→STRETCH→形→REVERSE→ROOM→DRIVE→TONE→FADE→NORMALIZE、A/B、ドラッグで Logic へ。LINK 欄だけ
