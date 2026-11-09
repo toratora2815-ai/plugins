@@ -36,7 +36,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Drtr`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -90,6 +90,7 @@
 - 聴き比べ: Reference Monitor = 他人の曲と / Mix Time Machine = 自分の前のバウンスと（マスタリング段階で使う） / Balance Scope = トラックに挿す測定器・Plugin Link の配り役
 - 声: Vox Chop = 声を別の声に変える・声を切って鍵盤で弾く（ボーカルチョップ） / Sample Sculptor = 1 つの音を整える。声の加工の新機能は Vox Chop に足す
 - 鼻歌: Idea Catcher だけ（録ってから解析 → きれいな MIDI → Logic へドラッグ）。口ドラムは本人が「いらない」ので作らない
+- リミッター: 普通のリミッター（2 ミックス・マスター）は本人の Pro-L2 / ドラムは Drum Transient / Forge Strip・Fire Box の最後のリミッターはそれぞれの中だけ
 - 参照曲まわりの新機能は Reference Monitor にだけ足す（Balance Scope の REF と二重にしない）。Mod Host は「中のプラグインのつまみを動かす」役。帯域・歪み・自動ゲインはこれ以上足さない（Forge Strip の仕事）
 
 ### プラグイン（AU）
@@ -116,6 +117,8 @@
 - Vox Chop（VoxChop）1.0.0 … 自分の声を別の声に変えて、切って鍵盤で弾く AU 音源（aumu Vxch）。CAPTURE（サイドチェーン）かファイル → 後から丸ごと計算（TD-PSOLA、VoxEngine.h）。
   VOICE MAP（高さ × 体の大きさ）・BREATH・GRIT・ROBOT・ALIEN・声のプリセット 23 個 / AUTO（言葉の切れ目）・GRID で最大 64 片を C1 から / 片ごとの設定・MELODIC・WHOLE / 片・全部・MIDI・全体をドラッグで Logic へ。
   空間系・歪み・ボコーダー・ケロケロは入れない（自作と Logic 標準を後ろに）。Plugin Link は LINK 欄だけ（Kind 18 は未登録）
+- Drum Transient（DrumTransient）1.0.0 … ドラム専用のトランジェント・リミッター（Uni-L を測って合わせ込み、ドラム用に絞った）。PUSH / PUNCH / BODY / CLIP⇄LIMIT / RELEASE / LOW KEEP / CEILING、LINK・DELTA、
+  ATTACK と BODY の 2 本の GR メーター、内蔵プリセット 6 個。遅れ 7.8 ms。GAIN MATCH は下げるだけ（limitBoost 0）。Plugin Link は LINK 欄だけ（Kind 19 は未登録）
 
 ### 単体 Mac アプリ（.app）
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作

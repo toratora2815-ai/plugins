@@ -8,12 +8,14 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 |---|---|---|
 | Wool Fuzz | WoolFuzz | ビッグマフ系の太いファズ |
 | Porch Drive | PorchDrive | ブルース系オーバードライブ（BD-2 系の味） |
+| Deca Satu | DecaSatu | トラックごとに挿す色付けの歪み（5 つの性格。軽く太く〜完全につぶすまで） |
 | Lumen Rooms | LumenRooms | 部屋・ホールを細かく作り込むリバーブ。長い響きも |
 | Elder Verb | ElderVerb | 70〜80 年代のデジタルリバーブ機材ふうの、色の付いたリバーブ |
 | Meld Verb | MeldVerb | EARLY / PLATE / HALL を三角形で混ぜる、自動で引っ込む実用リバーブ |
 | Echo Drift | EchoDrift | テープ・BBD・ラジオなど 31 種類の性格を持つディレイ |
 | Horizon Spread | HorizonSpread | モノラルで崩れないステレオの広げ役 |
 | Hush Field | HushField | 耳に刺さる響きを鳴った瞬間だけ下げる（動的レゾナンス抑制） |
+| Drum Transient | DrumTransient | ドラム専用のリミッター。突っ込んでもアタックが死なず胴も揺れない（普通のリミッターは Pro-L2） |
 | Forge Strip | ForgeStrip | EQ・コンプなど 11 モジュールのチャンネルストリップ |
 | Gain Stage | GainStage | トラックの入口の音量をワンクリックでそろえる |
 | Fader Pilot | FaderPilot | ボーカルの音量を自動でフェーダーを動かして揃える |
