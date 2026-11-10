@@ -407,6 +407,7 @@ inline Result judge (const std::vector<float>& take, double sr, const Step& st, 
             // octave slips are a detection error on weak fundamentals, not a wrong note
             s.rootHz = (float) (s.rootHz * std::pow (2.0, -d / 12.0));
             s.rootNote = want;
+            Kit::checkBuzz (s);   // looked at again with the right pitch
             r.warnings.add (juce::String (juce::CharPointer_UTF8 (u8"オクターブ違いに測れた音があります（そのまま使います）")));
         }
         else if (d != 0)

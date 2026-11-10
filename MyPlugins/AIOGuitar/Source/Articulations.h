@@ -41,6 +41,7 @@ struct VoiceParams
     static constexpr float glideMs = 30.0f;  // how fast the pitch follows the wheel
 
     const void* kit = nullptr;   // active Kit::GuitarKit (audio thread)
+    bool  fixBuzz = true;        // FIX BUZZ: takes with a fixed buzz play the fixed version
     bool  kitTune = true;
     float kitVelSens = 0.7f;
     int   stringMode = 0;        // 0 auto, 1 MIDI channel 1-6 = string 1-6

@@ -66,6 +66,15 @@ public:
         pauseButton.onClick = [this] { paused = ! paused; proc.inputTap.active.store (! paused && running); pauseButton.setButtonText (paused ? jp (u8"再開") : jp (u8"一時停止")); refresh(); };
         for (juce::Component* c : std::initializer_list<juce::Component*> { &settingsButton, &closeButton, &backButton, &skipButton, &pauseButton })
             addAndMakeVisible (c);
+        // the last take with a buzz: A/B right here (it goes into the kit at the end of the capo position)
+        abRecorded.setButtonText (jp (u8"▶ 録ったまま"));
+        abFixed.setButtonText (jp (u8"▶ 直した音"));
+        abRecorded.setTooltip (jp (u8"いま直した音を、録ったまま（ビビりあり）で聴く"));
+        abFixed.setTooltip (jp (u8"ビビりの分だけ下げた音を聴く"));
+        abRecorded.onClick = [this] { auditionLast (false); };
+        abFixed.onClick = [this] { auditionLast (true); };
+        addChildComponent (abRecorded);
+        addChildComponent (abFixed);
         settingsButton.setButtonText (jp (u8"入力の設定"));
         closeButton.setButtonText (jp (u8"閉じる"));
         backButton.setButtonText (jp (u8"← 1 つ戻る"));
@@ -266,12 +275,26 @@ public:
         pauseButton.setBounds (bottom.removeFromLeft (110));
         bottom.removeFromLeft (8);
         skipButton.setBounds (bottom.removeFromLeft (110));
+        abFixed.setBounds (bottom.removeFromRight (110));
+        bottom.removeFromRight (6);
+        abRecorded.setBounds (bottom.removeFromRight (120));
     }
 
 private:
+    // the last take with a buzz, as recorded or fixed (at about the level it will play at)
+    void auditionLast (bool fixedVersion)
+    {
+        if (! lastBuzz.hasBuzz()) return;
+        const float g = juce::Decibels::decibelsToGain (-27.0f) / juce::jmax (1.0e-4f, lastBuzz.rawRms);
+        proc.auditionTake (fixedVersion ? lastBuzz.fixed : lastBuzz.audio, lastBuzz.sampleRate, juce::jmin (g, 8.0f));
+    }
+
     void beginSession (int newSlot, std::vector<Guide::Step> newSteps, bool single)
     {
         stop();
+        lastBuzz = {};
+        abRecorded.setVisible (false);
+        abFixed.setVisible (false);
         slot = newSlot; steps = std::move (newSteps); singleMode = single;
         index = 0; doneCount = 0; finished = false; paused = false; capoWait = false;
         pending.clear(); warnings.clear(); status = {}; statusColour = GuideUI::dim;
@@ -428,10 +451,21 @@ private:
             return;
         }
         for (auto& w : r.warnings) warnings.addIfNotAlreadyThere (w);
+        const bool buzzed = r.sample.hasBuzz();
+        if (buzzed)
+        {
+            lastBuzz = r.sample;
+            abRecorded.setVisible (true);
+            abFixed.setVisible (true);
+            warnings.addIfNotAlreadyThere (GuideUI::jp (u8"ビビり（弦がフレットに当たる音）が入った音を直しました（表の 〰 の音。右クリックで聴き比べ・元に戻す）"));
+        }
         pending.push_back (std::move (r.sample));
         lastAcceptedNote = st.expectedNote();
         ++doneCount;
         status = juce::String (juce::CharPointer_UTF8 (u8"✓ OK"));
+        if (buzzed)
+            status << (lastBuzz.buzzStrong ? GuideUI::jp (u8"  〰 強いビビりを直しました（右下で聴き比べ。気になるなら表で右クリック → 録り直し）")
+                                           : GuideUI::jp (u8"  〰 ビビりを直しました（右下で聴き比べ）"));
         statusColour = GuideUI::ok;
         advance (true);
     }
@@ -509,7 +543,8 @@ private:
 
     AIOGuitarProcessor& proc;
     juce::OwnedArray<juce::TextButton> layerButtons;
-    juce::TextButton settingsButton, closeButton, backButton, skipButton, pauseButton;
+    juce::TextButton settingsButton, closeButton, backButton, skipButton, pauseButton, abRecorded, abFixed;
+    Kit::Sample lastBuzz;   // the last take with a buzz (A/B)
     juce::ComboBox inputBox;
     Guide::TakeDetector detector;
     std::vector<Guide::Step> steps;

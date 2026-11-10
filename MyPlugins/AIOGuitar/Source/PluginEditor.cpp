@@ -493,7 +493,8 @@ StringGrid::StringGrid (AIOGuitarProcessor& p) : proc (p) { startTimerHz (5); }
 
 void StringGrid::timerCallback()
 {
-    if (shownVersion != proc.getKitVersion()) { shownVersion = proc.getKitVersion(); rebuild(); repaint(); }
+    const bool fix = proc.getParamValue ("kitBuzz") > 0.5f;
+    if (shownVersion != proc.getKitVersion() || shownFix != fix) { shownVersion = proc.getKitVersion(); shownFix = fix; rebuild(); repaint(); }
 }
 
 void StringGrid::rebuild()
@@ -520,6 +521,7 @@ void StringGrid::rebuild()
             c.rec[layer] = true;
             c.any = true;
             c.cents = s.cents;
+            if (s.hasBuzz()) { ++c.buzz; if (s.buzzOff) ++c.buzzOff; if (s.buzzBorrowed) ++c.buzzBorrowed; }
         }
         else ++noString;
     }
@@ -544,6 +546,9 @@ void StringGrid::rebuild()
     summary = juce::String (n) + " notes  |  " + jp (u8"音程の補正 最大 ") + juce::String (juce::roundToInt (maxCents)) + jp (u8" セント")
             + (hi > lo ? "  |  " + juce::String (baseLayer == Kit::slotSoft ? "SOFT" : baseLayer == Kit::slotMedium ? "MEDIUM" : "HARD") + jp (u8" の音量差 ") + juce::String (hi - lo, 1) + jp (u8" dB → そろえた") : juce::String());
     if (noString > 0) summary << "  |  " << noString << jp (u8" 音は弦が分からず（録る順番を確認）");
+    if (const int nb = kit->countBuzz(); nb > 0)
+        summary << "  |  " << jp (u8"ビビりを直した音 ") << nb << jp (u8"（〰、右クリックで聴き比べ）")
+                << (proc.getParamValue ("kitBuzz") > 0.5f ? juce::String() : jp (u8" ※ Fix Buzz が OFF（録ったままで鳴ります）"));
 }
 
 juce::Rectangle<float> StringGrid::board() const
@@ -580,6 +585,10 @@ juce::String StringGrid::describe (int s, int f) const
         if (c.rec[2]) t << " hard";
         if (c.rec[3]) t << " mute";
         t << jp (u8"、音程を ") << juce::String (-c.cents, 0) << jp (u8" セント直した");
+        if (c.buzz > 0)
+            t << jp (u8"、〰 ビビりを直した録音 ") << c.buzz
+              << (c.buzzBorrowed > 0 ? jp (u8"（きれいな録音の尾を借りたもの ") + juce::String (c.buzzBorrowed) + jp (u8"）") : juce::String())
+              << (c.buzzOff > 0 ? jp (u8"（うち ") + juce::String (c.buzzOff) + jp (u8" 本は録ったまま）") : juce::String());
     }
     else if (c.srcFret >= 0 || c.srcString > 0)
     {
@@ -587,7 +596,7 @@ juce::String StringGrid::describe (int s, int f) const
           << (c.shift > 0 ? "+" : "") << juce::String (c.shift) << jp (u8" 半音");
     }
     else t << jp (u8"録音なし");
-    return t + jp (u8"  （クリックで試聴）");
+    return t + (c.buzz > 0 ? jp (u8"  （クリックで試聴・右クリックで聴き比べ）") : jp (u8"  （クリックで試聴）"));
 }
 
 void StringGrid::paint (juce::Graphics& g)
@@ -653,6 +662,15 @@ void StringGrid::paint (juce::Graphics& g)
                     g.fillEllipse (cr.getX() + 3.0f + (float) k * step, cr.getCentreY() - d * 0.5f, d, d);
                     ++k;
                 }
+            if (c.buzz > 0)   // 〰 a fixed buzz (dim when every one of them plays as recorded)
+            {
+                juce::Path zz;
+                const float x0 = cr.getRight() - 12.0f, y0 = cr.getY() + 4.0f;
+                zz.startNewSubPath (x0, y0 + 2.0f);
+                for (int z = 1; z <= 4; ++z) zz.lineTo (x0 + 2.5f * (float) z, y0 + ((z % 2) ? 0.0f : 2.0f));
+                g.setColour (c.buzzOff >= c.buzz ? Pal::dim : juce::Colour (0xffffc857));
+                g.strokePath (zz, juce::PathStrokeType (1.4f));
+            }
         }
     // nut + strings
     g.setColour (Pal::text.withAlpha (0.7f));
@@ -690,7 +708,7 @@ void StringGrid::mouseDown (const juce::MouseEvent& e)
 {
     const auto c = cellAt (e.position);
     if (c.y < 1) return;
-    if (e.mods.isPopupMenu() && onRedo) { onRedo (c.y, c.x); return; }
+    if (e.mods.isPopupMenu()) { if (onMenu) onMenu (c.y, c.x); return; }
     pressed = c;
     pressedNote = kOpenString[c.y] + c.x;
     proc.previewNote (pressedNote, c.y, true);
@@ -712,11 +730,14 @@ PlaySettings::PlaySettings (AIOGuitarProcessor& p, juce::Colour c) : colour (c)
     stringLabel.setFont (juce::FontOptions (12.0f));
     stringLabel.setColour (juce::Label::textColourId, Pal::dim);
     addAndMakeVisible (stringLabel);
-    for (auto* t : { &tune, &level }) { t->setColour (juce::ToggleButton::tickColourId, colour); addAndMakeVisible (*t); }
+    for (auto* t : { &tune, &level, &buzz }) { t->setColour (juce::ToggleButton::tickColourId, colour); addAndMakeVisible (*t); }
     tuneAtt = std::make_unique<BA> (p.apvts, "kitTune", tune);
     levelAtt = std::make_unique<BA> (p.apvts, "kitLevel", level);
+    buzzAtt = std::make_unique<BA> (p.apvts, "kitBuzz", buzz);
     tune.setTooltip (jp (u8"録音の音程のずれを 1 音ずつ測って直す"));
     level.setTooltip (jp (u8"録音ごとの音量差をそろえる"));
+    buzz.setTooltip (jp (u8"録音のビビり（鳴らしている途中で弦がフレットに当たる音）を、増えた分だけ下げて鳴らす。"
+                         u8"直した音は上の表に 〰 の印。表の音を右クリックで聴き比べ・1 音だけ外す"));
 
     strum.setColour (juce::ToggleButton::tickColourId, colour);
     strum.setTooltip (jp (u8"和音を弦の順にずらして鳴らす（表拍はダウン、裏はアップ。SCORE で和音ごとに変えられる）"));
@@ -751,14 +772,16 @@ void PlaySettings::resized()
 {
     auto r = getLocalBounds().reduced (12, 6);
     r.removeFromTop (28);
-    auto left = r.removeFromLeft (190);
+    auto left = r.removeFromLeft (300);
     stringLabel.setBounds (left.removeFromTop (16));
-    stringMode.setBounds (left.removeFromTop (24));
+    stringMode.setBounds (left.removeFromTop (24).withWidth (190));
     left.removeFromTop (6);
     auto row = left.removeFromTop (24);
-    tune.setBounds (row.removeFromLeft (row.getWidth() / 2 - 2));
+    tune.setBounds (row.removeFromLeft (106));
     row.removeFromLeft (4);
-    level.setBounds (row);
+    level.setBounds (row.removeFromLeft (98));
+    row.removeFromLeft (4);
+    buzz.setBounds (row);
     r.removeFromLeft (14);
     auto mid = r.removeFromLeft (150);
     strum.setBounds (mid.removeFromTop (26).withWidth (110));
@@ -790,22 +813,58 @@ MyGuitarPage::MyGuitarPage (AIOGuitarProcessor& p)
     kit.onGuide = [this] { showGuide (true); };
     guide.onClose = [this] { showGuide (false); };
     guide.onHighlight = [this] (int s, int f, bool rec) { grid.setHighlight (s, f, rec); };
-    if (AIOGuitarProcessor::isStandaloneApp())
-        grid.onRedo = [this] (int s, int f)
-        {
-            juce::PopupMenu m;
-            m.addSectionHeader (juce::String (s) + jp (u8"弦 ") + juce::String (f) + jp (u8"F を録る（ダウンとアップ）"));
-            m.addItem (1 + Kit::slotSoft,   "SOFT PICKING");
-            m.addItem (1 + Kit::slotMedium, "MEDIUM PICKING");
-            m.addItem (1 + Kit::slotHard,   "HARD PICKING");
-            m.addItem (1 + Kit::slotMute,   "PALM MUTE");
-            m.showMenuAsync (juce::PopupMenu::Options(), [this, s, f] (int r)
+    grid.onMenu = [this, &p] (int s, int f)
+    {
+        juce::PopupMenu m;
+        // the buzz fix of the takes in this cell: listen to both, or keep one as recorded
+        std::vector<int> takes;
+        if (auto kit = p.getKit())
+            for (int i = 0; i < (int) kit->samples.size(); ++i)
             {
-                if (r <= 0) return;
-                showGuide (true);
-                guide.startSingle (r - 1, s, f);
-            });
-        };
+                const auto& t = kit->samples[(size_t) i];
+                if (t.string == s && t.fret == f && t.hasBuzz()) takes.push_back (i);
+            }
+        if (! takes.empty())
+        {
+            auto kit = p.getKit();
+            m.addSectionHeader (juce::String (s) + jp (u8"弦 ") + juce::String (f) + jp (u8"F  〰 ビビりを直した録音"));
+            for (int i : takes)
+            {
+                const auto& t = kit->samples[(size_t) i];
+                const juce::String name = juce::String (Kit::slotName (t.slot)).upToFirstOccurrenceOf (" ", false, false).toUpperCase()
+                                        + (t.up ? jp (u8" ↑アップ") : jp (u8" ↓ダウン"));
+                // the take is found again when the item is chosen (the kit may have changed while the menu was open)
+                auto find = [&p, slot = t.slot, up = t.up, s, f]
+                {
+                    if (auto k = p.getKit())
+                        for (int j = 0; j < (int) k->samples.size(); ++j)
+                        {
+                            const auto& c = k->samples[(size_t) j];
+                            if (c.slot == slot && c.up == up && c.string == s && c.fret == f && c.hasBuzz()) return j;
+                        }
+                    return -1;
+                };
+                juce::PopupMenu sub;
+                sub.addItem (jp (u8"▶ 録ったままを聴く（ビビりあり）"), [&p, find] { if (const int j = find(); j >= 0) p.auditionSample (j, false); });
+                sub.addItem (t.buzzBorrowed ? jp (u8"▶ 直した音を聴く（きれいな録音の尾を借りた）") : jp (u8"▶ 直した音を聴く（ビビりの分だけ下げた）"),
+                             [&p, find] { if (const int j = find(); j >= 0) p.auditionSample (j, true); });
+                sub.addSeparator();
+                sub.addItem (jp (u8"この録音はビビり補正を使わない"), true, t.buzzOff, [&p, find, off = t.buzzOff] { if (const int j = find(); j >= 0) p.setBuzzOff (j, ! off); });
+                m.addSubMenu (name, sub);
+            }
+            if (AIOGuitarProcessor::isStandaloneApp()) m.addSeparator();
+        }
+        if (AIOGuitarProcessor::isStandaloneApp())
+        {
+            m.addSectionHeader (juce::String (s) + jp (u8"弦 ") + juce::String (f) + jp (u8"F を録る（ダウンとアップ）"));
+            for (int slot : { (int) Kit::slotSoft, (int) Kit::slotMedium, (int) Kit::slotHard, (int) Kit::slotMute })
+            {
+                const char* n = slot == Kit::slotSoft ? "SOFT PICKING" : slot == Kit::slotMedium ? "MEDIUM PICKING" : slot == Kit::slotHard ? "HARD PICKING" : "PALM MUTE";
+                m.addItem (n, [this, slot, s, f] { showGuide (true); guide.startSingle (slot, s, f); });
+            }
+        }
+        if (m.getNumItems() > 0) m.showMenuAsync (juce::PopupMenu::Options().withDeletionCheck (grid));   // closed with the window
+    };
 }
 
 void MyGuitarPage::showGuide (bool show)

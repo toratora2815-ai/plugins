@@ -119,6 +119,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
     // ---- MY GUITAR (recorded samples)
     l.add (std::make_unique<APB> (juce::ParameterID { "kitTune", 1 }, "Pitch Correction", true));
     l.add (std::make_unique<APB> (juce::ParameterID { "kitLevel", 1 }, "Level Match", true));
+    // FIX BUZZ (0.5.0): takes with a fret buzz play their fixed version (SampleKit.h / BuzzFix.h).
+    // Version hint 4 (above every other): it goes to the END of the AU parameter list, so the numbers Logic
+    // keeps in old songs (automation) stay on the same knobs
+    l.add (std::make_unique<APB> (juce::ParameterID { "kitBuzz", 4 }, "Fix Buzz", true));
     l.add (std::make_unique<APF> (juce::ParameterID { "kitVelSens", 1 }, "Velocity Sensitivity",
                                   juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.7f, fmt ("", 2)));
 
@@ -257,6 +261,7 @@ void AIOGuitarProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
 void AIOGuitarProcessor::readParams()
 {
+    voiceParams.fixBuzz   = get ("kitBuzz") > 0.5f;
     voiceParams.muteKnob  = get ("gtMute");
     voiceParams.release   = get ("gtRelease");
     voiceParams.humanize  = get ("kitHuman");
@@ -456,6 +461,7 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     uiPreview.store (previewRunning);
 
     synth.renderNextBlock (buffer, midi, 0, n);
+    mixAudition (buffer, n);   // the UI's A/B of one take (goes through the effects like a note)
 
     // guitar volume (smoothed)
     volume.setTargetValue (juce::Decibels::decibelsToGain (get ("gtVolume")));
@@ -558,6 +564,12 @@ void AIOGuitarProcessor::timerCallback()
         score.handle (e, stringMode);
     });
     if (score.changed) { score.changed = false; publishTable(); ++scoreVersion; }
+    std::shared_ptr<const Audition> done;
+    {
+        const juce::SpinLock::ScopedLockType sl (auditionLock);
+        done = std::move (retiredAudition);   // freed here, on the message thread
+        retiredAudition = nullptr;
+    }
 }
 
 void AIOGuitarProcessor::publishTable()
@@ -658,6 +670,8 @@ void AIOGuitarProcessor::applySlice (int slot, Kit::SliceResult res)
     kit->samples.erase (std::remove_if (kit->samples.begin(), kit->samples.end(),
                                         [slot] (const Kit::Sample& s) { return s.slot == slot; }), kit->samples.end());
     for (auto& s : res.samples) kit->samples.push_back (std::move (s));
+    kit->content = Kit::newContentId();
+    kit->encoded = {};   // child i = samples[i]: written again (the same number of notes would otherwise keep the old ones)
     publish (kit);
 }
 
@@ -674,6 +688,7 @@ void AIOGuitarProcessor::putTakes (const std::vector<Kit::Sample>& takes)
         }), kit->samples.end());
         kit->samples.push_back (t);
     }
+    kit->content = Kit::newContentId();
     kit->encoded = {};   // re-encode
     publish (kit);
 }
@@ -685,6 +700,8 @@ void AIOGuitarProcessor::clearSlot (int slot)
     kit->samples.erase (std::remove_if (kit->samples.begin(), kit->samples.end(),
                                         [slot] (const Kit::Sample& s) { return s.slot == slot; }), kit->samples.end());
     slotMessage[slot] = {};
+    kit->content = Kit::newContentId();
+    kit->encoded = {};
     publish (kit->samples.empty() ? nullptr : kit);
 }
 
@@ -695,6 +712,120 @@ void AIOGuitarProcessor::setKitName (const juce::String& name)
     editKit->name = name;
     if (editKit->encoded.isValid()) editKit->encoded.setProperty ("name", name, nullptr);
     ++kitVersion;
+}
+
+// a kit from before 0.5.0: every picked take is looked at for a buzz on the loader thread (a big kit takes a few
+// seconds: the project opens at once and plays as recorded meanwhile), then the results go in with one publish.
+// A published kit's audio never changes, so the thread only reads it
+void AIOGuitarProcessor::checkOldTakes()
+{
+    std::shared_ptr<const Kit::GuitarKit> src = editKit;
+    if (src == nullptr || src->countUnchecked() == 0) return;
+    auto flag = alive;
+    loader.addJob ([this, flag, src]
+    {
+        auto results = std::make_shared<std::vector<std::pair<int, Kit::BuzzResult>>>();
+        for (int i = 0; i < (int) src->samples.size(); ++i)
+        {
+            if (! flag->load()) return;
+            const auto& s = src->samples[(size_t) i];
+            if (s.buzzVersion == 0 && Kit::isOpenPicking (s.slot)) results->push_back ({ i, Kit::findBuzz (s) });
+        }
+        juce::MessageManager::callAsync ([this, flag, src, results]
+        {
+            if (! flag->load() || editKit == nullptr) return;
+            // the same recordings (a copy made meanwhile, e.g. by LEVEL MATCH or a take switched off, is fine):
+            // the results go in. Other recordings: they are looked at from the start
+            if (editKit->content != src->content || editKit->samples.size() != src->samples.size())
+            {
+                if (editKit->countUnchecked() > 0) checkOldTakes();
+                return;
+            }
+            auto kit = std::make_shared<Kit::GuitarKit> (*editKit);
+            const bool inTree = kit->encoded.isValid() && kit->encoded.getNumChildren() == (int) kit->samples.size();
+            for (auto& [i, r] : *results)
+            {
+                if (kit->samples[(size_t) i].buzzVersion != 0) continue;
+                Kit::applyBuzz (kit->samples[(size_t) i], std::move (r));
+                if (inTree) Kit::writeBuzz (kit->samples[(size_t) i], kit->encoded.getChild (i));
+            }
+            publish (kit);
+        });
+    });
+}
+
+void AIOGuitarProcessor::setBuzzOff (int sampleIndex, bool off)
+{
+    if (! editKit || ! juce::isPositiveAndBelow (sampleIndex, (int) editKit->samples.size())) return;
+    if (editKit->samples[(size_t) sampleIndex].buzzOff == off) return;
+    auto kit = std::make_shared<Kit::GuitarKit> (*editKit);
+    kit->samples[(size_t) sampleIndex].buzzOff = off;
+    if (kit->encoded.isValid() && kit->encoded.getNumChildren() == (int) kit->samples.size())
+        kit->encoded.getChild (sampleIndex).setProperty ("bzOff", off, nullptr);
+    publish (kit);
+}
+
+void AIOGuitarProcessor::auditionTake (const juce::AudioBuffer<float>& take, double rate, float gain)
+{
+    auto a = std::make_shared<Audition>();
+    a->buf.makeCopyOf (take);
+    a->buf.applyGain (gain);
+    a->rate = rate;
+    std::shared_ptr<const Audition> f1, f2;
+    {
+        const juce::SpinLock::ScopedLockType sl (auditionLock);
+        f1 = std::move (retiredAudition); retiredAudition = nullptr;
+        f2 = std::move (pendingAudition);   // asked twice before the audio thread took the first
+        pendingAudition = a;
+        auditionChanged = true;
+    }
+}
+
+void AIOGuitarProcessor::auditionSample (int sampleIndex, bool fixedVersion)
+{
+    if (! editKit || ! juce::isPositiveAndBelow (sampleIndex, (int) editKit->samples.size())) return;
+    const auto& s = editKit->samples[(size_t) sampleIndex];
+    auditionTake (fixedVersion && s.hasBuzz() ? s.fixed : s.audio, s.sampleRate, s.gain * juce::Decibels::decibelsToGain (-6.0f));
+}
+
+// audio thread: the take being auditioned, mixed in (mono to both sides). A new one takes over with a
+// 5 ms fade of the old one; nothing is freed here
+void AIOGuitarProcessor::mixAudition (juce::AudioBuffer<float>& buffer, int n)
+{
+    {
+        const juce::SpinLock::ScopedTryLockType tl (auditionLock);
+        if (tl.isLocked())
+        {
+            if (auditionChanged && fadingAudition == nullptr && retiredAudition == nullptr)
+            {
+                fadingAudition = std::move (audioAudition); fadingPos = auditionPos; fadingLeft = juce::jmax (1, (int) (sr * 0.005));
+                audioAudition = std::move (pendingAudition); pendingAudition = nullptr;
+                auditionPos = 0.0; auditionChanged = false;
+            }
+            if (fadingAudition != nullptr && fadingLeft <= 0 && retiredAudition == nullptr) retiredAudition = std::move (fadingAudition), fadingAudition = nullptr;
+            if (audioAudition != nullptr && (audioAudition->buf.getNumChannels() < 1 || auditionPos >= audioAudition->buf.getNumSamples() - 1)
+                && retiredAudition == nullptr)
+                retiredAudition = std::move (audioAudition), audioAudition = nullptr;
+        }
+    }
+    auto play = [&] (const Audition* a, double& pos, int* fadeLeft)
+    {
+        if (a == nullptr || a->buf.getNumChannels() < 1 || a->buf.getNumSamples() < 2) return;   // "stop" is an empty take
+        const int len = a->buf.getNumSamples();
+        const float* d = a->buf.getReadPointer (0);
+        const double step = a->rate / sr;
+        const int fadeLen = juce::jmax (1, (int) (sr * 0.005));
+        for (int i = 0; i < n && pos < len - 1; ++i)
+        {
+            const int k = (int) pos; const float t = (float) (pos - k);
+            float v = d[k] + (d[k + 1] - d[k]) * t;
+            if (fadeLeft != nullptr) { v *= (float) juce::jmax (0, *fadeLeft) / (float) fadeLen; if (*fadeLeft > 0) --*fadeLeft; }
+            for (int c = 0; c < buffer.getNumChannels(); ++c) buffer.getWritePointer (c)[i] += v;
+            pos += step;
+        }
+    };
+    play (audioAudition.get(), auditionPos, nullptr);
+    play (fadingAudition.get(), fadingPos, &fadingLeft);
 }
 
 bool AIOGuitarProcessor::saveKit (const juce::File& file)
@@ -708,6 +839,7 @@ juce::String AIOGuitarProcessor::loadKit (const juce::File& file)
     if (kit == nullptr) return "Can't read this guitar file.";
     for (auto& m : slotMessage) m = {};
     publish (kit);
+    checkOldTakes();
     return "Loaded " + kit->name;
 }
 
@@ -716,9 +848,13 @@ void AIOGuitarProcessor::publish (std::shared_ptr<Kit::GuitarKit> kit)
     if (kit != nullptr)
     {
         Kit::normalise (*kit, get ("kitLevel") > 0.5f);
+        // a strong buzz: the tail of a clean take of the same note, as soon as there is one
+        const auto borrowed = Kit::borrowTails (*kit);
         if (! kit->encoded.isValid() || kit->encoded.getNumChildren() != (int) kit->samples.size()
             || kit->encoded.getProperty ("name").toString() != kit->name)
             kit->encoded = Kit::encode (*kit);
+        else
+            for (int i : borrowed) Kit::writeBuzz (kit->samples[(size_t) i], kit->encoded.getChild (i));
     }
     editKit = kit;
     ++kitVersion;
@@ -756,7 +892,7 @@ void AIOGuitarProcessor::setCurrentProgram (int index)
     currentProgram = index;
 
     // Performance settings (play board) and the "My Guitar" switch are not part of the sound presets.
-    static const juce::StringArray keep { "kitTune", "kitLevel", "kitVelSens", "kitHuman", "stringMode", "bendUp", "bendDown",
+    static const juce::StringArray keep { "kitTune", "kitLevel", "kitBuzz", "kitVelSens", "kitHuman", "stringMode", "bendUp", "bendDown",
                                           "artBendStart", "artBendTime", "artHold", "slideRange",
                                           "vibRate", "vibDelay", "gtVolume", "gtRelease", "gtMute", "linkGroup", "scoreMode",
                                           "strumOn", "strumSpeed", "upStrings" };   // pedals / amp ARE part of the sound presets
@@ -893,6 +1029,7 @@ void AIOGuitarProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     for (auto& m : slotMessage) m = {};
     publish (kitTree.hasType ("KIT") ? Kit::decode (kitTree, get ("kitLevel") > 0.5f) : nullptr);
+    checkOldTakes();
     score.fromTree (scoreTree);
     undoStack.clear(); redoStack.clear();
     score.orphaned = score.countOrphans();

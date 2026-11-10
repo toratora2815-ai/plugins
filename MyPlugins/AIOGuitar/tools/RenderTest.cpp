@@ -4,6 +4,7 @@
 //   切り分けの数、弦とフレットの割り当て、音程の測定精度、音量のそろい方、鳴らした音の音程、連打で同じ録音が続かないこと、
 //   同じ弦の前の音が止まること、ミュートの層が使われること、NaN・音割れ・プチノイズ、状態の保存と復元、画面の PNG
 // 使い方: RenderTest <出力フォルダ>    失敗があると終了コード 1
+#include "BuzzSynth.h"
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
 #include "../Source/RecordGuide.h"
@@ -2138,6 +2139,213 @@ int main (int argc, char** argv)
         for (int i = 0; i < 3; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
         snap ("editor_effects_mid.png");
         setP (proc, "fxChain", (float) rig::kDefault); setP (proc, "wfOn", 0); setP (proc, "ampModel", 3);
+    }
+
+
+    // ================= BUZZ FIX =================
+    std::cout << "== buzz fix ==" << std::endl;
+    {
+        check (kit->countBuzz() == 0, "the clean fake recordings: no buzz found (" + juce::String (kit->countBuzz()) + ")");
+
+        // one buzzing take (A2, the string reaches the fret 1.5 s in) and a clean take of the same note
+        auto toBuffer = [] (const std::vector<float>& v) { juce::AudioBuffer<float> b (1, (int) v.size()); b.copyFrom (0, 0, v.data(), (int) v.size()); return b; };
+        auto takeOf = [&] (const std::vector<float>& v, double rate, bool up)
+        {
+            auto res = Kit::slice (toBuffer (v), rate, Kit::slotMedium);
+            Kit::Sample t;
+            if (! res.samples.empty()) t = std::move (res.samples.front());
+            t.slot = Kit::slotMedium; t.up = up; t.string = 5; t.fret = 0;
+            return t;
+        };
+        buzzsynth::NoteSpec bs; bs.f0 = 110.0; bs.buzzAt = 1.5; bs.len = 6.0; bs.sr = 48000.0; bs.seed = 77; bs.buzzAmt = 1.0;
+        const auto bn = buzzsynth::makeNote (bs);
+        buzzsynth::NoteSpec cs = bs; cs.buzzAt = -1.0; cs.seed = 78; cs.pluckPos = 0.13;
+        const auto cn = buzzsynth::makeNote (cs);
+        auto bad = takeOf (bn.buzzed, 48000.0, false), good = takeOf (cn.clean, 48000.0, true);
+        check (bad.hasBuzz() && ! good.hasBuzz(), "slice: the buzzing take is found (at " + juce::String (bad.buzzAt / 48000.0, 2)
+               + " s, contact at " + juce::String (bn.trueOnset / 48000.0, 2) + " s), the clean one is not");
+        check (bad.buzzAt > 0 && bad.buzzAt <= bn.trueOnset, "slice: the fix starts before the first contact");
+        {
+            bool same = bad.audio.getNumSamples() > 0;
+            const int pre = bad.buzzAt - (int) (0.05 * 48000.0);
+            for (int i = 0; i < pre && same; ++i) same = bad.fixed.getSample (0, i) == bad.audio.getSample (0, i);
+            check (same, "slice: the fixed take is the recording itself up to the buzz");
+        }
+
+        // play it: FIX BUZZ on / off / this take off (amp and cabinet off: the DI itself)
+        AIOGuitarProcessor pb;
+        pb.prepareToPlay (sr, 256);
+        setP (pb, "ampOn", 0); setP (pb, "cabOn", 0); setP (pb, "kitHuman", 0);   // the same hit every time
+        pb.putTakes ({ bad });
+        pb.processBlock (*std::make_unique<juce::AudioBuffer<float>> (2, 256), *std::make_unique<juce::MidiBuffer>());
+        auto settle = [&] { for (int i = 0; i < 3; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                            pb.processBlock (*std::make_unique<juce::AudioBuffer<float>> (2, 256), *std::make_unique<juce::MidiBuffer>()); };
+        auto play = [&] { auto o = render (pb, { { 0.01, juce::MidiMessage::noteOn (1, 45, 0.6f) }, { 4.5, juce::MidiMessage::noteOff (1, 45) } }, 4.8, sr);
+                          std::vector<float> v ((size_t) o.getNumSamples()); for (int i = 0; i < o.getNumSamples(); ++i) v[(size_t) i] = o.getSample (0, i); return v; };
+        const int b0 = (int) ((0.01 + bad.buzzAt / 48000.0 + 0.1) * sr), b1 = b0 + (int) (0.9 * sr), c0 = (int) (0.3 * sr), c1 = (int) (1.0 * sr);
+        const auto on = play();
+        setP (pb, "kitBuzz", 0); settle();
+        const auto off = play();
+        const double hiOn = buzzsynth::bandDb (on, b0, b1, sr, 2500, true), hiOff = buzzsynth::bandDb (off, b0, b1, sr, 2500, true);
+        const double preOn = buzzsynth::rmsDb (on, c0, c1), preOff = buzzsynth::rmsDb (off, c0, c1);
+        // the same string without the buzz (what it should have sounded like), played the same way
+        double hiClean = 0;
+        {
+            AIOGuitarProcessor pc;
+            pc.prepareToPlay (sr, 256);
+            setP (pc, "ampOn", 0); setP (pc, "cabOn", 0); setP (pc, "kitHuman", 0);
+            pc.putTakes ({ takeOf (bn.clean, 48000.0, false) });
+            pc.processBlock (*std::make_unique<juce::AudioBuffer<float>> (2, 256), *std::make_unique<juce::MidiBuffer>());
+            auto o = render (pc, { { 0.01, juce::MidiMessage::noteOn (1, 45, 0.6f) }, { 4.5, juce::MidiMessage::noteOff (1, 45) } }, 4.8, sr);
+            std::vector<float> v ((size_t) o.getNumSamples()); for (int i = 0; i < o.getNumSamples(); ++i) v[(size_t) i] = o.getSample (0, i);
+            hiClean = buzzsynth::bandDb (v, b0, b1, sr, 2500, true);
+        }
+        check (hiOff > hiClean + 6.0 && hiOn < hiClean + 3.0, "FIX BUZZ: the highs after the buzz, over the string without one: off "
+               + juce::String (hiOff - hiClean, 1) + " dB, on " + juce::String (hiOn - hiClean, 1) + " dB");
+        check (std::abs (preOn - preOff) < 0.05, "before the buzz: on and off sound the same (" + juce::String (preOn - preOff, 2) + " dB)");
+        setP (pb, "kitBuzz", 1); settle();
+        pb.setBuzzOff (0, true); settle();
+        const auto takeOff = play();
+        const double hiTakeOff = buzzsynth::bandDb (takeOff, b0, b1, sr, 2500, true);
+        check (std::abs (hiTakeOff - hiOff) < 1.0, "this take off (right-click): played as recorded (" + juce::String (hiTakeOff - hiOff, 2) + " dB against FIX BUZZ off)");
+
+        // the project keeps it all: the fixed take itself, where, and the take switched off
+        {
+            juce::MemoryBlock mb; pb.getStateInformation (mb);
+            AIOGuitarProcessor p2;
+            p2.prepareToPlay (sr, 256);
+            p2.setStateInformation (mb.getData(), (int) mb.getSize());
+            auto k2 = p2.getKit();
+            bool ok = k2 != nullptr && k2->samples.size() == 1;
+            float diff = 1.0f;
+            if (ok)
+            {
+                const auto& t = k2->samples.front();
+                ok = t.hasBuzz() && t.buzzOff && t.buzzAt == bad.buzzAt && t.buzzVersion == buzz::kVersion && t.fixed.getNumSamples() == bad.fixed.getNumSamples();
+                if (ok) { diff = 0; for (int i = 0; i < t.fixed.getNumSamples(); ++i) diff = juce::jmax (diff, std::abs (t.fixed.getSample (0, i) - bad.fixed.getSample (0, i))); }
+            }
+            check (ok && diff < 1.0e-5f, "save / load: fixed take, its start and the switched-off take come back (largest difference " + juce::String (diff, 7) + ")");
+        }
+        // a kit from before 0.5.0 (no buzz info): opened at once (as recorded), looked at in the background,
+        // then the result is in the kit and in what the project saves
+        {
+            Kit::GuitarKit k; k.samples.push_back (bad); k.samples.back().buzzOff = false;
+            auto tree = Kit::encode (k);
+            for (auto c : tree) for (auto id : { "bzV", "bzAt", "bzCut", "bzStrong", "bzBorrow", "bzTried", "bzOff", "fixflac" }) c.removeProperty (id, nullptr);
+            const auto f = outDir.getChildFile ("old_kit.aioguitar");
+            f.deleteFile();
+            { juce::FileOutputStream fos (f); juce::GZIPCompressorOutputStream gz (fos); tree.writeToStream (gz); }
+            AIOGuitarProcessor po;
+            po.prepareToPlay (sr, 256);
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            po.loadKit (f);
+            const double openMs = juce::Time::getMillisecondCounterHiRes() - t0;
+            const bool asRecorded = po.getKit() != nullptr && ! po.getKit()->samples[0].hasBuzz();
+            for (int i = 0; i < 100 && ! po.getKit()->samples[0].hasBuzz(); ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+            auto ko = po.getKit();
+            check (asRecorded && ko->samples[0].hasBuzz() && (int) ko->encoded.getChild (0).getProperty ("bzV", 0) == buzz::kVersion
+                   && ko->encoded.getChild (0).hasProperty ("fixflac"),
+                   "old kit: opens at once (" + juce::String (openMs, 0) + " ms, as recorded), the buzz is found in the background and saved with it");
+        }
+        // an old song saved with LEVEL MATCH off: opening it changes that switch, which copies the kit while the
+        // background look is running. The result must still go in
+        {
+            AIOGuitarProcessor px;
+            px.prepareToPlay (sr, 256);
+            px.loadKit (outDir.getChildFile ("old_kit.aioguitar"));   // not looked at yet (the loop has not run)
+            setP (px, "kitLevel", 0);
+            juce::MemoryBlock mb; px.getStateInformation (mb);
+            AIOGuitarProcessor py;
+            py.prepareToPlay (sr, 256);
+            py.setStateInformation (mb.getData(), (int) mb.getSize());
+            for (int i = 0; i < 150 && ! (py.getKit() != nullptr && py.getKit()->samples[0].hasBuzz()); ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+            check (py.getKit() != nullptr && py.getKit()->samples[0].hasBuzz() && py.getParamValue ("kitLevel") < 0.5f,
+                   "old song with LEVEL MATCH off: the background look still gets into the kit");
+        }
+        // reloading a layer with the same number of notes: the project keeps the new recording (child i = samples[i])
+        {
+            const auto fa = outDir.getChildFile ("relo_a.wav"), fb = outDir.getChildFile ("relo_b.wav");
+            juce::Random r1 (11), r2 (22);
+            makeRecording (fa, 44100.0, false, r1);
+            makeRecording (fb, 44100.0, false, r2);
+            AIOGuitarProcessor pr;
+            pr.prepareToPlay (sr, 256);
+            pr.loadRecordingNow (Kit::slotSoft, fa);
+            pr.loadRecordingNow (Kit::slotSoft, fb);
+            juce::MemoryBlock mb; pr.getStateInformation (mb);
+            AIOGuitarProcessor pq;
+            pq.prepareToPlay (sr, 256);
+            pq.setStateInformation (mb.getData(), (int) mb.getSize());
+            auto k1 = pr.getKit(), k2 = pq.getKit();
+            bool same = k1 != nullptr && k2 != nullptr && k1->samples.size() == k2->samples.size();
+            float diff = 0;
+            if (same)
+                for (size_t i = 0; i < k1->samples.size(); ++i)
+                {
+                    const auto& a1 = k1->samples[i].audio; const auto& a2 = k2->samples[i].audio;
+                    if (a1.getNumSamples() != a2.getNumSamples()) { same = false; break; }
+                    for (int j = 0; j < a1.getNumSamples(); j += 7) diff = juce::jmax (diff, std::abs (a1.getSample (0, j) - a2.getSample (0, j)));
+                }
+            check (same && diff < 1.0e-5f, "a layer loaded again with as many notes: the project saves the new recording (difference " + juce::String (diff, 6) + ")");
+        }
+        // FIX BUZZ switched while a note rings: the note goes on (the switch counts from the next note)
+        {
+            setP (pb, "kitBuzz", 1); setP (pb, "kitHuman", 0);
+            pb.setBuzzOff (0, false); settle();
+            juce::AudioBuffer<float> out (2, (int) (2.0 * sr)); out.clear();
+            juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOn (1, 45, 0.6f), 0);
+            for (int pos = 0; pos < out.getNumSamples(); pos += 256)
+            {
+                if (pos >= (int) (1.0 * sr) && pos < (int) (1.0 * sr) + 256) setP (pb, "kitBuzz", 0);
+                juce::AudioBuffer<float> blk (2, 256); blk.clear();
+                pb.processBlock (blk, m); m.clear();
+                for (int c = 0; c < 2; ++c) out.copyFrom (c, pos, blk, c, 0, juce::jmin (256, out.getNumSamples() - pos));
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (1);
+            }
+            const float before = rmsDb (out, 0.8, 0.95, sr), after = rmsDb (out, 1.05, 1.2, sr);
+            check (after > before - 3.0f, "FIX BUZZ switched while a note rings: it rings on (" + juce::String (before, 1) + " -> " + juce::String (after, 1) + " dB)");
+            setP (pb, "kitBuzz", 1);
+        }
+
+        // a strong buzz + a clean take of the same note: the clean take's tail is borrowed
+        {
+            buzzsynth::NoteSpec ss; ss.f0 = 329.6; ss.buzzAt = 1.2; ss.swell = 0.5; ss.buzzAmt = 2.0; ss.beat = 0.6; ss.sr = 48000.0; ss.len = 6.0; ss.seed = 90; ss.B = 3.0e-5;
+            ss.t60 = 15.0; ss.barrier = 0.8;   // a string that keeps hitting the fret for a second or so
+            const auto sn = buzzsynth::makeNote (ss);
+            buzzsynth::NoteSpec ds = ss; ds.buzzAt = -1.0; ds.seed = 91; ds.pluckPos = 0.13; ds.attackHard = 0.5; ds.len = 7.0;
+            const auto dn = buzzsynth::makeNote (ds);
+            auto sb = takeOf (sn.buzzed, 48000.0, false), sg = takeOf (dn.clean, 48000.0, true);
+            sb.string = sg.string = 1; sb.fret = sg.fret = 0;
+            check (sb.hasBuzz() && sb.buzzStrong, "strong buzz: found and marked strong (highs cut " + juce::String (sb.buzzCut, 1) + " dB)");
+            AIOGuitarProcessor p3;
+            p3.prepareToPlay (sr, 256);
+            p3.putTakes ({ sb });                  // alone: nothing to borrow from yet
+            const bool aloneKeeps = p3.getKit()->samples[0].hasBuzz() && ! p3.getKit()->samples[0].buzzBorrowed && ! p3.getKit()->samples[0].buzzTried;
+            p3.putTakes ({ sg });                  // the up-stroke comes in: now it can
+            auto k3 = p3.getKit();
+            int bi = -1; for (int i = 0; i < (int) k3->samples.size(); ++i) if (! k3->samples[(size_t) i].up) bi = i;
+            const bool borrowed = bi >= 0 && k3->samples[(size_t) bi].buzzBorrowed;
+            check (aloneKeeps && borrowed, "strong buzz: lowered while alone, a clean tail once the other take is there");
+            check (bi >= 0 && (bool) k3->encoded.getChild (bi).getProperty ("bzBorrow", false), "strong buzz: the borrowed tail is in the saved kit");
+
+            // A/B: one take through the effects, then quiet again
+            p3.processBlock (*std::make_unique<juce::AudioBuffer<float>> (2, 256), *std::make_unique<juce::MidiBuffer>());
+            p3.auditionSample (bi, false);
+            auto a1 = render (p3, {}, 1.0, sr);
+            p3.stopAudition();
+            auto a2 = render (p3, {}, 0.5, sr);
+            check (allFinite (a1) && allFinite (a2) && rmsDb (a1, 0.1, 0.9, sr) > -50.0f && rmsDb (a2, 0.2, 0.5, sr) < -90.0f,
+                   "A/B: the take plays (" + juce::String (rmsDb (a1, 0.1, 0.9, sr), 1) + " dB) and stops (" + juce::String (rmsDb (a2, 0.2, 0.5, sr), 1) + " dB)");
+            check (maxJump (a2, 0, (int) (0.05 * sr)) < 0.05f, "A/B: stopping fades (largest step " + juce::String (maxJump (a2, 0, (int) (0.05 * sr)), 4) + ")");
+
+            // the table and the switch, for a look
+            std::unique_ptr<juce::AudioProcessorEditor> ed3 (p3.createEditor());
+            for (int i = 0; i < 3; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            auto img = ed3->createComponentSnapshot (ed3->getLocalBounds(), true, 1.0f);
+            auto f = outDir.getChildFile ("editor_buzz.png"); f.deleteFile();
+            juce::FileOutputStream fos (f);
+            if (fos.openedOk()) { juce::PNGImageFormat fmt; fmt.writeImageToStream (img, fos); }
+        }
     }
 
     std::cout << (failures == 0 ? "ALL PASSED" : juce::String (failures) + " FAILED") << std::endl;

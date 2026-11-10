@@ -64,6 +64,11 @@ public:
     std::shared_ptr<const Kit::GuitarKit> getKit() const { return editKit; }
     juce::String getSlotMessage (int slot) const { return slotMessage[slot]; }
     int getKitVersion() const { return kitVersion; }
+    // FIX BUZZ: one take played as recorded (right-click in the table); A/B of one take (a fixed one or as recorded)
+    void setBuzzOff (int sampleIndex, bool off);
+    void auditionSample (int sampleIndex, bool fixedVersion);
+    void auditionTake (const juce::AudioBuffer<float>& take, double rate, float gain);   // e.g. a take not in the kit yet
+    void stopAudition() { auditionTake ({}, 44100.0, 0.0f); }
 
     float getParamValue (const char* id) const { return get (id); }
 
@@ -147,6 +152,16 @@ private:
     int  kitSwapWait = 0;
     int kitVersion = 0;
     juce::String slotMessage[Kit::numSlots];
+
+    // the UI's A/B of one take: handed to the audio thread like the kit (never freed there)
+    struct Audition { juce::AudioBuffer<float> buf; double rate = 44100.0; };
+    juce::SpinLock auditionLock;
+    std::shared_ptr<const Audition> pendingAudition, audioAudition, fadingAudition, retiredAudition;
+    bool auditionChanged = false;
+    double auditionPos = 0.0, fadingPos = 0.0;
+    int fadingLeft = 0;
+    void mixAudition (juce::AudioBuffer<float>& buffer, int n);
+    void checkOldTakes();   // kits from before 0.5.0: look for buzzes in the background
     juce::ThreadPool loader { 1 };
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
     juce::SmoothedValue<float> volume { 1.0f };

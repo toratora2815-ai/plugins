@@ -3,7 +3,9 @@
 // tuned and level-matched, then spread over the whole keyboard from the nearest recorded note.
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_dsp/juce_dsp.h>
+#include "BuzzFix.h"
 #include <vector>
+#include <atomic>
 #include <algorithm>
 #include <cmath>
 
@@ -37,16 +39,34 @@ struct Sample
     int    string   = 0;              // 1..6, 0 = unknown
     int    fret     = -1;             // fret from the nut (a capo counts as frets), -1 = unknown
 
+    // ビビり補正（BuzzFix.h）: `audio` is always the take as recorded; `fixed` is what plays while FIX BUZZ is on
+    int    buzzVersion = 0;           // 0 = not looked at yet, else buzz::kVersion it was checked with
+    int    buzzAt   = -1;             // where the buzz starts (samples), -1 = none found
+    float  buzzCut  = 0.0f;           // how far the highs were lowered (dB, first 0.5 s)
+    bool   buzzStrong = false;        // lowering alone leaves some rattle: a clean take's tail is borrowed when there is one
+    bool   buzzBorrowed = false;      // `fixed` ends in the tail of another take of the same note
+    int    buzzTried = 0;             // a borrow was tried with this many takes and none fitted (tried again when there are more)
+    bool   buzzOff  = false;          // this note: play as recorded (right-click in the table)
+    juce::AudioBuffer<float> fixed;   // empty = nothing to fix
+
     bool isOpen() const { return string >= 1 && fret == 0; }
+    bool hasBuzz() const { return buzzAt >= 0 && fixed.getNumSamples() > 0; }
+    const juce::AudioBuffer<float>& play (bool fixOn) const { return fixOn && ! buzzOff && hasBuzz() ? fixed : audio; }
 };
+
+// a number for "these recordings": copies keep it, a kit whose takes changed gets a new one
+inline int newContentId() { static std::atomic<int> n { 0 }; return ++n; }
 
 struct GuitarKit
 {
     juce::String name { "My Guitar" };
+    int content = newContentId();
     std::vector<Sample> samples;
-    juce::ValueTree encoded;          // cached serialised form (FLAC), built once
+    juce::ValueTree encoded;          // cached serialised form (FLAC), built once; child i = samples[i]
 
     int count (int slot) const { return (int) std::count_if (samples.begin(), samples.end(), [slot] (const Sample& s) { return s.slot == slot; }); }
+    int countBuzz() const { return (int) std::count_if (samples.begin(), samples.end(), [] (const Sample& s) { return s.hasBuzz(); }); }
+    int countUnchecked() const { return (int) std::count_if (samples.begin(), samples.end(), [] (const Sample& s) { return s.buzzVersion == 0 && isOpenPicking (s.slot); }); }
     bool hasNotes() const { return count (slotSoft) + count (slotMedium) + count (slotHard) + count (slotMute) > 0; }
 };
 
@@ -244,6 +264,85 @@ inline void decimateToBelow60k (std::vector<float>& x, double& sr)
 }
 
 //==============================================================================
+// ビビり補正: look for a buzz in one picked note (SOFT / MEDIUM / HARD) and lower it (BuzzFix.h).
+// Palm mutes and brushing are left alone (no long ringing to buzz in). findBuzz only reads the take
+// (the processor runs it on a loader thread for kits from before 0.5.0), applyBuzz puts the result in
+struct BuzzResult
+{
+    int at = -1;
+    float cut = 0.0f;
+    bool strong = false;
+    juce::AudioBuffer<float> fixed;
+};
+
+inline BuzzResult findBuzz (const Sample& s)
+{
+    BuzzResult res;
+    if (! isOpenPicking (s.slot) || s.rootHz <= 0.0f || s.audio.getNumChannels() < 1 || s.audio.getNumSamples() < 16) return res;
+    std::vector<float> out;
+    const auto r = buzz::check (s.audio.getReadPointer (0), s.audio.getNumSamples(), s.sampleRate, s.rootHz, out);
+    if (! r.found || out.empty()) return res;
+    res.at = r.cleanEnd;
+    res.cut = r.cutDb;
+    res.strong = r.strong;
+    res.fixed.setSize (1, (int) out.size());
+    res.fixed.copyFrom (0, 0, out.data(), (int) out.size());
+    return res;
+}
+
+inline void applyBuzz (Sample& s, BuzzResult r)
+{
+    s.buzzVersion = buzz::kVersion;
+    s.buzzAt = r.at; s.buzzCut = r.cut; s.buzzStrong = r.strong;
+    s.buzzBorrowed = false; s.buzzTried = 0;
+    s.fixed = std::move (r.fixed);
+}
+
+inline void checkBuzz (Sample& s) { applyBuzz (s, findBuzz (s)); }
+
+// a strong buzz: the tail of a clean take of the same string and fret (the same layer first, then the others),
+// when it fits (BuzzFix.h borrowTail). A take that buzzes itself lends its lowered version (never one that was
+// borrowed itself), and the result is looked at again: a tail with a buzz in it is not used. Returns the samples that changed
+inline std::vector<int> borrowTails (GuitarKit& kit)
+{
+    std::vector<int> changed;
+    for (int i = 0; i < (int) kit.samples.size(); ++i)
+    {
+        auto& s = kit.samples[(size_t) i];
+        if (! s.hasBuzz() || ! s.buzzStrong || s.buzzBorrowed || s.string < 1 || s.fret < 0) continue;
+        std::vector<int> donors;
+        for (int pass = 0; pass < 2; ++pass)
+            for (int j = 0; j < (int) kit.samples.size(); ++j)
+            {
+                const auto& d = kit.samples[(size_t) j];
+                if (j == i || ! isOpenPicking (d.slot) || d.string != s.string || d.fret != s.fret) continue;
+                if ((pass == 0) != (d.slot == s.slot)) continue;
+                if (d.buzzBorrowed || (d.hasBuzz() && d.buzzStrong)) continue;   // only clean or gently fixed takes lend
+                donors.push_back (j);
+            }
+        if ((int) donors.size() <= s.buzzTried) continue;   // nobody new since the last try (the other direction is often recorded next)
+        s.buzzTried = (int) donors.size();
+        changed.push_back (i);
+        buzz::Take bad { s.audio.getReadPointer (0), s.audio.getNumSamples(), s.sampleRate, s.rootHz, s.buzzAt };
+        for (int j : donors)
+        {
+            const auto& d = kit.samples[(size_t) j];
+            const auto& da = d.hasBuzz() ? d.fixed : d.audio;
+            buzz::Take don { da.getReadPointer (0), da.getNumSamples(), d.sampleRate, d.rootHz, da.getNumSamples() };
+            std::vector<float> out;
+            if (! buzz::borrowTail (bad, s.buzzAt, don, out)) continue;
+            if (buzz::detect (out.data(), (int) out.size(), s.sampleRate, s.rootHz).found) continue;   // it buzzes somewhere: no
+            // the donor was level-matched at the join; the whole take keeps this take's own level matching
+            s.fixed.setSize (1, (int) out.size());
+            s.fixed.copyFrom (0, 0, out.data(), (int) out.size());
+            s.buzzBorrowed = true;
+            break;
+        }
+    }
+    return changed;
+}
+
+//==============================================================================
 struct SliceResult
 {
     std::vector<Sample> samples;
@@ -429,6 +528,7 @@ inline SliceResult slice (const juce::AudioBuffer<float>& in, double sr, int slo
         const int fin = juce::jmin (pre, s.audio.getNumSamples()), fout = juce::jmin ((int) (sr * 0.08), s.audio.getNumSamples() / 3);
         s.audio.applyGainRamp (0, 0, fin, 0.0f, 1.0f);
         s.audio.applyGainRamp (0, s.audio.getNumSamples() - fout, fout, 1.0f, 0.0f);
+        checkBuzz (s);
         res.samples.push_back (std::move (s));
         ++res.pitched;
     }
@@ -450,6 +550,9 @@ inline SliceResult slice (const juce::AudioBuffer<float>& in, double sr, int slo
         for (auto& s : res.samples) if (s.string > 0) ++known;
         if (! res.samples.empty() && known < (int) res.samples.size())
             res.message << ", " << ((int) res.samples.size() - known) << " without string";
+        int buzzing = 0;
+        for (auto& s : res.samples) if (s.hasBuzz()) ++buzzing;
+        if (buzzing > 0) res.message << ", " << buzzing << " buzz fixed";
         if (res.unpitched > 0) res.message << " (" << res.unpitched << " skipped)";
     }
     return res;
@@ -514,20 +617,63 @@ inline int pickingLayers (const GuitarKit& kit)
 
 //==============================================================================
 // Serialisation (FLAC inside a ValueTree) - stored in the project and in .aioguitar files
+inline juce::MemoryBlock toFlac (const juce::AudioBuffer<float>& b, double sr)
+{
+    juce::MemoryBlock mb;
+    juce::FlacAudioFormat flac;
+    auto* mos = new juce::MemoryOutputStream (mb, false);
+    std::unique_ptr<juce::AudioFormatWriter> w (flac.createWriterFor (mos, sr, 1, 24, {}, 0));
+    if (w == nullptr) { delete mos; return {}; }
+    w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+    w.reset();
+    return mb;
+}
+
+inline bool fromFlac (const juce::var& v, juce::AudioBuffer<float>& out)
+{
+    const auto* mb = v.getBinaryData();
+    if (mb == nullptr) return false;
+    juce::FlacAudioFormat flac;
+    std::unique_ptr<juce::AudioFormatReader> rd (flac.createReaderFor (new juce::MemoryInputStream (*mb, false), true));
+    if (rd == nullptr || rd->lengthInSamples < 8) return false;
+    out.setSize (1, (int) rd->lengthInSamples);
+    rd->read (&out, 0, (int) rd->lengthInSamples, 0, true, false);
+    return true;
+}
+
+// the buzz fix of one take: the fixed audio itself is kept (a later, better fix does not change old songs)
+inline void writeBuzz (const Sample& s, juce::ValueTree c)
+{
+    c.setProperty ("bzV", s.buzzVersion, nullptr);
+    c.setProperty ("bzAt", s.buzzAt, nullptr);
+    c.setProperty ("bzCut", s.buzzCut, nullptr);
+    c.setProperty ("bzStrong", s.buzzStrong, nullptr);
+    c.setProperty ("bzBorrow", s.buzzBorrowed, nullptr);
+    c.setProperty ("bzTried", s.buzzTried, nullptr);
+    c.setProperty ("bzOff", s.buzzOff, nullptr);
+    if (s.hasBuzz()) c.setProperty ("fixflac", toFlac (s.fixed, s.sampleRate), nullptr);
+    else c.removeProperty ("fixflac", nullptr);
+}
+
+inline void readBuzz (Sample& s, const juce::ValueTree& c)
+{
+    s.buzzVersion = c.getProperty ("bzV", 0);
+    s.buzzAt = c.getProperty ("bzAt", -1);
+    s.buzzCut = c.getProperty ("bzCut", 0.0f);
+    s.buzzStrong = c.getProperty ("bzStrong", false);
+    s.buzzBorrowed = c.getProperty ("bzBorrow", false);
+    s.buzzTried = (int) c.getProperty ("bzTried", 0);
+    s.buzzOff = c.getProperty ("bzOff", false);
+    s.fixed.setSize (0, 0);
+    if (s.buzzAt >= 0 && ! fromFlac (c.getProperty ("fixflac"), s.fixed)) s.buzzAt = -1;
+}
+
 inline juce::ValueTree encode (const GuitarKit& kit)
 {
     juce::ValueTree t ("KIT");
     t.setProperty ("name", kit.name, nullptr);
-    juce::FlacAudioFormat flac;
     for (auto& s : kit.samples)
     {
-        juce::MemoryBlock mb;
-        {
-            auto* mos = new juce::MemoryOutputStream (mb, false);
-            std::unique_ptr<juce::AudioFormatWriter> w (flac.createWriterFor (mos, s.sampleRate, 1, 24, {}, 0));
-            if (w == nullptr) { delete mos; continue; }
-            w->writeFromAudioSampleBuffer (s.audio, 0, s.audio.getNumSamples());
-        }
         juce::ValueTree c ("S");
         c.setProperty ("slot", s.slot, nullptr);
         c.setProperty ("up", s.up, nullptr);
@@ -538,7 +684,8 @@ inline juce::ValueTree encode (const GuitarKit& kit)
         c.setProperty ("cents", s.cents, nullptr);
         c.setProperty ("rawRms", s.rawRms, nullptr);
         c.setProperty ("sr", s.sampleRate, nullptr);
-        c.setProperty ("flac", mb, nullptr);
+        c.setProperty ("flac", toFlac (s.audio, s.sampleRate), nullptr);   // always one child per sample (child i = samples[i])
+        writeBuzz (s, c);
         t.appendChild (c, nullptr);
     }
     return t;
@@ -549,16 +696,11 @@ inline std::shared_ptr<GuitarKit> decode (const juce::ValueTree& t, bool matchLe
     if (! t.hasType ("KIT")) return {};
     auto kit = std::make_shared<GuitarKit>();
     kit->name = t.getProperty ("name", "My Guitar").toString();
-    juce::FlacAudioFormat flac;
+    bool skipped = false;
     for (auto c : t)
     {
-        const auto* mb = c.getProperty ("flac").getBinaryData();
-        if (mb == nullptr) continue;
-        std::unique_ptr<juce::AudioFormatReader> rd (flac.createReaderFor (new juce::MemoryInputStream (*mb, false), true));
-        if (rd == nullptr) continue;
         Sample s;
-        s.audio.setSize (1, (int) rd->lengthInSamples);
-        rd->read (&s.audio, 0, (int) rd->lengthInSamples, 0, true, false);
+        if (! fromFlac (c.getProperty ("flac"), s.audio)) { skipped = true; continue; }
         s.slot = juce::jlimit (0, numSlots - 1, (int) c.getProperty ("slot", 0));
         s.up = c.getProperty ("up", false);
         s.string = juce::jlimit (0, 6, (int) c.getProperty ("string", 0));
@@ -570,11 +712,12 @@ inline std::shared_ptr<GuitarKit> decode (const juce::ValueTree& t, bool matchLe
         s.cents = c.getProperty ("cents", 0.0f);
         s.rawRms = c.getProperty ("rawRms", 0.0f);
         s.sampleRate = juce::jlimit (8000.0, 384000.0, (double) c.getProperty ("sr", 44100.0));
-        if (s.audio.getNumSamples() < 8) continue;
+        readBuzz (s, c);   // a kit from before 0.5.0 has none: the processor looks at it in the background
         kit->samples.push_back (std::move (s));
     }
     normalise (*kit, matchLevels);
-    kit->encoded = t;
+    // child i must be samples[i]: a kit with unreadable takes is written again (rare)
+    kit->encoded = skipped ? encode (*kit) : t;
     return kit;
 }
 

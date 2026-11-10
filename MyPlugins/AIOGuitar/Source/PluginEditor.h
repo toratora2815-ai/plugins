@@ -136,12 +136,14 @@ public:
 
     static constexpr int frets = 23;   // 0 .. 22
 
-    // RECORD GUIDE: the cell to play now glows; right-click a cell to record just that note again
+    // RECORD GUIDE: the cell to play now glows. Right-click a cell: the buzz fix of its takes (A/B, off),
+    // and in the app: record just that note again
     void setHighlight (int string, int fret, bool recording) { if (hlString != string || hlFret != fret || hlRec != recording) { hlString = string; hlFret = fret; hlRec = recording; repaint(); } }
-    std::function<void (int string, int fret)> onRedo;
+    std::function<void (int string, int fret)> onMenu;
 
 private:
-    struct Cell { bool rec[4] {}; float cents = 0; int srcString = 0, srcFret = -1, shift = 0; bool any = false; };
+    // buzz: takes in this cell with a fixed buzz (and how many of them play as recorded)
+    struct Cell { bool rec[4] {}; float cents = 0; int srcString = 0, srcFret = -1, shift = 0; bool any = false; int buzz = 0, buzzOff = 0, buzzBorrowed = 0; };
     void timerCallback() override;
     void rebuild();
     juce::Rectangle<float> board() const;
@@ -154,6 +156,7 @@ private:
     juce::String summary;
     juce::Point<int> hover, pressed;
     int pressedNote = -1, shownVersion = -1;
+    bool shownFix = true;
     int hlString = 0, hlFret = -1;
     bool hlRec = false;
 };
@@ -171,9 +174,9 @@ private:
     using CA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     juce::Colour colour;
     juce::ComboBox stringMode;
-    juce::ToggleButton tune { "Pitch Correct" }, level { "Level Match" };
+    juce::ToggleButton tune { "Pitch Correct" }, level { "Level Match" }, buzz { "Fix Buzz" };
     std::unique_ptr<CA> stringModeAtt;
-    std::unique_ptr<BA> tuneAtt, levelAtt;
+    std::unique_ptr<BA> tuneAtt, levelAtt, buzzAtt;
     juce::Label stringLabel { {}, "String choice" };
     juce::ToggleButton strum { "STRUM" };
     juce::ComboBox upStrings;

@@ -84,6 +84,9 @@ public:
         if (n > 1 && cand[pick] == params.lastTake[juce::jlimit (0, 6, string)]) pick = (pick + 1) % n;
         params.lastTake[juce::jlimit (0, 6, string)] = cand[pick];
         sample = &kit->samples[(size_t) cand[pick]];
+        // FIX BUZZ: the fixed take (a buzz lowered, or a clean tail), unless switched off. Read when the note
+        // starts: switching it does not touch notes that ring
+        audio = &sample->play (params.fixBuzz);
 
         // pitch: from the measured root (pitch-corrected) or the nearest note (as recorded)
         const double hostSr = getSampleRate();
@@ -179,7 +182,7 @@ public:
             if (released) releaseAge += m;
         }
 
-        if (pos >= sample->audio.getNumSamples() - 2 || env < 1.0e-5f)
+        if (pos >= audio->getNumSamples() - 2 || env < 1.0e-5f)
         {
             sample = nullptr;
             clearCurrentNote();
@@ -190,7 +193,7 @@ private:
     // 4-point Hermite interpolation
     inline float read (double ratio) noexcept
     {
-        const auto& buf = sample->audio;
+        const auto& buf = *audio;
         const int n = buf.getNumSamples();
         const double posNow = pos;
         pos += base * ratio;
@@ -236,6 +239,7 @@ private:
     VoiceParams& params;
     juce::Random rng;
     const Kit::Sample* sample = nullptr;
+    const juce::AudioBuffer<float>* audio = nullptr;   // sample->audio or sample->fixed
     double pos = 0.0, base = 1.0, lastRatio = 1.0;
     int art = artNormal, age = 0, releaseAge = 0, string = 0, chokeLeft = -1, chokeLen = 1;
     bool brush = false, released = false, dead = false, usingMuteLayer = false;
