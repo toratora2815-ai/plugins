@@ -237,6 +237,7 @@ namespace numdeck
             constexpr int kLinkPage = 3;
             mode = ModeWork;
             pages[(size_t) ModeWork] = isVisible (ModeWork, kLinkPage) ? kLinkPage : order[(size_t) ModeWork].front();
+            save();
         }
 
         static juce::String modeName (int m) { return m == ModeLogic ? "Logic Pro" : jp ("業務"); }
