@@ -301,7 +301,8 @@ namespace mytrem
             for (auto& o : os) { o.prepare(); o.reset(); }
             curStyle = -1; fadeLeft = 0;
             beat = 0; expectHostPpq = -1.0e9; catching = false;
-            env = 0; peak = 0; envGate = 0;
+            env = 0; peak = 0; envGate = 0; blkMax = 0; blkCount = 0;
+            lastSpeed = 1.0; spdMoved = false; spdSteady = true; spdCount = 0;
             for (auto& g : lastGain) g = 1;
             declickArm = false; declickLeft = 0; dcOffset[0] = dcOffset[1] = 0; declickLen = std::max (1, (int) (0.01 * fs));
             depthS = 1; widthS = 0; feelS = 0; grooveS = 0; accS = 0; inS = -1; outS = -1; lkMix = 0;
@@ -352,22 +353,24 @@ namespace mytrem
             const float thrLin = std::pow (10.0f, k.thresholdDb / 20.0f);
             const float attC = (float) std::exp (-4.6 / (std::max (0.1f, k.attackMs) * 1e-3 * fs));
             const float relC = (float) std::exp (-4.6 / (std::max (0.1f, k.releaseMs) * 1e-3 * fs));
-            const float pkC = (float) std::exp (-1.0 / (0.6e-3 * fs));
+            const int blkLen = std::max (1, (int) std::lround (fs * (32.0 / 48000.0)));   // 入力の大きさは 0.67 ms ごとの最大値（本物と同じ。48 kHz で 32 サンプル）
+            const float pkC = (float) std::exp (-(double) blkLen / (0.5e-3 * fs));       // それを 0.5 ms でならす（下がる時だけ）
             const float smC = (float) std::exp (-1.0 / (0.02 * fs));   // つまみの動き 20 ms
             const double unit = Modulator::unitFor (k.rhythm, pattern);
             const float* tab = k.shape >= 0 && k.shape < kNumShapes ? kShapes[k.shape] : customTab.data();
             const int fadeLen = (int) (0.015 * fs);
 
-            // Logic の位置に合わせる（測った本物の動き、build/tremlab 2026-11-10）:
+            // Logic の位置に合わせる（測った本物の動き、build/tremlab 2026-11-10・fix2）:
             //  - ふだんは Logic の拍にぴったり
-            //  - RATE MOD で速さが変わっている間は自走し、終わったら「いちばん近い小節の頭」にそろうように
-            //    少し速く・遅く回って追いつく（時定数 約 2.5 秒）。すぐには戻らない
-            //  - 再生位置が飛んだ（ループ・頭出し）ら、その場で合わせる（つなぎ 10 ms）
+            //  - RATE MOD で速さが変わっている間・終わった後は、「Logic の位置 × 今の速さ」（小節の長さの倍数のずれは同じとみなす）へ
+            //    時定数 約 2.5 秒で寄せる。効き始めは数秒だけ速く・遅く回り、終わると小節の頭にそろう。すぐには戻らない
+            //  - 再生位置が飛んだ（ループ・頭出し）ら、その場で合わせる（つなぎ 10 ms）。ただし寄せている最中は飛ばさずに寄せ続ける（本物も同じ）
             const double hostBps = std::max (1.0, std::min (999.0, tr.hostBpm)) / 60.0 / fs;
             if (locked)
             {
                 const bool jumped = std::abs (tr.ppq - expectHostPpq) > 0.01;
-                if (first || jumped)
+                const bool pulling = catching || std::abs (k.rateModOct * lastAmt) > 1e-3f;
+                if (first || (jumped && ! pulling))
                 {
                     if (! first && std::abs (tr.ppq - beat) > 0.01) armDeclick();
                     beat = tr.ppq; catching = false;
@@ -396,24 +399,29 @@ namespace mytrem
                 outS = smC * outS + (1 - smC) * outT;
                 lkMix = smC * lkMix + (1 - smC) * (lkOn ? 1.0f : 0.0f);
 
-                // 入力の大きさ（INPUT のつまみの前。両チャンネルの大きいほう）→ ピーク（0.6 ms で戻る）→ ATTACK / RELEASE
+                // 入力の大きさ（INPUT のつまみの前。両チャンネルの大きいほう）→ 0.67 ms ごとの最大値を 0.5 ms でならす → ATTACK / RELEASE
                 // INPUT の前で測ることは、INPUT ±12 dB でしきい値の効き方が変わらないことで確かめた
                 float a = 0;
                 for (int c = 0; c < nCh; ++c) a = std::max (a, std::abs (ch[c][i]));
                 inPk = std::max (inPk, a);
-                peak = std::max (a, peak * pkC);
-                float amt;
+                blkMax = std::max (blkMax, a);
+                if (++blkCount >= blkLen) { peak = blkMax > peak ? blkMax : pkC * peak + (1 - pkC) * blkMax; blkMax = 0; blkCount = 0; }
+                float amtD, amt;   // DEPTH MOD に使う量・RATE MOD に使う量
                 if (! k.gate)
                 {
                     env = peak > env ? attC * env + (1 - attC) * peak : relC * env + (1 - relC) * peak;
-                    amt = std::max (0.0f, std::min (1.0f, (env - thrLin) / 0.2f));
+                    // しきい値を超えた分 dd → DEPTH MOD は直線（dd / 0.25）、RATE MOD は少し丸まる（dd / (0.178 + 0.294 dd)。小さい音で 1.4 倍よく効き、満タンでそろう）
+                    // しきい値 −60・−40・−20 dB、0.002〜0.9 の直流と 1 kHz で本物と比べた（build/tremlab/rm）
+                    const float dd = std::max (0.0f, env - thrLin);
+                    amtD = std::min (1.0f, dd / 0.25f);
+                    amt = std::min (1.0f, dd / (0.1778f + 0.2936f * dd));
                 }
                 else
                 {
                     const float tgt = peak > thrLin ? 1.0f : 0.0f;
                     envGate = tgt > envGate ? attC * envGate + (1 - attC) * tgt : relC * envGate + (1 - relC) * tgt;
                     env = envGate;
-                    amt = envGate;
+                    amtD = amt = envGate;
                 }
                 lastAmt = amt;
 
@@ -425,29 +433,42 @@ namespace mytrem
 
                 // 深さ: DEPTH MOD が + なら「無音のとき浅く、鳴ると DEPTH まで」、− なら「鳴ると浅く」
                 float d = depthS;
-                if (k.depthMod > 0) d *= 1.0f - k.depthMod * (1.0f - amt);
-                else if (k.depthMod < 0) d *= 1.0f + k.depthMod * amt;
+                if (k.depthMod > 0) d *= 1.0f - k.depthMod * (1.0f - amtD);
+                else if (k.depthMod < 0) d *= 1.0f + k.depthMod * amtD;
                 d *= k.duck;
 
-                const double speed = std::exp2 ((double) k.rateModOct * amt);
+                const bool modNow = std::abs (k.rateModOct * amt) > 1e-3f;
+                const double speed = modNow ? std::exp2 ((double) k.rateModOct * amt) : 1.0;   // 効いていない間は 1 ちょうど（寄せる先が Logic の位置そのものになるように）
+                // 速さが少しでも動いた 0.67 ms の区切りの間は寄せない（本物: ゆっくり上げ下げしている間・低い音で量が細かく揺れる間は自走、
+                // 落ち着いたらすぐ寄せ始める。30 秒かけた上げ下げ・300 Hz / 100 Hz の正弦波で確認）
+                if (std::abs (speed - lastSpeed) > 1e-9 * speed) spdMoved = true;
+                lastSpeed = speed;
+                if (++spdCount >= blkLen) { spdSteady = ! spdMoved; spdMoved = false; spdCount = 0; }
                 const double b = beat;
                 beat += beatsPerSample * speed;
                 if (locked)
                 {
-                    if (std::abs (k.rateModOct * amt) > 1e-3f) catching = true;   // 速さが変わっている間は自走
-                    else if (catching)
+                    const bool modding = modNow;
+                    if (modding || catching)
                     {
-                        // 追いつき中: いちばん近い小節の頭とのずれを 2.5 秒の時定数で縮める
+                        // RATE MOD が効いている間も、終わった後も、「Logic の位置 × 今の速さ」（小節の長さの倍数のずれは同じとみなす）へ
+                        // 2.5 秒の時定数で寄せる（本物と同じ。効き始めは数秒だけ速く・遅く回り、終わると小節の頭にそろう）
                         const double hostNow = tr.ppq + (i + 1) * hostBps;
-                        const double err = hostNow - beat;
-                        const double errW = err - std::round (err / wrapLen) * wrapLen;
-                        if (std::abs (errW) < 1e-5) { beat = hostNow - (err - errW); catching = false; }
-                        else beat += errW * pullC;
+                        const double tgt = hostNow * speed;
+                        const double err = tgt - beat;
+                        double errW = err + std::floor (0.5 - err / wrapLen) * wrapLen;   // ちょうど半分のずれは前へ（本物と同じ向き）
+                        if (! modding && std::abs (errW) < 1e-5) { beat += errW; catching = false; }
+                        else
+                        {
+                            // 後ろへ寄せる分が速さを上回ると、しばらく逆向きに回る（本物も同じ。−2 oct・−6 oct、ずれ −1.0〜−1.9 拍で本物と 1 % 前後で一致）
+                            if (spdSteady) beat += errW * pullC;
+                            catching = true;
+                        }
                     }
                 }
 
                 const float acc = std::abs (accS) < 0.01f ? 0.0f : accS;
-                const double ramp = 0.0015 * fs * beatsPerSample * speed;   // すき間の入口・出口の傾き 1.5 ms（拍で）
+                const double ramp = 0.0015 * fs * std::max (beatsPerSample * speed, std::abs (beat - b));   // すき間の入口・出口の傾き 1.5 ms（拍で。寄せている分も含めた進み方で）
                 float g2[2];
                 g2[0] = Modulator::gain (b, k.rhythm, events, unit, tab, d, acc, 0.0, feelS, grooveS, ramp);
                 // WIDTH: 右は左の揺れ全体を「WIDTH/2 × 1 回の長さ」だけ先に（一定の時間。GROOVE と一緒に回して確かめた）
@@ -516,7 +537,10 @@ namespace mytrem
 
         double beat = 0, expectHostPpq = -1.0e9;
         bool catching = false;
-        float env = 0, peak = 0, envGate = 0, lastAmt = 0;
+        float env = 0, peak = 0, envGate = 0, lastAmt = 0, blkMax = 0;
+        int blkCount = 0, spdCount = 0;
+        double lastSpeed = 1.0;
+        bool spdMoved = false, spdSteady = true;
         float lastGain[2] { 1, 1 };
         bool declickArm = false;
         int declickLeft = 0, declickLen = 480;

@@ -1,5 +1,5 @@
 #pragma once
-// 色付け（STYLE）の数値。build/tremlab/fit で市販トレモロの 7 種類の色付けに当てはめた結果（gentab.py で自動生成）
+// 色付け（STYLE）の数値。build/tremlab/fit と fix2 で市販トレモロの 7 種類の色付けに当てはめた結果（fix2/gentab2.py で自動生成）
 #include "TremoloStyle.h"
 namespace mytrem
 {
@@ -12,11 +12,11 @@ namespace mytrem
             case 0: p.digital = 1; break;
             case 1: p.s1 = 0.744559f; p.b1 = 0.004973f; p.s2 = 0.671794f; p.b2 = 0.00488697f; p.hpHz = 11.0574f; p.hpQ = 0.749822f; break;  // Smooth（測った A）
             case 2: p.s1 = 0.77959f; p.a1 = -0.101186f; p.b1 = 0.100801f; p.s2 = 2.31466f; p.b2 = 0.0638427f; p.hpHz = 8.96943f; p.hpQ = 0.83386f; break;  // Even（測った B）
-            case 3: p.compThrDb = -17.6975f; p.compRatio = 2.25028f; p.compKneeDb = 25.6689f; p.compAttMs = 7.61213f; p.compRelMs = 3.85901f; p.compMakeupDb = 0.203997f; p.s1 = 4.2212f; p.s2 = 4.80648f; p.hpHz = 11.0f; break;  // Squeeze（測った C）
-            case 4: p.compThrDb = -16.4706f; p.compRatio = 2.41559f; p.compKneeDb = 28.86f; p.compAttMs = 19.0164f; p.compRelMs = 9.34004f; p.scShelfHz = 4956.87f; p.scShelfDb = 11.7456f; p.compMakeupDb = -0.430842f; p.s1 = 4.1352f; p.s2 = 5.03457f; p.lowShelfHz = 1418.06f; p.lowShelfDb = 0.184867f; break;  // Dense（測った G）
-            case 5: p.preDb = -0.066922f; p.emphHz = 4692.94f; p.emphDb = 15.6668f; p.s1 = 0.396835f; p.b1 = 0.0558786f; p.s2 = 2.11227f; p.hpHz = 11.0848f; p.lowShelfHz = 2865.87f; p.lowShelfDb = 0.317297f; break;  // Crunch（測った F）
-            case 6: p.preDb = 6.38163f; p.s1 = 1.59518f; p.a1 = -0.163455f; p.b1 = 0.755542f; p.s2 = 1.66892f; p.b2 = 0.658656f; p.hpHz = 6.9943f; p.trimDb = -9.13401f; break;  // Grit（測った E）
-            case 7: p.compThrDb = -71.7261f; p.compRatio = 17.0013f; p.compKneeDb = 29.4485f; p.compAttMs = 525.214f; p.compRelMs = 1.41494f; p.scHpHz = 3520.39f; p.scShelfHz = 14632.5f; p.scShelfDb = 13.083f; p.compMakeupDb = -0.804956f; p.s1 = 21.1679f; p.hpHz = 11.0f; break;  // Pump（測った D）
+            case 3: p.compThrDb = -15.5295f; p.compRatio = 2.62448f; p.compKneeDb = 25.8069f; p.compAttMs = 4.54381f; p.compRelMs = 6.68917f; p.scHpHz = 14.2928f; p.scShelfHz = 16748.4f; p.scShelfDb = 0.0532345f; p.compMakeupDb = 0.0191977f; p.s1 = 15.625f; p.s2 = 12.8853f; p.hpHz = 11.0f; p.compDb = 2.0f; break;  // Squeeze（測った C）
+            case 4: p.compThrDb = -15.0053f; p.compRatio = 2.66339f; p.compKneeDb = 25.8224f; p.compAttMs = 7.95258f; p.compRelMs = 13.3683f; p.scHpHz = 9.53802f; p.scShelfHz = 19995.7f; p.scShelfDb = 21.5035f; p.compMakeupDb = -0.129955f; p.s1 = 13.6051f; p.s2 = 13.2434f; p.lowShelfHz = 1418.06f; p.lowShelfDb = 0.184867f; p.compDb = 2.0f; break;  // Dense（測った G）
+            case 5: p.preDb = 5.76849f; p.emphHz = 181.337f; p.emphDb = 4.00934f; p.compThrDb = -0.153636f; p.compRatio = 58.6481f; p.compKneeDb = 14.2107f; p.compAttMs = 0.0209409f; p.compRelMs = 0.0252972f; p.scHpHz = 9950.55f; p.scShelfHz = 3787.26f; p.scShelfDb = 25.5963f; p.compMakeupDb = -6.53192f; p.s1 = 0.564187f; p.b1 = -0.0971159f; p.s2 = 0.468404f; p.hpHz = 11.0848f; p.lowShelfHz = 19956.2f; p.lowShelfDb = 1.27642f; p.compDb = 2.0f; break;  // Crunch（測った F）
+            case 6: p.preDb = 6.25258f; p.s1 = 1.40883f; p.a1 = 0.00102906f; p.b1 = 0.928392f; p.s2 = 1.41361f; p.b2 = 0.492458f; p.hpHz = 5.65155f; p.hpQ = 0.05f; p.trimDb = -7.92675f; break;  // Grit（測った E）
+            case 7: p.compThrDb = -67.3486f; p.compRatio = 10.5692f; p.compKneeDb = 13.1552f; p.compAttMs = 5.77088f; p.compRelMs = 5.48904f; p.scHpHz = 10226.1f; p.scShelfHz = 16303.1f; p.scShelfDb = 6.78153f; p.compMakeupDb = -0.0596563f; p.s1 = 0.875924f; p.hpHz = 11.0f; p.compDb = 2.0f; p.compGainMs = 0.0152879f; break;  // Pump（測った D）
             default: p.digital = 1; break;
         }
         return p;

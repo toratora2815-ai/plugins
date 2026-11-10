@@ -1,6 +1,6 @@
 // 数値テスト用: My Tremolo のエンジン（JUCE なし）でファイルを処理する
 //   render_mytrem in.f32 out.f32 bpm key=value ...   （48 kHz ステレオ、float の生データ）
-//   key: in out depth groove feel accent width shape rhythm rate sync style thr att rel gate rmod dmod lowkeep pattern=...
+//   key: ppq0（始まりの位置） jumpat・jumpto（その秒で位置を飛ばす） in out depth groove feel accent width shape rhythm rate sync style thr att rel gate rmod dmod lowkeep pattern=...
 //   出力は遅れ（28 サンプル）を取り除いてある
 #include "../Source/MyTremoloDSP.h"
 #include <cstdio>
@@ -15,7 +15,7 @@ int main (int argc, char** argv)
     fseek (f, 0, SEEK_END); long n = ftell (f) / 8; fseek (f, 0, SEEK_SET);
     std::vector<float> in ((size_t) n * 2); fread (in.data(), 4, (size_t) n * 2, f); fclose (f);
     const double bpm = atof (argv[3]);
-    Knobs k; Pattern pat; bool usePat = false; int bs = 256;
+    Knobs k; Pattern pat; bool usePat = false; int bs = 256; double ppq0 = 0, jumpAt = 1e9, jumpTo = 0;
     for (int i = 4; i < argc; ++i)
     {
         std::string a = argv[i]; auto e = a.find ('='); if (e == std::string::npos) continue;
@@ -26,7 +26,7 @@ int main (int argc, char** argv)
         else if (key == "rate") k.rateBpm = v; else if (key == "sync") k.sync = v > 0.5f; else if (key == "style") k.style = (int) v;
         else if (key == "thr") k.thresholdDb = v; else if (key == "att") k.attackMs = v; else if (key == "rel") k.releaseMs = v;
         else if (key == "gate") k.gate = v > 0.5f; else if (key == "rmod") k.rateModOct = v; else if (key == "dmod") k.depthMod = v;
-        else if (key == "lowkeep") k.lowKeepHz = v; else if (key == "bs") bs = (int) v;
+        else if (key == "lowkeep") k.lowKeepHz = v; else if (key == "bs") bs = (int) v; else if (key == "ppq0") ppq0 = atof (sv.c_str()); else if (key == "jumpat") jumpAt = atof (sv.c_str()); else if (key == "jumpto") jumpTo = atof (sv.c_str());
         else if (key == "pattern")
         {   // bars;beats;grid;cells
             int b = 1, bt = 4, g = 1; char cells[512] = {};
@@ -46,7 +46,7 @@ int main (int argc, char** argv)
     {
         const int m = (int) std::min ((long) bs, n + lat - s);
         float* ch[2] = { L.data() + s, R.data() + s };
-        Transport tr; tr.hostPlaying = true; tr.hasPosition = true; tr.hostBpm = bpm; tr.ppq = (double) s / 48000.0 * bpm / 60.0;
+        Transport tr; tr.hostPlaying = true; tr.hasPosition = true; tr.hostBpm = bpm; { const double ts = (double) s / 48000.0; tr.ppq = ts >= jumpAt ? jumpTo + (ts - jumpAt) * bpm / 60.0 : ppq0 + ts * bpm / 60.0; }
         eng.process (ch, m, k, tr);
     }
     std::vector<float> out ((size_t) n * 2);

@@ -89,11 +89,15 @@ namespace mytrem
         // 頭打ち: y = s·tanh((u + b)/s) − s·tanh(b/s)、u = x + a·x²/(1+x²)
         float s1 = 100, a1 = 0, b1 = 0;
         float s2 = 100, a2 = 0, b2 = 0;
-        float hpHz = 13.5f, hpQ = 0.75f;     // 出口の低域カット（2 次）
+        float hpHz = 13.5f, hpQ = 0.75f;     // 出口の低域カット（2 次。hpQ < 0.1 なら 1 次）
         float trimDb = 0;                    // 最後の倍率
         float lowShelfHz = 200, lowShelfDb = 0;   // 出口の低域の小さな傾き
         float compRms = 0;                   // 1 = コンプの耳を RMS（2 乗の平均）にする、0 = ピーク
-        int digital = 0;                     // 1 = 何も足さず、出口だけ −0.1 dB で硬くクリップ
+        float compDb = 0;                    // 1 = 縮める量（dB）そのものを ATTACK / RELEASE でならす（耳は瞬時値）、2 = 縮める時だけ倍率でならす
+        float compGainMs = 0;                // > 0 = 縮める量をさらに 1 次でならす（ms）
+        float compFb = 0;                    // 1 = 耳を VCA の後ろに置く（フィードバック型）
+        float compRmsMs = 0;                 // compDb のとき、耳を 2 乗の平均にする時定数（ms、0 = 瞬時値）
+        int digital = 0;                    // 1 = 何も足さず、出口だけ −0.1 dB で硬くクリップ
     };
 
     //==============================================================================
@@ -179,10 +183,10 @@ namespace mytrem
     {
         StyleParams p;
         double fsHi = 192000;
-        Shelf1 emph, deemph, scShelf, scHp, lowShelf;
+        Shelf1 emph, deemph, scShelf, scHp, lowShelf, hp1;
         Biquad hp;
         float pre = 1, makeup = 1, trim = 1, off1 = 0, off2 = 0;
-        float env = 0, attC = 0, relC = 0;
+        float env = 0, attC = 0, relC = 0, gainC = 0, rmsC = 0, msS = 0, grS = 0, grS2 = 0, fbPrev = 0;
         float compGain = 1;
 
         void prepare (double fsHigh, const StyleParams& sp)
@@ -193,7 +197,8 @@ namespace mytrem
             scShelf.setHigh (fsHi, p.scShelfHz, p.scShelfDb);
             scHp.setHighpass (fsHi, p.scHpHz);
             lowShelf.setLow (fsHi, p.lowShelfHz, p.lowShelfDb);
-            hp.setHighpass (fsHi, p.hpHz, p.hpQ);
+            hp.setHighpass (fsHi, p.hpHz, std::max (0.1f, p.hpQ));
+            hp1.setHighpass (fsHi, p.hpHz);
             pre = std::pow (10.0f, p.preDb / 20.0f);
             makeup = std::pow (10.0f, p.compMakeupDb / 20.0f);
             trim = std::pow (10.0f, p.trimDb / 20.0f);
@@ -201,12 +206,23 @@ namespace mytrem
             off2 = p.s2 * std::tanh (p.b2 / p.s2);
             attC = (float) std::exp (-1.0 / (std::max (0.01f, p.compAttMs) * 1e-3 * fsHi));
             relC = (float) std::exp (-1.0 / (std::max (0.01f, p.compRelMs) * 1e-3 * fsHi));
+            gainC = p.compGainMs > 0.001f ? (float) std::exp (-1.0 / (p.compGainMs * 1e-3 * fsHi)) : 0.0f;
+            rmsC = p.compRmsMs > 0.001f ? (float) std::exp (-1.0 / (p.compRmsMs * 1e-3 * fsHi)) : 0.0f;
             reset();
         }
         void reset()
         {
-            emph.reset(); deemph.reset(); scShelf.reset(); scHp.reset(); lowShelf.reset(); hp.reset();
-            env = 0; compGain = 1;
+            emph.reset(); deemph.reset(); scShelf.reset(); scHp.reset(); lowShelf.reset(); hp.reset(); hp1.reset();
+            env = 0; compGain = 1; msS = 0; grS = 0; grS2 = 0; fbPrev = 0;
+        }
+        inline float gainComputer (float ldb) const   // 入る音量（dB）→ 縮める量（dB、ニーつき）
+        {
+            const float over = ldb - p.compThrDb;
+            const float k = std::max (1e-3f, p.compKneeDb);   // ニー 0 でも 0/0 にならないように
+            if (2 * over < -k) return 0.0f;
+            if (2 * over > k) return over * (1 - 1 / p.compRatio);
+            const float t = over + k / 2;
+            return (1 - 1 / p.compRatio) * t * t / (2 * k);
         }
 
         // 1 段目（揺れの前）
@@ -217,17 +233,38 @@ namespace mytrem
             x = emph.process (x);
             if (p.compRatio > 1.001f)
             {
-                const float scv = scShelf.process (scHp.process (x));
-                const float sc = p.compRms > 0.5f ? 2.0f * scv * scv : std::abs (scv);   // RMS は正弦波のピークにそろえる
-                env = sc > env ? attC * env + (1 - attC) * sc : relC * env + (1 - relC) * sc;
-                const float ldb = p.compRms > 0.5f ? 10.0f * std::log10 (env + 1e-18f) : 20.0f * std::log10 (env + 1e-9f);
-                const float over = ldb - p.compThrDb;
-                const float k = p.compKneeDb;
+                const float scv = scShelf.process (scHp.process (p.compFb > 0.5f ? fbPrev : x));
                 float gr;
-                if (2 * over < -k) gr = 0;
-                else if (2 * over > k) gr = over * (1 - 1 / p.compRatio);
-                else { const float t = over + k / 2; gr = (1 - 1 / p.compRatio) * t * t / (2 * k); }
-                compGain = std::pow (10.0f, -gr / 20.0f) * makeup;
+                if (p.compDb > 0.5f)
+                {
+                    // 瞬時の音量 → 縮める量 → その量を ATTACK（増える時）/ RELEASE（減る時）でならす
+                    float ldb;
+                    if (p.compRms > 0.5f) { msS = rmsC * msS + (1 - rmsC) * 2.0f * scv * scv; ldb = 10.0f * std::log10 (msS + 1e-18f); }
+                    else ldb = 20.0f * std::log10 (std::abs (scv) + 1e-9f);
+                    const float gi = gainComputer (ldb);
+                    if (p.compDb > 1.5f)
+                    {
+                        // 2 = 縮める時は倍率（直線）でならし、戻す時は dB でならす（Pump の段の応答がこの形: 縮み始めがゆっくりで後半が速く、戻りは dB でまっすぐ）
+                        if (gi > grS)
+                        {
+                            const float gNow = std::pow (10.0f, -grS / 20.0f), gTo = std::pow (10.0f, -gi / 20.0f);
+                            grS = -20.0f * std::log10 (std::max (1e-9f, attC * gNow + (1 - attC) * gTo));
+                        }
+                        else grS = relC * grS + (1 - relC) * gi;
+                    }
+                    else grS = gi > grS ? attC * grS + (1 - attC) * gi : relC * grS + (1 - relC) * gi;
+                    gr = grS;
+                }
+                else
+                {
+                    const float sc = p.compRms > 0.5f ? 2.0f * scv * scv : std::abs (scv);   // RMS は正弦波のピークにそろえる
+                    env = sc > env ? attC * env + (1 - attC) * sc : relC * env + (1 - relC) * sc;
+                    gr = gainComputer (p.compRms > 0.5f ? 10.0f * std::log10 (env + 1e-18f) : 20.0f * std::log10 (env + 1e-9f));
+                }
+                if (gainC > 0) { grS2 = gainC * grS2 + (1 - gainC) * gr; gr = grS2; }
+                const float g = std::pow (10.0f, -gr / 20.0f);
+                fbPrev = x * g;
+                compGain = g * makeup;
                 x *= compGain;
             }
             return shaper (x, p.s1, p.a1, p.b1, off1);
@@ -239,7 +276,7 @@ namespace mytrem
             x = shaper (x, p.s2, p.a2, p.b2, off2);
             x = deemph.process (x);
             x = lowShelf.process (x);
-            x = hp.process (x);
+            x = p.hpQ < 0.1f ? hp1.process (x) : hp.process (x);   // hpQ < 0.1 = 1 次（Grit の止まった後の戻り方がこの形）
             return x * trim;
         }
     };

@@ -124,7 +124,7 @@
 - Deca Satu（DecaSatu）1.1.0 … トラック用サチュレーター（本人の Mac の市販サチュレーターを測って合わせ込み）。STYLE A/E/N/T/P・DRIVE・PUNISH・LOW CUT＋THUMP・TONE・HIGH CUT＋STEEP・MIX・OUTPUT。
   本物の AUTO は GAIN MATCH に統合（ON の間だけ AUTO の量を中で使う）。DSP は DecaSatuDSP.h（JUCE なし、後で Forge Strip に入れられる）。Plugin Link は Gain Stage の LEVEL MATCH だけ（Kind 20 は未登録）。測定の道具は build/decalab
 
-- My Tremolo（MyTremolo）1.0.0 … トレモロの全部入り（本人の Mac の市販トレモロを測って合わせ込み）。DEPTH / GROOVE / FEEL / ACCENT / RATE＋SYNC＋TAP / WIDTH / LOW KEEP、
+- My Tremolo（MyTremolo）1.1.0 … トレモロの全部入り（本人の Mac の市販トレモロを測って合わせ込み）。DEPTH / GROOVE / FEEL / ACCENT / RATE＋SYNC＋TAP / WIDTH / LOW KEEP、
   RHYTHM（4 Bars〜1/32、付点・3 連、Pattern = 升目で描く）、SHAPE 15 種＋Custom（点で描く、SMOOTH 5 種）、ENVELOPE（THRESHOLD・ATTACK・RELEASE・RATE MOD ±6 oct・DEPTH MOD・Env/Gate）、
   STYLE 8 種（Digital＋測った色付け 7 種）、内蔵プリセット 30 個。DSP は MyTremoloDSP.h（JUCE なし）。Plugin Link は Fader Pilot の歌で揺れを浅く（Kind 21 は未登録）。測定の道具は build/tremlab
 
