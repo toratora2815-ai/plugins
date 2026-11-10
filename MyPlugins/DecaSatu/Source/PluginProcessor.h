@@ -27,7 +27,7 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 3.5; }   // 大きい音が止まったあとの低い揺れが消えるまで（STYLE E で 3.3 秒）
+    double getTailLengthSeconds() const override { return 5.0; }   // 大きい音が止まったあとの低い揺れが消えるまで
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }

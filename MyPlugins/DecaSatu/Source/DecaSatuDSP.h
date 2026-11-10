@@ -185,21 +185,32 @@ namespace decasatu
         }
         double slopePos = 0;   // 傾きは 0 以上だけ（マイナスだと強く入れたとき形が折り返して大きくなる）
 
-        void prepare (double sampleRate, const StyleModel& model, const float* tp, const float* tn)
+        // 2 段目の歪み（1 段目の出口 × 段の間の倍率 → 結合コンデンサ → プラス・マイナス別の飽和）
+        const float* tabP2 = nullptr;
+        const float* tabN2 = nullptr;
+        double cc2 = 0, kcc2 = 0, nl20 = 0;
+        double peakCc = 0, peakSag = 0, peakCc2 = 0;   // 当てはめの道具が上限を決めるために見る（音には使わない）
+        inline double nl2 (double u) const noexcept
         {
-            tabP = tp; tabN = tn;
+            return u >= 0 ? p.lp2 * look (tabP2, u / p.lp2, p.kp2) : -p.ln2 * look (tabN2, -u / p.ln2, p.kn2);
+        }
+
+        // tb: この STYLE の表 4 本（1 段目のプラス・マイナス、2 段目のプラス・マイナス）
+        void prepare (double sampleRate, const StyleModel& model, const float (*tb)[kTab + 2])
+        {
             fsBase = sampleRate;
             os = sampleRate < 60000 ? 4 : (sampleRate < 120000 ? 2 : 1);
             fsOs = sampleRate * os;
             for (auto* f : { &up1, &dn1 }) f->design (kOsBeta1);
             for (auto* f : { &up2, &dn2 }) f->design (kOsBeta2);
-            setModel (model, tp, tn);
+            setModel (model, tb);
             reset();
         }
-        void setModel (const StyleModel& model, const float* tp, const float* tn)
+        void setModel (const StyleModel& model, const float (*tb)[kTab + 2])
         {
             p = model;
-            tabP = tp; tabN = tn;
+            tabP = tb[0]; tabN = tb[1]; tabP2 = tb[2]; tabN2 = tb[3];
+            kcc2 = 1 - std::exp (-2 * kPi * std::max (0.01f, p.cc2Hz) / fsOs);
             slopePos = std::max (0.0f, p.slope);
             pre[0].designHp1 (p.hpf, fsBase);
             pre[1].design (Biquad::lowShelf, p.lsf, p.lsg, 0.707, fsBase);
@@ -212,31 +223,51 @@ namespace decasatu
             kdc = 1 - std::exp (-2 * kPi * p.dcHz / fsBase);
             kdc2 = 1 - std::exp (-2 * kPi * p.dc2Hz / fsBase);
             nl0 = nl (p.bias);
+            nl20 = nl2 (p.bias2);
         }
         void reset()
         {
             for (auto& b : pre) b.reset();
             post.reset(); up1.reset(); dn1.reset(); up2.reset(); dn2.reset();
-            cc = sagM = sagE = dc = dc2 = 0;
+            cc = sagM = sagE = dc = dc2 = cc2 = 0;
+            peakCc = peakSag = peakCc2 = 0;
         }
 
         // 高いサンプリングでの 1 サンプル（u はドライブ後の信号）
+        double stage2Gain = 1;   // 段の間の倍率（DRIVE で変わる。process で受け取る）
+
+        // 無音を流して、中心のずれ・直流カットを落ち着いた状態にしておく（読み込んだ直後のうねりを出さない。prepare だけで使う）
+        void settle (double seconds, double drive)
+        {
+            const int n = (int) (seconds * fsBase);
+            const double ig = std::pow (10.0, (p.g2A + p.g2B * drive / 10.0) / 20.0);   // 今の DRIVE での段の間の倍率で落ち着かせる
+            for (int i = 0; i < n; ++i) process (0.0, 1.0, ig);
+        }
         inline double core (double u) noexcept
         {
             const double g = u - cc;
             const double over = g + p.bias - p.gth;
             if (over > 0) cc += kgc * over;
             cc += kcc * (u - cc);
+            // 当てはめた範囲で振れた量の 1.5 倍まで（PUNISH の極端な所で、止めた後に大きく揺れ戻らないように）
+            cc = std::clamp (cc, -(double) p.ccMax, (double) p.ccMax);
+            if (cc > peakCc) peakCc = cc; else if (-cc > peakCc) peakCc = -cc;
             const double gin = g + p.bias - p.sagAmt * sagM - p.sagEnv * sagE;
             const double v = nl (gin) - nl0;
-            sagM += ksag * (v - sagM);
-            sagE += ksag * (std::fabs (v) - sagE);
-            return post.process (v);
+            sagM = std::clamp (sagM + ksag * (v - sagM), -(double) p.sagMax, (double) p.sagMax);
+            sagE = std::min (sagE + ksag * (std::fabs (v) - sagE), (double) p.sagMax);
+            peakSag = std::max (peakSag, std::max (std::fabs (sagM), sagE));
+            const double w = v * stage2Gain;
+            const double g2 = w - cc2;
+            cc2 = std::clamp (cc2 + kcc2 * g2, -(double) p.cc2Max, (double) p.cc2Max);
+            if (cc2 > peakCc2) peakCc2 = cc2; else if (-cc2 > peakCc2) peakCc2 = -cc2;
+            return post.process (nl2 (g2 + p.bias2) - nl20);
         }
 
         // x: 入口（LOW CUT・TONE 済み）、driveGain: 倍率
-        inline double process (double x, double driveGain) noexcept
+        inline double process (double x, double driveGain, double interGain) noexcept
         {
+            stage2Gain = interGain;
             double u = x;
             for (auto& b : pre) u = b.process (u);
             u *= driveGain;
@@ -323,21 +354,26 @@ namespace decasatu
 
         Engine() { for (int s = 0; s < 5; ++s) { models[s] = kStyles[s]; buildStyleTables (s); } }
 
-        void prepare (double sampleRate, int numChannels)
+        // initialStyle: 今の STYLE。準備の中で無音を流して落ち着かせておく（音のスレッドでは重い処理をしない）
+        void prepare (double sampleRate, int numChannels, int initialStyle = 0, float initialDrive = 0)
         {
             fs = sampleRate; nch = std::clamp (numChannels, 1, maxCh);
             for (auto& c : ch)
             {
-                c.cur.prepare (fs, models[0], tabs[0][0], tabs[0][1]);
-                c.prev.prepare (fs, models[0], tabs[0][0], tabs[0][1]);
-                c.dryP.prepare (fs, models[0], tabs[0][0], tabs[0][1]); c.dryP.prepareDry();
+                c.cur.prepare (fs, models[0], tabs[0]);
+                c.prev.prepare (fs, models[0], tabs[0]);
+                c.dryP.prepare (fs, models[0], tabs[0]); c.dryP.prepareDry();
                 designHighCut (c);
             }
+
             curStyle = -1; prevStyle = -1; xfade = 0;
             smDrive = smOut = -1e9; smMix = -1; smSteep = -1;
             lastLow = lastTone = -1e9; lastQ = -1;
-            smLowLog = smTone = smHc = smQ = -1e9;
+            smLowLog = smTone = smHc = smQ = smFac = -1e9;
             reset();
+            const int st0 = std::clamp (initialStyle, 0, 4);
+            for (int c = 0; c < nch; ++c) { ch[c].cur.setModel (models[st0], tabs[st0]); ch[c].cur.reset(); ch[c].cur.settle (1.0, initialDrive); }
+            curStyle = st0;
         }
         void reset() { for (auto& c : ch) c.reset(); xfade = 0; }
 
@@ -345,14 +381,15 @@ namespace decasatu
         void setStyleModel (int s, const StyleModel& m)
         {
             models[s] = m; buildStyleTables (s);
-            if (s == curStyle) for (auto& c : ch) c.cur.setModel (m, tabs[s][0], tabs[s][1]);
+            if (s == curStyle) for (auto& c : ch) c.cur.setModel (m, tabs[s]);
         }
         const StyleModel& styleModel (int s) const { return models[s]; }
+        void peaks (double* out) const { out[0] = ch[0].cur.peakCc; out[1] = ch[0].cur.peakSag; out[2] = ch[0].cur.peakCc2; }   // 当てはめの道具用
 
         // オーバーサンプリングの遅れ（サンプル、整数に丸めた値）。原音も同じだけ遅らせてあるので MIX はずれない
         int latencySamples() const
         {
-            StyleProc t; t.prepare (fs, models[0], tabs[0][0], tabs[0][1]); t.prepareDry();
+            StyleProc t; t.prepare (fs, models[0], tabs[0]); t.prepareDry();
             double num = 0, den = 0;   // 低い音の山の重心
             for (int i = 0; i < 160; ++i)
             {
@@ -383,7 +420,8 @@ namespace decasatu
             {
                 const double v = (tLow - std::log (20.0)) / std::log (50.0);
                 const double tQ = k.thump ? kThumpQ (v) : kLowCutQ (v);
-                const bool moving = smTone != tTone || smLowLog != tLow || smQ != tQ;
+                const double tFac = k.thump ? 1.0 : 0.1 + 0.9 * std::min (1.0, (std::exp (tLow) - 20.0) / 10.0);
+                const bool moving = smTone != tTone || smLowLog != tLow || smQ != tQ || smFac != tFac;
                 const int m = std::min (moving ? 1 : kChunk, n - off);
                 for (int c = 0; c < nch; ++c) p[c] = io[c] + off;
                 processChunk (p, m, k);
@@ -394,17 +432,20 @@ namespace decasatu
     private:
         double fs = 48000; int nch = 2;
         StyleModel models[5];
-        float tabs[5][2][StyleProc::kTab + 2];
+        float tabs[5][4][StyleProc::kTab + 2];
         Channel ch[maxCh];
         int curStyle = -1, prevStyle = -1, xfade = 0, xfadeLen = 1;
-        double smDrive = 0, smOut = 0, smMix = 1, smSteep = 0;
-        double lastLow = -1, lastTone = -1, lastQ = -1;
+        double smDrive = 0, smOut = 0, smMix = 1, smSteep = 0, smKnob = -1;
+        double prevDg = 1, prevIg = 1;
+        double lastLow = -1, lastTone = -1, lastQ = -1, lastFac = -1, smFac = -1e9;
         double smLowLog = -1e9, smTone = -1e9, smHc = -1e9, smQ = -1e9;   // つまみのなめらか化（30 ms）
 
         void buildStyleTables (int s)
         {
             StyleProc::buildTable (tabs[s][0], models[s].kp);
             StyleProc::buildTable (tabs[s][1], models[s].kn);
+            StyleProc::buildTable (tabs[s][2], models[s].kp2);
+            StyleProc::buildTable (tabs[s][3], models[s].kn2);
         }
 
         void processChunk (float* const* io, int n, const Knobs& k)
@@ -416,12 +457,13 @@ namespace decasatu
                 for (int c = 0; c < nch; ++c)
                 {
                     if (curStyle >= 0) ch[c].prev = ch[c].cur;           // 前のスタイルは状態ごと続けて鳴らし、消えていく
-                    ch[c].cur.setModel (models[want], tabs[want][0], tabs[want][1]);   // 新しい方も状態を引き継ぐ（空から始めない）
+                    ch[c].cur.setModel (models[want], tabs[want]);   // 新しい方も状態を引き継ぐ（空から始めない）
                     if (curStyle < 0) ch[c].cur.reset();
                 }
                 xfade = curStyle >= 0 ? (int) (0.025 * fs) : 0;
                 xfadeLen = std::max (1, xfade);
                 prevStyle = curStyle; curStyle = want;
+                if (prevStyle >= 0) { prevDg = std::pow (10.0, smDrive / 20.0); prevIg = std::pow (10.0, (models[prevStyle].g2A + models[prevStyle].g2B * smKnob / 10.0) / 20.0); }
                 lastTone = -1e9;   // TONE の前後の配分は STYLE ごとに違う
             }
             const int st = curStyle;
@@ -431,11 +473,10 @@ namespace decasatu
             const double tOut = k.outputDb + k.extraGainDb;
             const double tMix = std::clamp ((double) k.mix, 0.0, 1.0);
             const double tSteep = k.steep ? 1.0 : 0.0;
-            if (smDrive < -1e8) { smDrive = tDrive; smOut = tOut; smMix = tMix; smSteep = tSteep; }
+            if (smDrive < -1e8) { smDrive = tDrive; smOut = tOut; smMix = tMix; smSteep = tSteep; smKnob = k.drive; }
             const double a = 1 - std::exp (-1.0 / (0.02 * fs));
             const double aSteep = 1 - std::exp (-1.0 / (0.015 * fs));
-            const double prevDriveDb = prevStyle >= 0 ? driveDb (k, prevStyle) : tDrive;
-            const double pg = std::pow (10.0, prevDriveDb / 20.0);
+            const double pg = prevDg;   // 前の STYLE は切り替えた瞬間の倍率のまま消えていく
 
             const double hcTarget = std::clamp (std::log (k.highCutHz / 1000.0) / std::log (20.0), 0.0, 1.0) * (kHcSteps - 1);
             if (smHc < -1e8) smHc = hcTarget;
@@ -451,9 +492,15 @@ namespace decasatu
                 smMix += a * (tMix - smMix);
                 smSteep += aSteep * (tSteep - smSteep);
                 if (std::fabs (smSteep - tSteep) < 1e-6) smSteep = tSteep;
+                smKnob += a * (k.drive - smKnob);
                 const double dg = std::pow (10.0, smDrive / 20.0);
+                const double ig = std::pow (10.0, (models[st].g2A + models[st].g2B * smKnob / 10.0) / 20.0);
+                const double pig = prevIg;
                 const double og = std::pow (10.0, smOut / 20.0);
-                const double xf = xfade > 0 ? 0.5 - 0.5 * std::cos (kPi * (double) xfade / xfadeLen) : 0.0;   // なめらかな曲線で混ぜる（始めと終わりに折れ目を作らない）
+                // 最初の 4 ms は新しい STYLE をまだ鳴らさない（係数が変わった直後の揺れを隠す）。残りをなめらかな曲線で混ぜる
+                const int hold = (int) (0.004 * fs); const int el = xfadeLen - xfade;
+                const double ph = el < hold ? 0.0 : (double) (el - hold) / std::max (1, xfadeLen - hold);
+                const double xf = xfade > 0 ? 0.5 + 0.5 * std::cos (kPi * ph) : 0.0;
                 for (int c = 0; c < nch; ++c)
                 {
                     auto& C = ch[c];
@@ -461,8 +508,8 @@ namespace decasatu
                     if (! std::isfinite (in)) in = 0.0;   // NaN・無限大は無音として扱う
                     double x = C.lowCut.process (in);
                     x = C.tonePre[1].process (C.tonePre[0].process (x));
-                    double w = C.cur.process (x, dg);
-                    if (xf > 0) w = w * (1 - xf) + C.prev.process (x, pg) * xf;
+                    double w = C.cur.process (x, dg, ig);
+                    if (xf > 0) w = w * (1 - xf) + C.prev.process (x, pg, pig) * xf;
                     w = C.tonePost[1].process (C.tonePost[0].process (w));
                     // HIGH CUT: ゆるやか・急の全段を動かし続け、使う 2 段を混ぜ、さらに STEEP で混ぜる
                     double g0 = 0, g1 = 0, s0 = 0, s1 = 0;
@@ -526,12 +573,16 @@ namespace decasatu
             const double qT = k.thump ? kThumpQ (v) : kLowCutQ (v);
             smQ = smQ < -1e8 ? qT : smQ + ab * (qT - smQ);
             if (std::fabs (smQ - qT) < 1e-4) smQ = qT;
-            if (std::fabs (lc - lastLow) > 1e-6 * lc || smQ != lastQ)
+            const double facT = k.thump ? 1.0 : 0.1 + 0.9 * std::min (1.0, (lc - 20.0) / 10.0);
+            smFac = smFac < -1e8 ? facT : smFac + ab * (facT - smFac);
+            if (std::fabs (smFac - facT) < 1e-4) smFac = facT;
+            if (std::fabs (lc - lastLow) > 1e-6 * lc || smQ != lastQ || smFac != lastFac)
             {
-                // いちばん下（20 Hz）でも素通しにせず、本物と同じく 10 Hz ほどの低域カットを動かし続ける（THUMP の ON/OFF でプチッとしない）
-                const double fEff = lc * (0.5 + 0.5 * std::min (1.0, (lc - 20.0) / 10.0));
+                // いちばん下（20 Hz）は本物どおり実質切らない（2 Hz）。THUMP が ON なら 20 Hz で山を作る。
+                // 素通しに切り替えず、切れ目の位置（smFac）もなめらかに動かす（THUMP の ON/OFF でプチッとしない）
+                const double fEff = lc * smFac;
                 for (auto& c : ch) c.lowCut.design (Biquad::highPass, fEff, 0, smQ, fs);
-                lastLow = lc; lastQ = smQ;
+                lastLow = lc; lastQ = smQ; lastFac = smFac;
             }
             // TONE
             const double tT = std::clamp ((double) k.tone, -1.0, 1.0);

@@ -68,7 +68,7 @@ bool DecaSatuProcessor::isBusesLayoutSupported (const BusesLayout& layouts) cons
 
 void DecaSatuProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    engine.prepare (sampleRate, juce::jmax (1, getTotalNumOutputChannels()));
+    engine.prepare (sampleRate, juce::jmax (1, getTotalNumOutputChannels()), (int) pStyle->load(), pDrive->load());
     setLatencySamples (engine.latencySamples());
     gainMatch.prepare (sampleRate, getTotalNumOutputChannels(), samplesPerBlock);
 }

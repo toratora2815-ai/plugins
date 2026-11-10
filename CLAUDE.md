@@ -120,7 +120,7 @@
 - Drum Transient（DrumTransient）1.1.0 … ドラム専用のトランジェント・リミッター（Uni-L を測って合わせ込み、ドラム用に絞った）。PUSH / PUNCH / BODY / CLIP⇄LIMIT / RELEASE / LOW KEEP / CEILING、LINK・DELTA、
   LEARN（PUSH を自動で 1 回）、ATTACK と BODY を流す表示、内蔵プリセット 6 個。キック・スネアは Fire Box と 2 つ挿し（自分のプリセット「キック迫力」など＋チャンネルストリップ設定）。遅れ 9.0 ms。GAIN MATCH は下げるだけ（limitBoost 0）。Plugin Link は LINK 欄だけ（Kind 19 は未登録）
 
-- Deca Satu（DecaSatu）1.0.0 … トラック用サチュレーター（本人の Mac の市販サチュレーターを測って合わせ込み）。STYLE A/E/N/T/P・DRIVE・PUNISH・LOW CUT＋THUMP・TONE・HIGH CUT＋STEEP・MIX・OUTPUT。
+- Deca Satu（DecaSatu）1.1.0 … トラック用サチュレーター（本人の Mac の市販サチュレーターを測って合わせ込み）。STYLE A/E/N/T/P・DRIVE・PUNISH・LOW CUT＋THUMP・TONE・HIGH CUT＋STEEP・MIX・OUTPUT。
   本物の AUTO は GAIN MATCH に統合（ON の間だけ AUTO の量を中で使う）。DSP は DecaSatuDSP.h（JUCE なし、後で Forge Strip に入れられる）。Plugin Link は Gain Stage の LEVEL MATCH だけ（Kind 20 は未登録）。測定の道具は build/decalab
 
 ### 単体 Mac アプリ（.app）
