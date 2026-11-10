@@ -20,7 +20,9 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
   normalise（層ごとに中央値へ ±12 dB まで、ピッキングの層は全部 −21 dB RMS にそろえる。下の MEDIUM の項）、candidates（同じ弦優先、下げ 0〜3 半音優先、開放の録音は開放だけ）、FLAC で保存
 - KitVoice.h … 48 ボイス、Hermite、奏法ピッチ、2 段 1 極ローパス、choke 12 ms、params.lastTake で同じ録音の連続を避ける
 - Articulations.h … VoiceParams、奏法、StringAllocator（手の位置 hand、和音は 50 ms 以内に始まった弦を避ける、チャンネル 11〜16 = 画面の試聴で弦指定）、GuitarSynth
-- FXChain.h … AMP ページの流れ（4 倍 OS の AMP → CAB → リバーブ → OUTPUT、AMP / CAB の ON/OFF は S 字 15 ms クロスフェード）。中身は Amp.h（下の AMP の項）
+- Rig.h … 音の流れ全体（COMP / DRIVE / FUZZ / AMP を fxOrder の順に → CAB → OUTPUT、下の「並べ替え」の項）
+- FXChain.h … AMP の部品（processAmp = 4 倍 OS の AMP、processCabOut = CAB → OUTPUT、AMP / CAB の ON/OFF は S 字 15 ms クロスフェード）。中身は Amp.h（下の AMP の項）
+- AmpPad.h … AMP の後ろにペダルがあるときのそろえる量の表（RenderTest --padtable で作る）
 - 状態: "AIOG" マジック＋APVTS＋キットの ValueTree（FLAC）。99 音で約 8 MB
 - Plugin Link: Kind 17 を PluginLink.h に**まだ足していない**（kAIOGuitarLinkKind）。次に Shared を触るときに kindAIOGuitar = 17 として足す。今は LINK 欄だけ
 
@@ -40,8 +42,8 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
 - 音の部品は単体と共有: MyPlugins/WoolFuzz/Source/WoolFuzzDSP.h・MyPlugins/PorchDrive/Source/PorchDriveDSP.h（namespace pedal）。
   切り出す前の HEAD と最大差 1.2e-7・遅れ 4 で同じことを確認（scratch の pedaleq）。CMakeLists で ../WoolFuzz/Source と ../PorchDrive/Source を include
   → **Wool Fuzz / Porch Drive を変えたら AIO Guitar もビルドし直す**（build.yml の依存の追加は workflow 権限がなくまだ push できていない）
-- Pedals.h: PedalSlot（OFF は計算せず latency 分の遅らせだけ、ON/OFF 15 ms クロスフェード、走り出しで reset）、PedalBoard（順番の入れ替えは 5 ms 下げ → 次のブロックで入れ替え → 5 ms 上げ）
-- パラメーター pdOn/pdGain/pdTone/pdLevel、wfOn/wfSustain/wfTone/wfVolume、pedalOrder。範囲と初期値は単体と同じ
+- Pedals.h: PedalSlot（OFF は計算せず latency 分の遅らせだけ、ON/OFF 15 ms クロスフェード、走り出しで reset）。並べるのは Rig.h
+- パラメーター pdOn/pdGain/pdTone/pdLevel、wfOn/wfSustain/wfTone/wfVolume。範囲と初期値は単体と同じ。順番は fxOrder（0.3.0 から。前の pedalOrder は読み替え）
 - 休止: 入力が 0.5 s 無音かつ前のブロックの出力ピーク < 1e-5 で EFFECTS と AMP を止めて無音（fxSleeping）。リバーブ最大でも −96 dBFS まで待つ
 - AMP と CAB が両方 OFF のときだけ出口でソフトクリップ（−6 dBFS から上を丸めて 0 dBFS を超えない）
 - 古い FXChain のゲート・コンプ・ドライブはパラメーターごと外した（fx.compOn=false など固定）。内蔵プリセットもペダルで作り直し
@@ -113,18 +115,51 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
 - 出口のソフトクリップは常に（−6 dBFS から丸めて 0 dBFS を超えない）。FXChain の入口で NaN / inf のブロックは 0 にして reset。リバーブは標準 0、0 にしてから 0.3 秒で止める
 - 前の版の状態（ampChannel・cabMic）は setStateInformation で読み替え（チャンネル 0/1/2 → モデル 0/3/4、箱 0/1/2 → 2/1/0）
 
-## 次に何か頼まれたとき、一緒に直す（2026-11-09 本人「次なんか注文するときに一緒に直して」）
-1. 休み中に REVERB を変えると、次の 1 音目の頭 10 ms が ±2.6 dB（juce::Reverb のならし。休み中に dry/wet を即合わせる仕組みが要る）
-2. 休み中に IR を 5〜16 ms 以内に 2 つ続けて読むと、ときどき 1 音目の頭 25 ms が 1 つ前の IR（Cab::prepareIR で、休み中は済んだあとも 0.3 秒ほど空回しして最後に conv.reset）
-3. 内蔵リバーブ（juce::Reverb、標準 OFF）は質が低い → 外すか作り直すかを本人に聞く（外すと AMP ページの OUTPUT 欄がすっきり）
-4. 鍵盤で手弾きした和音のアップストロークは「上 N 本だけ」が効かず全部鳴る（Strummer::joinGroup。最初の音は待てないので、後から来た下の弦を鳴らさない形にできるか）
+## 並べ替え（2026-11-10 本人「エフェクターの順番を自由に。アンプをどこに置くかも。真ん中に置いたらアンプをいじるのがアンプの画面」）
+- 本人の決定: CAB はいつも最後（AMP と一緒に動かさない）、内蔵リバーブは外す。mix-engineer「作る価値あり」（条件: CAB 固定・リバーブを外す・AMP の後ろに固定のそろえ）
+- fxOrder（AudioParameterChoice、24 通り＝4 つの並べ方、版のヒント 2、オートメーション不可）。並びの番号は std::next_permutation の順（0 = Comp > Drive > Fuzz > Amp）。
+  rig::orderAt / indexOf / moved（1 つ取り出して入れ直す）/ fromOldPedalOrder（前の pedalOrder 1 = 2 番 Comp > Fuzz > Drive > Amp）。
+  状態の読み込み（migrateOrder）で pedalOrder → fxOrder。自分のプリセット（PresetBar の XML）にある古い pedalOrder は読み替えない（Shared を触らないため。0.2.0 は 1 日だけ）
+- Rig::processChunk: 入口と各チャンクの後で NaN / inf / |x| ≥ 1e4 を見張る（あれば全部 reset）。並びを変えたら S 字 5 ms 下げ → 次のチャンクで入れ替え → 5 ms 上げ（CAB の前で）。
+  休み中は Rig::rest で即入れ替え。遅れの合計は並びに関係なく同じ（12 サンプル @48k）
+- AMP の後ろにペダルがあるとき: AMP の出口に ampPad::padDb（機種 × GAIN 5 点 × MASTER 5 点の表、双一次補間、−36〜＋12 dB）を掛け、最後のペダルの後で割り戻す。
+  15 ms の掛け算型スムージング。表は DI（1 音 −21 dB RMS の単音＋ダウンストロークの和音）を CAB なしで通した RMS の差。AMP の出口は DI より小さいことが多い（＋の値が多い）
+- 画面: EffectsPage.h（MovableBlock = 動かせる箱、PedalPanel・AmpBlock。箱をドラッグ（6 px 以上動いたら）→ 一番近い場所に入れ直し、◀ ▶ で 1 つずつ。
+  AMP の箱を押す・CAB の箱を押す → AMP ページ。幅 240 未満ではペダルのつまみを 2＋1 の三角に）。AmpPage.h のいちばん上に今の並び（AMP を光らせる）と「順番を変える（EFFECTS）▸」
+- 内蔵リバーブ（juce::Reverb、revMix / revSize）はパラメーターごと外した。持ち越しの 1 番（休み中にリバーブを変えると頭 10 ms が揺れる）もこれで消えた
+
+## 2026-11-09 の持ち越し（0.3.0 で直した）
+- 1. 休み中の REVERB → リバーブごと外した
+- 2. 休み中に IR を 2 つ続けて読む → Cab::prepareIR で、受け渡しのたびに settleLeft = 0.3 秒。済んだ後も休み中は無音で回し、getCurrentIRSize が変わるたびに conv.reset（遅れて入った 2 つ目のクロスフェードを切る）。
+  ついでに runSilent が 256 サンプルまでしか回していなかったのを、ブロック全部を 256 ずつ回すように
+- 3. 内蔵リバーブ → 本人「外す」
+- 4. 手弾きのアップストローク → Strummer::joinGroup: 後から来た音を足した和音全体で弦の高い順に上 N 本を決め、外れた弦は「まだ待っている → 鳴らさない（dropped、SCORE には知らせる）」
+  「もう鳴っている → その場所で止める（GuitarSynth::chokeMessage = チャンネル 16 の CC 102、値 100＋弦、シンセが 12 ms で choke）」。
+  低い弦から来ると、6・5 弦は 5〜20 ms だけ鳴ってから止まる（ピックがかすった感じ）。前の和音の低い弦は戻らない
+- ついでに: UP STRINGS の「All」が 5 本までしか鳴らなかった（upStrings = 5）→ 6
+- DSP 検査 1 回目「直してから」: choke が「予想した弦」（predictStrings）を止めていた。シンセは鳴らす瞬間に弦を選び直すので、ずれると低い弦が残るか上の弦が切れる
+  → STRUM ON の音は、ストラマーが決めた弦（SCORE の弦が優先、Strummer::scoreString）を GuitarSynth::strumStringForNote で渡してシンセがそこで鳴らす
+  （待ち中は stringForDelayed）。外から来た ch16 の CC 102 は Strummer::process で捨てる
+- DSP 検査 2〜4 回目: 全部の音を強制すると単音のレガートの弦選びとバレーの和音が悪くなった → 形を変えた:
+  単音はシンセが選ぶ（0.2.0 と同じ）。手弾き和音の 2 音目が来たら、前のブロックで鳴った音の弦は GuitarSynth::stringOf で読み、同じブロックの単音には予想を渡す。
+  和音（emitChord）は SCORE の弦 → 高い音から nearestFree（空き弦）。後から来る音（joinGroup）は 行き先 → 順位付けで止める → 残す音の弦を避けて nearestFree、
+  空きがなければアップは「この音より低く、その弦でこの音が弾ける音のうちいちばん低い音」に弦を譲ってもらう（上の音＝メロディーを残す）、ダウンはシンセに任せる。
+  4 回目「渡してよい」: 低い弦が残る 0（0.2.0 は 534〜969）、ダウンの 1 音欠けは 0.2.0 より少ない、単音は 0.2.0 と同じ、止まらない音 0
+- 前から（0.2.0 から）ある: 手弾きのバレー・ハイポジ和音のダウンで 1 音欠けるのが 1〜2 割（StringAllocator が先読みせず 1 音ずつ決めるため）
+
+## まだ直していないこと（DSP 検査 2026-11-10、急がない）
+- COMP を AMP の後ろに置いたまま、鳴らしながら AMP の機種・プリセットを替えると 20〜26 ms だけ +4〜5 dB（コンプのピック抜け +5 dB と、
+  pad の 15 ms・機種切替の 5 ms 下げ 10 ms 上げ・GAIN の 30 ms のずれ、表の +12 dB 頭打ち）。出口のクリップで 0 dBFS は超えない。pad を 30 ms にすると GAIN 0→10 が悪化したので、時間合わせだけでは直らない
+- 0.2.0 で保存した自分のプリセット（.mypreset）の pedalOrder は読み替えない（PresetBar の load は setStateInformation を通らない）
 
 ## テスト
 `-DAIO_BUILD_RENDER_TEST=ON` で RenderTest。疑似 DI（±20 セント、±6 dB、弦の硬さ指定可）で切り分け・弦・音程・音量・連打・choke・ミュート・状態を確認。
-`RenderTest <出力> [弦の硬さ 0〜0.0004]`
+`RenderTest <出力> [弦の硬さ 0〜0.0004]`、`RenderTest --padtable`（AmpPad.h の表を出す、約 1 分）、`RenderTest --amp ...`（AMP の音を WAV で）
 
 ## 版
 - 0.1.0（2026-11-08）… リポジトリに移す。MY GUITAR ページ（録音 4 欄、弦とフレットの表、PLAYING、奏法）、SCORE ページ（タブ譜、FOLLOW LOGIC / PLAY IN SYNC、DRAG TO LOGIC）、タブ 4 つ（EFFECTS / AMP は仮）、LINK 欄・プリセット欄。
   DSP 検査 1 回目「直してから」→ 確保 0 回・キット差し替え 12 ms フェード・グライドを段ごと・Palm Mute をならす・96k を間引く・decode の範囲チェック → 2 回目「渡してよい」
+- 0.3.0（2026-11-10）… EFFECTS で COMP / DRIVE / FUZZ / AMP を好きな順に（Rig.h、AMP の後ろはそろえ AmpPad.h）、CAB はいつも最後、内蔵リバーブを外す、
+  持ち越し 4 件（IR 2 つ続けて・手弾きアップストローク・UP STRINGS All）、内蔵プリセット「Even Lead (Drive > Comp)」。mix-engineer「作る価値あり」、DSP 検査 2 回
 - 0.2.0（2026-11-09）… 強さ MEDIUM の層（3 層、ベロシティ 1〜60 / 61〜100 / 101〜127、層は同じ音量でベロシティのカーブ約 20 dB）、
   Cotton Comp、AMP を作り直し（Amp Designer 実測）、録音の尻尾をノイズ +8 dB で切って 80 ms フェード。DSP 検査 3 回

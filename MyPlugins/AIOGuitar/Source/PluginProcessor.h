@@ -1,7 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "Articulations.h"
-#include "FXChain.h"
+#include "Rig.h"
 #include "Pedals.h"
 #include "KitVoice.h"
 #include "Score.h"
@@ -126,8 +126,7 @@ private:
 
     VoiceParams voiceParams;
     GuitarSynth synth { voiceParams };
-    FXChain chain;
-    PedalBoard pedals;
+    Rig rig;   // pedals + AMP in the chosen order, CAB, OUTPUT
     Strummer strum;
     Strummer::Settings strumSet;
     int quietSamples = 0;

@@ -1,6 +1,7 @@
 #pragma once
 // AMP ページ: アンプのヘッド（5 種類、GAIN / BASS / MIDDLE / TREBLE / PRESENCE / MASTER）、
-// キャビネットとマイク（箱の種類、DYNAMIC / CONDENSER / RIBBON、位置 CENTER〜EDGE、距離 CLOSE〜FAR、IR の読み込み）、出力（リバーブ・OUTPUT）。
+// キャビネットとマイク（箱の種類、DYNAMIC / CONDENSER / RIBBON、位置 CENTER〜EDGE、距離 CLOSE〜FAR、IR の読み込み）、OUTPUT。
+// いちばん上に今の並び（EFFECTS ページで入れ替えた順。AMP がどこにあるか）。押すと EFFECTS ページ。
 #include "PluginProcessor.h"
 
 namespace AmpUI
@@ -77,7 +78,7 @@ public:
         : proc (p),
           ampKnobs (p.apvts, { { "ampGain", "GAIN" }, { "ampBass", "BASS" }, { "ampMid", "MIDDLE" }, { "ampTreble", "TREBLE" }, { "ampPresence", "PRESENCE" }, { "ampMaster", "MASTER" } }),
           micKnobs (p.apvts, { { "cabPos", "POSITION" }, { "cabDist", "DISTANCE" } }),
-          outKnobs (p.apvts, { { "revMix", "REVERB" }, { "revSize", "SIZE" }, { "outGain", "OUTPUT" } })
+          outKnobs (p.apvts, { { "outGain", "OUTPUT" } })
     {
         using namespace AmpUI;
         auto setupCombo = [this] (juce::ComboBox& c, const char* id, std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>& att)
@@ -120,8 +121,15 @@ public:
         irLabel.setColour (juce::Label::textColourId, dim);
         addAndMakeVisible (irLabel);
         refreshIR();
+        flowButton.setColour (juce::TextButton::buttonColourId, panel);
+        flowButton.setColour (juce::TextButton::textColourOffId, dim);
+        flowButton.setTooltip (jp (u8"ペダルとアンプの順番は EFFECTS ページで入れ替えます"));
+        flowButton.onClick = [this] { if (onShowEffects) onShowEffects(); };
+        addAndMakeVisible (flowButton);
         startTimerHz (10);
     }
+
+    std::function<void()> onShowEffects;   // set by the editor: show the EFFECTS page
 
     void paint (juce::Graphics& g) override
     {
@@ -189,13 +197,46 @@ public:
         g.drawText ("OUTPUT", o.reduced (14.0f, 8.0f).removeFromTop (22.0f), juce::Justification::centredLeft);
         g.setColour (dim);
         g.setFont (juce::FontOptions (12.0f));
-        g.drawText (jp (u8"リバーブは標準 OFF（自作のリバーブを後ろに）"), o.reduced (14.0f, 8.0f).removeFromBottom (18.0f), juce::Justification::centredLeft);
+        g.drawFittedText (jp (u8"リバーブ・ディレイは入っていません（自作のものを後ろに）"), o.reduced (14.0f, 8.0f).removeFromBottom (34.0f).toNearestInt(),
+                          juce::Justification::centredLeft, 2);
+
+        // the chain, with the amp lit: where it sits
+        auto fl = flowArea.toFloat();
+        const auto order = rig::orderAt ((int) proc.apvts.getRawParameterValue ("fxOrder")->load());
+        juce::StringArray names { "IN" };
+        for (int b : order) names.add (b == rig::blkComp ? "COMP" : b == rig::blkDrive ? "DRIVE" : b == rig::blkFuzz ? "FUZZ" : "AMP");
+        names.add ("CAB"); names.add ("OUT");
+        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        float x = fl.getX() + 10.0f;
+        for (int k = 0; k < names.size(); ++k)
+        {
+            const float w = juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), names[k]) + 18.0f;
+            auto cell = juce::Rectangle<float> (x, fl.getY() + 4.0f, w, fl.getHeight() - 8.0f);
+            if (names[k] == "AMP")
+            {
+                g.setColour (f.knob.withAlpha (0.9f));
+                g.fillRoundedRectangle (cell, 5.0f);
+                g.setColour (juce::Colour (0xff111111));
+            }
+            else g.setColour (names[k] == "CAB" ? text : dim);
+            g.drawText (names[k], cell, juce::Justification::centred);
+            x += w;
+            if (k + 1 < names.size())
+            {
+                g.setColour (dim);
+                g.drawText (">", juce::Rectangle<float> (x, cell.getY(), 14.0f, cell.getHeight()), juce::Justification::centred);
+                x += 14.0f;
+            }
+        }
     }
 
     void resized() override
     {
         auto r = getLocalBounds().reduced (8, 8);
-        head = r.removeFromTop (250);
+        flowArea = r.removeFromTop (30);
+        flowButton.setBounds (flowArea.removeFromRight (220).reduced (0, 2));
+        r.removeFromTop (8);
+        head = r.removeFromTop (240);
         r.removeFromTop (14);
         outArea = r.removeFromRight (300);
         r.removeFromRight (14);
@@ -225,8 +266,8 @@ public:
         c.removeFromBottom (6);
         micKnobs.setBounds (c.withSizeKeepingCentre (c.getWidth(), juce::jmin (c.getHeight(), 130)));
 
-        auto ok = outArea.reduced (14, 34);
-        outKnobs.setBounds (ok.withSizeKeepingCentre (ok.getWidth(), juce::jmin (ok.getHeight(), 120)));
+        auto ok = outArea.reduced (14, 0).withTrimmedTop (34).withTrimmedBottom (46);
+        outKnobs.setBounds (ok.withSizeKeepingCentre (juce::jmin (ok.getWidth(), 140), juce::jmin (ok.getHeight(), 130)));
     }
 
 private:
@@ -242,7 +283,7 @@ private:
         const int m = (int) proc.apvts.getRawParameterValue ("ampModel")->load();
         const auto key = juce::String (m) + "/" + juce::String (proc.apvts.getRawParameterValue ("cabPos")->load()) + "/"
                        + juce::String (proc.apvts.getRawParameterValue ("cabDist")->load()) + "/" + juce::String (proc.apvts.getRawParameterValue ("cabType")->load())
-                       + (ampOn.getToggleState() ? "1" : "0");
+                       + (ampOn.getToggleState() ? "1" : "0") + "/" + juce::String (proc.apvts.getRawParameterValue ("fxOrder")->load());
         if (key != shown)
         {
             shown = key;
@@ -262,5 +303,6 @@ private:
     juce::Label irLabel;
     juce::String irError, shown;
     std::unique_ptr<juce::FileChooser> chooser;
-    juce::Rectangle<int> head, cabArea, cabCtl, outArea;
+    juce::Rectangle<int> head, cabArea, cabCtl, outArea, flowArea;
+    juce::TextButton flowButton { juce::String (juce::CharPointer_UTF8 (u8"順番を変える（EFFECTS）▸")) };
 };

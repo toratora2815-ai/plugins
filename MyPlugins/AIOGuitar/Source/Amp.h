@@ -348,7 +348,7 @@ public:
             }
         }
         conv.prepare ({ fs, (juce::uint32) convBlock, 2 });
-        engineHasIR = hasIR.load(); engineStale = false; waiting = false;
+        engineHasIR = hasIR.load(); engineStale = false; waiting = false; settleLeft = 0;
         scratch.setSize (2, convBlock);
         fadeStep = (float) (1.0 / (fs * 0.008));
         posS.reset (fs, 0.04); distS.reset (fs, 0.04);
@@ -412,6 +412,8 @@ public:
     //  - a further IR while playing: JUCE's crossfade from the old one. While resting: run it on silence and
     //    cut the crossfade short, so the next note starts with the new IR
     //  - offline rendering waits for it (at most 0.5 s)
+    //  - while resting, the engine keeps running on silence for 0.3 s after each hand-over: a second IR loaded right
+    //    after the first may only get in after the first one did; whenever the size changes again, end its crossfade
     void prepareIR (int n, bool offline, bool resting)
     {
         const bool have = hasIR.load();
@@ -431,21 +433,28 @@ public:
                 if (! replacing) irWarm = false;
                 waiting = true; swapped = false;
                 waitLeft = (int) (fs * 0.3); warmLeft = (int) (fs * 0.06);
+                settleLeft = (int) (fs * 0.3);
             }
         }
-        if (! hasIR.load() || ! waiting) return;
-        auto runSilent = [this] (int m)
+        if (! hasIR.load()) return;
+        if (! waiting)
         {
-            scratch.clear();
-            float* sc[2] { scratch.getWritePointer (0), scratch.getWritePointer (1) };
-            juce::dsp::AudioBlock<float> sb (sc, 2, (size_t) juce::jmin (m, convBlock));
-            conv.process (juce::dsp::ProcessContextReplacing<float> (sb));
-        };
+            if (settleLeft > 0 && resting)   // after a hand-over, while nothing plays: catch an IR that gets in late
+            {
+                settleLeft -= n;
+                runSilentPart (n);
+                if (const int sz = conv.getCurrentIRSize(); sz != settledSize) { settledSize = sz; conv.reset(); }
+            }
+            else settleLeft = 0;
+            return;
+        }
+        auto runSilent = [this] (int m) { runSilentPart (m); };
         auto done = [this, resting]
         {
             waiting = false;
             if (replacing && resting) conv.reset();   // nothing playing: end the crossfade now
             irWarm = true; engineHasIR = true; engineStale = false;
+            settledSize = conv.getCurrentIRSize();
         };
         if (offline && (! irWarm || resting))
         {
@@ -457,6 +466,17 @@ public:
         if (! curIR || resting) runSilent (n);           // the convolution is not in use: drive it on silence
         if (! swapped && (conv.getCurrentIRSize() != sizeAtHandoff || (waitLeft -= n) <= 0)) swapped = true;
         if (swapped && (resting || (warmLeft -= n) <= 0)) done();
+    }
+
+    void runSilentPart (int m)
+    {
+        for (int left = m; left > 0; left -= convBlock)
+        {
+            scratch.clear();
+            float* sc[2] { scratch.getWritePointer (0), scratch.getWritePointer (1) };
+            juce::dsp::AudioBlock<float> sb (sc, 2, (size_t) juce::jmin (left, convBlock));
+            conv.process (juce::dsp::ProcessContextReplacing<float> (sb));
+        }
     }
 
     void process (float* L, float* R, int n)
@@ -569,7 +589,7 @@ private:
     const float irGain = juce::Decibels::decibelsToGain (9.0f);   // JUCE's normalising leaves an IR ~9 dB under the built-in cabinets
     bool curIR = false, irWarm = false, sawIR = false, swapped = false, engineHasIR = false, engineStale = false;
     bool waiting = false, replacing = false;
-    int sizeAtHandoff = 1, lastRawLen = -1, waitLeft = 0;
+    int sizeAtHandoff = 1, lastRawLen = -1, waitLeft = 0, settleLeft = 0, settledSize = -1;
     juce::SmoothedValue<float> posS, distS;
     std::atomic<bool> hasIR { false }, irPending { false };
     juce::SpinLock irLock;

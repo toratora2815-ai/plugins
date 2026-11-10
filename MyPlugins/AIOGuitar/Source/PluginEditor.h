@@ -2,8 +2,8 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "ScorePage.h"
-#include "EffectsPage.h"
 #include "AmpPage.h"
+#include "EffectsPage.h"
 #include "RecordGuide.h"
 
 //==============================================================================

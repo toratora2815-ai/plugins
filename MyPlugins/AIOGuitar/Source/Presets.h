@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <utility>
+#include "Rig.h"
 
 // Factory presets. Values are in real parameter units.
 // Parameters not listed fall back to their default value.
@@ -63,12 +64,22 @@ inline const std::vector<Preset>& getFactoryPresets()
             { "cabOn", 1 }, { "cabType", 0 }, { "cabMicType", 0 }, { "cabPos", 4.5f }, { "cabDist", 2 } } },
 
         { "Fuzz into Drive", {
-            { "pedalOrder", 1 },
+            { "fxOrder", (float) rig::fromOldPedalOrder (true) },   // Comp > Fuzz > Drive > Amp
             { "wfOn", 1 }, { "wfSustain", 5 }, { "wfTone", 6 }, { "wfVolume", -14 },
             { "pdOn", 1 }, { "pdGain", 2 }, { "pdTone", 5 }, { "pdLevel", -3 },
             { "ampOn", 1 }, { "ampModel", 3 }, { "ampGain", 4 }, { "ampBass", 5 }, { "ampMid", 6 }, { "ampTreble", 5.5f },
             { "ampPresence", 5 }, { "ampMaster", 5 },
             { "cabOn", 1 }, { "cabType", 2 }, { "cabMicType", 0 }, { "cabPos", 3 }, { "cabDist", 2 } } },
+
+        // the comp AFTER the drive: the distorted notes come out even (a lead that sits in front)
+        { "Even Lead (Drive > Comp)", {
+            { "fxOrder", (float) rig::indexOf ({ rig::blkDrive, rig::blkComp, rig::blkFuzz, rig::blkAmp }) },
+            { "gtRelease", 0.2f },
+            { "pdOn", 1 }, { "pdGain", 6 }, { "pdTone", 5.5f }, { "pdLevel", -3 },
+            { "ccOn", 1 }, { "ccComp", 5 }, { "ccLevel", 0 }, { "ccBlend", 85 },
+            { "ampOn", 1 }, { "ampModel", 2 }, { "ampGain", 5 }, { "ampBass", 4.5f }, { "ampMid", 6 }, { "ampTreble", 5 },
+            { "ampPresence", 5 }, { "ampMaster", 6 },
+            { "cabOn", 1 }, { "cabType", 2 }, { "cabMicType", 2 }, { "cabPos", 3 }, { "cabDist", 2 } } },
     };
     return presets;
 }

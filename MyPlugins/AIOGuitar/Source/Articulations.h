@@ -169,6 +169,7 @@ public:
         strings.reset();
         std::fill (std::begin (strumUpForNote), std::end (strumUpForNote), -1);
         std::fill (std::begin (strumVelForNote), std::end (strumVelForNote), 0);
+        std::fill (std::begin (strumStringForNote), std::end (strumStringForNote), -1);
     }
 
     static bool isKeyswitch (int note) noexcept
@@ -178,6 +179,10 @@ public:
 
     // set by the processor: chokes the voice that is sounding on string s
     std::function<void (int)> chokeString;
+    // the strummer's "stop string s now" (at its place in the block): CC 102 on channel 16, value 100 + string.
+    // Never leaves the plugin (it makes no MIDI)
+    static constexpr int kChokeCC = 102;
+    static juce::MidiMessage chokeMessage (int string) { return juce::MidiMessage::controllerEvent (16, kChokeCC, 100 + juce::jlimit (1, 6, string)); }
     std::function<bool (int)> isBrushNote;
     // SCORE: told about every note (latched articulation + the string chosen automatically);
     // may change the articulation and force a string for this note only
@@ -198,6 +203,9 @@ public:
     }
     int strumUpForNote[128];   // set by the strummer just before a note starts (-1 = not strummed)
     int strumVelForNote[128];  // ... and the stroke's velocity (0 = not strummed)
+    int strumStringForNote[128];  // ... and the string the strummer chose (-1 = choose here)
+    // the string `note` is held on right now (0 = none)
+    int stringOf (int note) const noexcept { for (int s = 1; s <= 6; ++s) if (strings.noteOn[s] == note) return s; return 0; }
 
     void setCurrentPlaybackSampleRate (double sr) override
     {
@@ -207,6 +215,12 @@ public:
 
     void handleMidiEvent (const juce::MidiMessage& m) override
     {
+        if (m.isController() && m.getChannel() == 16 && m.getControllerNumber() == kChokeCC
+            && m.getControllerValue() > 100 && m.getControllerValue() <= 106)
+        {
+            if (chokeString) chokeString (m.getControllerValue() - 100);
+            return;
+        }
         if (m.isNoteOnOrOff() && isKeyswitch (m.getNoteNumber()))
         {
             const int a = m.getNoteNumber() - kKeyswitchLow;
@@ -230,6 +244,13 @@ public:
     {
         const bool brush = isBrushNote && isBrushNote (note);
         int s = brush ? 0 : strings.choose (channel, note, params.stringMode, clock);
+        if (juce::isPositiveAndBelow (note, 128))
+        {
+            const int ss = strumStringForNote[note];
+            strumStringForNote[note] = -1;
+            // strummed: the string the strummer chose (its order and the up-stroke rule count on it)
+            if (! brush && ss >= 1 && ss <= 6 && StringAllocator::fretOn (ss, note) >= 0 && StringAllocator::fretOn (ss, note) <= kMaxFret) s = ss;
+        }
         int art = params.articulation, forced = -1;
         if (onNoteOn) onNoteOn (channel, note, velocity, s, art, forced);
         if (! brush)
@@ -268,6 +289,7 @@ public:
         params.articulation = artNormal;
         params.lastArticulation.store (artNormal);
         std::fill (std::begin (held), std::end (held), false);
+        std::fill (std::begin (strumStringForNote), std::end (strumStringForNote), -1);
         strings.reset();
     }
 

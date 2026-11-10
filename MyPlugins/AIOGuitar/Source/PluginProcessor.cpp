@@ -59,8 +59,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
     l.add (std::make_unique<APF> (juce::ParameterID { "wfSustain", 1 }, "Fuzz Sustain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 6.0f, fmt ("", 1)));
     l.add (std::make_unique<APF> (juce::ParameterID { "wfTone", 1 }, "Fuzz Tone", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
     l.add (std::make_unique<APF> (juce::ParameterID { "wfVolume", 1 }, "Fuzz Volume", juce::NormalisableRange<float> (-36.0f, 6.0f, 0.1f), -12.0f, fmt (" dB", 1)));
-    l.add (std::make_unique<APC> (juce::ParameterID { "pedalOrder", 1 }, "Pedal Order",
-                                  juce::StringArray { "Drive > Fuzz", "Fuzz > Drive" }, 0));
+    // the order of COMP / DRIVE / FUZZ / AMP (EFFECTS page; CAB and OUTPUT always last). Not automatable:
+    // reordering in the middle of a song would only make level jumps
+    l.add (std::make_unique<APC> (juce::ParameterID { "fxOrder", 2 }, "Effects Order", rig::orderNames(), rig::kDefault,
+                                  juce::AudioParameterChoiceAttributes().withAutomatable (false)));
 
     // ---- Amp
     l.add (std::make_unique<APB> (juce::ParameterID { "ampOn", 1 }, "Amp On", true));
@@ -105,11 +107,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
     l.add (std::make_unique<APF> (juce::ParameterID { "kitVelSens", 1 }, "Velocity Sensitivity",
                                   juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.7f, fmt ("", 2)));
 
-    // ---- Reverb / Output
-    l.add (std::make_unique<APF> (juce::ParameterID { "revMix", 1 }, "Reverb Mix",
-                                  juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f, fmt ("", 2)));   // off: reverbs go after AIO Guitar
-    l.add (std::make_unique<APF> (juce::ParameterID { "revSize", 1 }, "Reverb Size",
-                                  juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.5f, fmt ("", 2)));
+    // ---- Output (no reverb inside since 0.3.0: reverbs go after AIO Guitar)
     l.add (std::make_unique<APF> (juce::ParameterID { "outGain", 1 }, "Output",
                                   juce::NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f, fmt (" dB", 1)));
 
@@ -228,13 +226,12 @@ void AIOGuitarProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     previewRunning = capturing = syncWasPlaying = false;
     expectedPpq = -1.0;
     volume.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (get ("gtVolume")));
-    chain.prepare (sampleRate, samplesPerBlock);
-    pedals.prepare (sampleRate, samplesPerBlock);
-    pedals.setOrderNow (get ("pedalOrder") > 0.5f);
-    pedals.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));
-    pedals.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
-    pedals.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
-    setLatencySamples (chain.getLatencySamples() + pedals.latency());
+    readParams();
+    rig.prepare (sampleRate, samplesPerBlock, (int) get ("fxOrder"), fx);
+    rig.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));
+    rig.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
+    rig.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
+    setLatencySamples (rig.latency());   // the same for every order
     quietSamples = 0;
     lastOutPeak = 1.0f;
 
@@ -260,7 +257,7 @@ void AIOGuitarProcessor::readParams()
     voiceParams.kitVelSens  = get ("kitVelSens");
     strumSet.on = get ("strumOn") > 0.5f;
     strumSet.msPerString = get ("strumSpeed");
-    strumSet.upStrings = (int) get ("upStrings") + 3;   // 3, 4, 5 (= all)
+    strumSet.upStrings = (int) get ("upStrings") >= 2 ? 6 : (int) get ("upStrings") + 3;   // 3, 4, all (6)
     strumSet.humanize = voiceParams.humanize;
 
     fx.ampOn       = get ("ampOn") > 0.5f;
@@ -276,8 +273,6 @@ void AIOGuitarProcessor::readParams()
     fx.cabMicType  = (int) get ("cabMicType");
     fx.cabPos      = get ("cabPos");
     fx.cabDist     = get ("cabDist");
-    fx.revMix      = get ("revMix");
-    fx.revSize     = get ("revSize");
     fx.outGain     = get ("outGain");
 }
 
@@ -457,33 +452,32 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     else
         buffer.applyGain (volume.getTargetValue());
 
-    // ---- EFFECTS (pedals) -> AMP. Nothing playing and the tails gone: skip all of it (saves CPU)
-    pedals.comp.setOn (get ("ccOn") > 0.5f);
-    pedals.drive.setOn (get ("pdOn") > 0.5f);
-    pedals.fuzz.setOn (get ("wfOn") > 0.5f);
-    pedals.comp.setParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));
-    pedals.drive.setParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
-    pedals.fuzz.setParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
+    // ---- EFFECTS: pedals and AMP in the chosen order -> CAB -> OUTPUT. Nothing playing and the tails gone: skip all of it (saves CPU)
+    rig.comp.setOn (get ("ccOn") > 0.5f);
+    rig.drive.setOn (get ("pdOn") > 0.5f);
+    rig.fuzz.setOn (get ("wfOn") > 0.5f);
+    rig.comp.setParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));
+    rig.drive.setParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
+    rig.fuzz.setParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
 
     const bool silentIn = buffer.getMagnitude (0, n) < 1.0e-6f && (buffer.getNumChannels() < 2 || buffer.getMagnitude (1, 0, n) < 1.0e-6f);
     quietSamples = silentIn ? quietSamples + n : 0;
-    // rest once nothing comes in for 0.5 s AND what comes out (reverb tail) has died away
+    // rest once nothing comes in for 0.5 s AND what comes out (the cabinet's tail) has died away
     const bool sleeping = quietSamples > (int) (sr * 0.5) && lastOutPeak < 1.0e-5f;
     fxSleeping.store (sleeping);
     if (sleeping)
     {
         fx.offline = isNonRealtime();
-        chain.rest (fx, n);
-        pedals.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));    // the next note starts as set
-        pedals.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
-        pedals.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
+        rig.rest (fx, (int) get ("fxOrder"), n);
+        rig.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));    // the next note starts as set
+        rig.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
+        rig.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
         buffer.clear();
         return;
     }
-    if (buffer.getNumChannels() >= 2)
-        pedals.process (buffer.getArrayOfWritePointers(), n, get ("pedalOrder") > 0.5f);
     fx.offline = isNonRealtime();
-    chain.process (buffer, n, fx);
+    if (buffer.getNumChannels() >= 2)
+        rig.process (buffer, n, fx, (int) get ("fxOrder"));
 
     // safety on the way out: linear up to -6 dBFS, rounded off above, never over 0 dBFS
     // (the pedals alone reach +26 dBFS, a clean amp turned all the way up +7)
@@ -788,6 +782,26 @@ void AIOGuitarProcessor::getStateInformation (juce::MemoryBlock& destData)
     score.toTree().writeToStream (mos);
 }
 
+// "Pedal Order" (0.2.0 and before: Drive > Fuzz / Fuzz > Drive, the comp first and the amp last) -> "Effects Order"
+static void migrateOrder (juce::ValueTree& tree)
+{
+    juce::ValueTree oldOrder, newOrder;
+    for (auto c : tree)
+        if (c.hasType ("PARAM"))
+        {
+            if (c["id"].toString() == "pedalOrder") oldOrder = c;
+            if (c["id"].toString() == "fxOrder")    newOrder = c;
+        }
+    if (oldOrder.isValid() && ! newOrder.isValid())
+    {
+        juce::ValueTree m ("PARAM");
+        m.setProperty ("id", "fxOrder", nullptr);
+        m.setProperty ("value", (float) rig::fromOldPedalOrder ((float) oldOrder["value"] > 0.5f), nullptr);
+        tree.appendChild (m, nullptr);
+    }
+    if (oldOrder.isValid()) tree.removeChild (oldOrder, nullptr);
+}
+
 void AIOGuitarProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     juce::ValueTree tree, kitTree, scoreTree;
@@ -820,13 +834,15 @@ void AIOGuitarProcessor::setStateInformation (const void* data, int sizeInBytes)
             }
         }
     }
+    // projects / presets from before 0.3.0: "Pedal Order" (Drive > Fuzz / Fuzz > Drive) -> the order of all four blocks
+    migrateOrder (tree);
     const auto irTree = tree.getChildWithName ("CABIR");
     tree.removeChild (irTree, nullptr);
     if (! irTree.isValid())
     {
         const juce::ScopedLock sl (irLock);
         cabIR.setSize (0, 0); cabIRName = {};
-        chain.getCab().clearIR();
+        rig.chain.getCab().clearIR();
     }
     if (irTree.isValid())
         if (auto* mb = irTree["data"].getBinaryData(); mb != nullptr && mb->getSize() >= sizeof (float) * 16)
@@ -905,7 +921,7 @@ void AIOGuitarProcessor::setCabIR (juce::AudioBuffer<float>&& ir, double rate, c
         cabIRRate = rate;
         cabIRName = name;
     }
-    chain.getCab().loadIR (std::move (ir), rate);
+    rig.chain.getCab().loadIR (std::move (ir), rate);
 }
 
 juce::String AIOGuitarProcessor::getCabIRName() const

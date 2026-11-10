@@ -878,6 +878,9 @@ AIOGuitarEditor::AIOGuitarEditor (AIOGuitarProcessor& p)
     addAndMakeVisible (presetBar);
     linkBar.status = [this] (bool& lit) -> juce::String { lit = proc.link.on(); return lit ? juce::String ("on this LINK") : juce::String ("Plugin Link OFF"); };
 
+    effectsPage.onEditAmp = [this] { showPage (3); };     // the amp block on EFFECTS -> its knobs
+    ampPage.onShowEffects = [this] { showPage (2); };     // the chain strip on AMP -> where it sits
+
     showPage (0);
     setSize (1100, 860);
     startTimerHz (4);
@@ -914,7 +917,7 @@ void AIOGuitarEditor::paint (juce::Graphics& g)
     g.drawText ("AIO GUITAR", 18, 10, 200, 32, juce::Justification::centredLeft);
     g.setColour (Pal::dim);
     g.setFont (juce::FontOptions (12.0f));
-    g.drawText ("my guitar  >  score  >  effects  >  amp", 180, 10, 240, 32, juce::Justification::centredLeft);
+    g.drawText ("my guitar  >  score  >  effects + amp", 180, 10, 240, 32, juce::Justification::centredLeft);
 }
 
 void AIOGuitarEditor::resized()

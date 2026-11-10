@@ -1,6 +1,6 @@
 #pragma once
-// EFFECTS ページのペダル。中身は単体プラグインと同じ音の部品（WoolFuzzDSP / PorchDriveDSP）と、
-// AIO Guitar だけのコンプ（CottonCompDSP、いちばん前に固定）。
+// EFFECTS ページのペダル 1 台分。中身は単体プラグインと同じ音の部品（WoolFuzzDSP / PorchDriveDSP）と、
+// AIO Guitar だけのコンプ（CottonCompDSP）。並べる順番は Rig.h。
 // OFF のペダルは計算しない（タイミングをそろえる短い遅らせだけ）。ON/OFF は 15 ms でつなぐ。
 #include <JuceHeader.h>
 #include "WoolFuzzDSP.h"
@@ -36,6 +36,13 @@ public:
     }
 
     bool isRunning() const { return on || mix.isSmoothing(); }
+
+    // a broken sample went through: start clean
+    void reset()
+    {
+        dsp.reset();
+        for (auto& d : delay) std::fill (d.begin(), d.end(), 0.0f);
+    }
 
     void process (float* const* data, int numSamples)
     {
@@ -89,47 +96,4 @@ private:
     int lat = 0, delayPos = 0;
     bool on = false, wasRunning = false;
     juce::SmoothedValue<float> mix;
-};
-
-struct PedalBoard
-{
-    PedalSlot<pedal::CottonCompDSP> comp;    // Cotton Comp (always first)
-    PedalSlot<pedal::PorchDriveDSP> drive;   // Porch Drive
-    PedalSlot<pedal::WoolFuzzDSP>   fuzz;    // Wool Fuzz
-
-    void prepare (double sr, int maxBlock)
-    {
-        comp.prepare (sr, maxBlock); drive.prepare (sr, maxBlock); fuzz.prepare (sr, maxBlock);
-        fadeLen = juce::jmax (1, (int) (sr * 0.005));
-        fadePos = 0; fadeState = 0;
-    }
-    int latency() const { return comp.latency() + drive.latency() + fuzz.latency(); }
-    bool anyRunning() const { return comp.isRunning() || drive.isRunning() || fuzz.isRunning(); }
-    bool isFuzzFirst() const { return fuzzFirst; }
-    void setOrderNow (bool fuzzFirstNow) { fuzzFirst = fuzzFirstNow; fadeState = 0; }   // prepare / load: no fade
-
-    // changing the order: 5 ms down, swap at the next block, 5 ms up (no click)
-    void process (float* const* data, int n, bool wantFuzzFirst)
-    {
-        if (fadeState == 3) { fuzzFirst = wantFuzzFirst; fadeState = 2; fadePos = 0; }
-        if (fadeState == 0 && wantFuzzFirst != fuzzFirst) { fadeState = 1; fadePos = fadeLen; }
-
-        comp.process (data, n);
-        if (fuzzFirst) { fuzz.process (data, n); drive.process (data, n); }
-        else           { drive.process (data, n); fuzz.process (data, n); }
-
-        if (fadeState == 0) return;
-        for (int i = 0; i < n; ++i)
-        {
-            float g = 1.0f;
-            if (fadeState == 1)      { g = (float) fadePos / (float) fadeLen; if (fadePos > 0) --fadePos; else fadeState = 3; }
-            else if (fadeState == 3) g = 0.0f;   // silent until the next block, where the order changes
-            else if (fadeState == 2) { g = (float) fadePos / (float) fadeLen; if (++fadePos >= fadeLen) fadeState = 0; }
-            data[0][i] *= g; data[1][i] *= g;
-        }
-    }
-
-private:
-    bool fuzzFirst = false;
-    int fadeLen = 240, fadePos = 0, fadeState = 0;   // 0 steady, 1 fading out, 3 silent (swap next block), 2 fading in
 };

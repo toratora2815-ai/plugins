@@ -1,16 +1,65 @@
 #pragma once
-// EFFECTS ページ: ペダルボード。Cotton Comp（コンプ、いちばん前に固定）→ Porch Drive（ドライブ）と Wool Fuzz（ファズ）。
-// ドライブとファズは単体プラグインと同じ音で、⇄ で順番を入れ替え。フットスイッチで ON/OFF（OFF は計算しない）。
+// EFFECTS ページ: IN → [COTTON COMP / PORCH DRIVE / WOOL FUZZ / AMP を好きな順に] → CAB（いつも最後）→ OUT。
+// 箱をドラッグするか ◀ ▶ で並べ替え。AMP の箱は小さく、押すと AMP ページ（つまみはそちら）。CAB の箱も押すと AMP ページ。
+// ドライブ・ファズは単体プラグインと同じ音。フットスイッチで ON/OFF（OFF は計算しない）。
 #include "PluginProcessor.h"
+#include "AmpPage.h"
 
-class PedalPanel : public juce::Component
+namespace FxUI
+{
+    inline juce::String jp (const char* s) { return juce::String (juce::CharPointer_UTF8 (s)); }
+
+    // ◀ ▶ (move one place)
+    inline void styleArrow (juce::TextButton& b, juce::Colour ink)
+    {
+        b.setColour (juce::TextButton::buttonColourId, juce::Colours::black.withAlpha (0.18f));
+        b.setColour (juce::TextButton::textColourOffId, ink);
+        b.setTooltip (jp (u8"1 つずらす（箱をドラッグしても入れ替えられます）"));
+    }
+
+    // six dots: "you can grab this"
+    inline void drawGrip (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour ink)
+    {
+        g.setColour (ink.withAlpha (0.45f));
+        const float cx = r.getCentreX(), y = r.getY() + 10.0f;
+        for (int row = 0; row < 2; ++row)
+            for (int k = -1; k <= 1; ++k)
+                g.fillEllipse (cx + k * 7.0f - 1.6f, y + row * 6.0f - 1.6f, 3.2f, 3.2f);
+    }
+}
+
+// one block of the chain that can be moved (a pedal or the amp)
+class MovableBlock : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    explicit MovableBlock (int blockId) : block (blockId)
+    {
+        left.onClick  = [this] { if (onMove) onMove (block, -1); };
+        right.onClick = [this] { if (onMove) onMove (block, +1); };
+        addAndMakeVisible (left);
+        addAndMakeVisible (right);
+    }
+    const int block;
+    std::function<void (int block, int step)> onMove;
+    void setArrowsEnabled (bool canLeft, bool canRight) { left.setEnabled (canLeft); right.setEnabled (canRight); }
+
+protected:
+    void placeArrows (juce::Rectangle<int> row)   // in the two bottom corners
+    {
+        left.setBounds (row.removeFromLeft (30).withSizeKeepingCentre (30, 28));
+        right.setBounds (row.removeFromRight (30).withSizeKeepingCentre (30, 28));
+    }
+    juce::TextButton left { juce::String (juce::CharPointer_UTF8 (u8"◀")) }, right { juce::String (juce::CharPointer_UTF8 (u8"▶")) };
+};
+
+class PedalPanel : public MovableBlock
 {
 public:
     struct Look { juce::Colour body, ink, knob; };
 
-    PedalPanel (juce::AudioProcessorValueTreeState& s, juce::String nameIn, juce::String subIn, const char* onId,
+    PedalPanel (juce::AudioProcessorValueTreeState& s, int blockId, juce::String nameIn, juce::String subIn, const char* onId,
                 std::initializer_list<std::pair<const char*, const char*>> knobsIn, Look lookIn)
-        : state (s), name (std::move (nameIn)), sub (std::move (subIn)), look (lookIn)
+        : MovableBlock (blockId), name (std::move (nameIn)), sub (std::move (subIn)), look (lookIn)
     {
         for (auto& [id, label] : knobsIn)
         {
@@ -29,6 +78,7 @@ public:
             l->setJustificationType (juce::Justification::centred);
             l->setFont (juce::FontOptions (13.0f, juce::Font::bold));
             l->setColour (juce::Label::textColourId, look.ink);
+            l->setInterceptsMouseClicks (false, false);   // the label area drags the pedal
             addAndMakeVisible (*l);
             knobs.push_back (std::move (k));
             labels.push_back (std::move (l));
@@ -41,6 +91,7 @@ public:
         footswitch.onStateChange = [this] { repaint(); };
         addAndMakeVisible (footswitch);
         onAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (s, onId, footswitch);
+        FxUI::styleArrow (left, look.ink); FxUI::styleArrow (right, look.ink);
     }
 
     void paint (juce::Graphics& g) override
@@ -52,17 +103,18 @@ public:
         g.fillRoundedRectangle (r, 14.0f);
         g.setColour (look.ink.withAlpha (0.35f));
         g.drawRoundedRectangle (r.reduced (5.0f), 10.0f, 1.2f);
+        FxUI::drawGrip (g, r, look.ink);
 
         // name plate
         g.setColour (look.ink);
-        g.setFont (juce::FontOptions (26.0f, juce::Font::bold));
-        g.drawText (name, r.withTrimmedTop (r.getHeight() * 0.50f).withHeight (32.0f), juce::Justification::centred);
+        g.setFont (juce::FontOptions (getWidth() < 240 ? 21.0f : 26.0f, juce::Font::bold));
+        g.drawFittedText (name, plate.toNearestInt().withTrimmedTop (18).removeFromTop (30), juce::Justification::centred, 1);
         g.setFont (juce::FontOptions (12.0f));
-        g.drawText (sub, r.withTrimmedTop (r.getHeight() * 0.50f + 30.0f).withHeight (18.0f), juce::Justification::centred);
+        g.drawText (sub, plate.withTrimmedTop (48.0f).removeFromTop (18.0f), juce::Justification::centred);
 
         // LED
         const bool on = footswitch.getToggleState();
-        auto led = juce::Rectangle<float> (r.getCentreX() - 6.0f, r.getY() + r.getHeight() * 0.50f - 22.0f, 12.0f, 12.0f);
+        auto led = juce::Rectangle<float> (plate.getCentreX() - 6.0f, plate.getY(), 12.0f, 12.0f);
         if (on)
         {
             g.setColour (juce::Colour (0xffff3b30).withAlpha (0.35f));
@@ -74,26 +126,144 @@ public:
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (18, 18);
-        auto top = r.removeFromTop (juce::jmin (130, r.getHeight() / 2 - 30));
-        const int w = top.getWidth() / juce::jmax (1, (int) knobs.size());
-        for (size_t i = 0; i < knobs.size(); ++i)
+        auto r = getLocalBounds().reduced (14, 22);
+        auto bottom = r.removeFromBottom (54);
+        footswitch.setBounds (bottom.withSizeKeepingCentre (juce::jmin (120, bottom.getWidth() - 70), 46));
+        placeArrows (bottom);
+        const int n = (int) knobs.size();
+        if (getWidth() < 240 && n == 3)   // narrow: two knobs on top, the third under them (like many real pedals)
         {
-            auto col = top.removeFromLeft (w);
-            labels[i]->setBounds (col.removeFromBottom (18));
-            knobs[i]->setBounds (col.reduced (4, 0));
+            auto top = r.removeFromTop (juce::jmin (230, r.getHeight() - 90));
+            auto row1 = top.removeFromTop (top.getHeight() / 2), row2 = top;
+            const int w = row1.getWidth() / 2;
+            place (0, row1.removeFromLeft (w)); place (1, row1);
+            place (2, row2.withSizeKeepingCentre (w, row2.getHeight()));
         }
-        footswitch.setBounds (r.removeFromBottom (54).withSizeKeepingCentre (130, 46));
+        else
+        {
+            auto top = r.removeFromTop (juce::jmin (130, r.getHeight() / 2 - 30));
+            const int w = top.getWidth() / juce::jmax (1, n);
+            for (int i = 0; i < n; ++i) place (i, top.removeFromLeft (w));
+        }
+        plate = r.toFloat().withSizeKeepingCentre ((float) r.getWidth(), juce::jmin (90.0f, (float) r.getHeight()));
     }
 
 private:
-    juce::AudioProcessorValueTreeState& state;
+    void place (int i, juce::Rectangle<int> col)
+    {
+        labels[(size_t) i]->setBounds (col.removeFromBottom (18));
+        knobs[(size_t) i]->setBounds (col.reduced (2, 0));
+    }
+
     juce::String name, sub;
     Look look;
+    juce::Rectangle<float> plate;
     std::vector<std::unique_ptr<juce::Slider>> knobs;
     std::vector<std::unique_ptr<juce::Label>> labels;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> atts;
     juce::TextButton footswitch { "ON / OFF" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAtt;
+};
+
+// the amp in the chain: a small head. Its knobs are on the AMP page (clicking the head goes there)
+class AmpBlock : public MovableBlock
+{
+public:
+    explicit AmpBlock (AIOGuitarProcessor& p) : MovableBlock (rig::blkAmp), proc (p)
+    {
+        onButton.setClickingTogglesState (true);
+        onButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2a2a2e));
+        onButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffe05a47));
+        onButton.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+        onButton.onStateChange = [this] { repaint(); };
+        addAndMakeVisible (onButton);
+        onAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "ampOn", onButton);
+        edit.setColour (juce::TextButton::buttonColourId, juce::Colours::black.withAlpha (0.3f));
+        edit.onClick = [this] { if (onEdit) onEdit(); };
+        edit.setTooltip (FxUI::jp (u8"AMP ページで機種・つまみを調整"));
+        addAndMakeVisible (edit);
+        setTooltip (FxUI::jp (u8"アンプ。押すと AMP ページ、ドラッグで位置を変える"));
+    }
+    std::function<void()> onEdit;
+
+    // what the head shows (repaint when it changes)
+    juce::String key() const
+    {
+        juce::String k (model());
+        for (auto* id : { "ampGain", "ampBass", "ampMid", "ampTreble", "ampPresence", "ampMaster" })
+            k << "/" << juce::String (v (id), 1);
+        return k;
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto f = AmpUI::face (model());
+        auto r = getLocalBounds().toFloat().reduced (2.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.35f));
+        g.fillRoundedRectangle (r.translated (0, 4), 12.0f);
+        g.setColour (f.tolex);
+        g.fillRoundedRectangle (r, 12.0f);
+        FxUI::drawGrip (g, r, f.ink == juce::Colour (0xff1a1a1a) ? juce::Colour (0xffe8e6e1) : f.ink);
+        auto pl = r.reduced (12.0f).withTrimmedTop (16.0f).withTrimmedBottom (108.0f);
+        g.setColour (f.plate);
+        g.fillRoundedRectangle (pl, 6.0f);
+        g.setColour (f.ink.withAlpha (0.25f));
+        g.drawRoundedRectangle (pl.reduced (3.0f), 4.0f, 1.0f);
+
+        auto t = pl.reduced (12.0f, 10.0f);
+        g.setColour (f.ink);
+        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        g.drawText ("AMP", t.removeFromTop (18.0f), juce::Justification::centredLeft);
+        // power lamp
+        const bool on = onButton.getToggleState();
+        auto lamp = juce::Rectangle<float> (pl.getRight() - 24.0f, pl.getY() + 12.0f, 10.0f, 10.0f);
+        if (on) { g.setColour (juce::Colour (0xffff3b30).withAlpha (0.35f)); g.fillEllipse (lamp.expanded (4.0f)); }
+        g.setColour (on ? juce::Colour (0xffff3b30) : juce::Colour (0xff4a1612));
+        g.fillEllipse (lamp);
+        g.setColour (f.ink);
+        g.setFont (juce::FontOptions (19.0f, juce::Font::bold));
+        g.drawFittedText (ampsim::modelNames()[model()].toUpperCase(), t.removeFromTop (52.0f).toNearestInt(), juce::Justification::centredLeft, 2);
+        t.removeFromTop (8.0f);
+        // the knobs as numbers (set on the AMP page)
+        g.setFont (juce::FontOptions (12.0f));
+        const std::pair<const char*, const char*> rows[] { { "GAIN", "ampGain" }, { "BASS", "ampBass" }, { "MIDDLE", "ampMid" },
+                                                           { "TREBLE", "ampTreble" }, { "PRESENCE", "ampPresence" }, { "MASTER", "ampMaster" } };
+        for (auto& [label, id] : rows)
+        {
+            auto line = t.removeFromTop (17.0f);
+            if (line.getBottom() > pl.getBottom() - 6.0f) break;
+            g.setColour (f.ink.withAlpha (0.75f));
+            g.drawText (label, line, juce::Justification::centredLeft);
+            g.setColour (f.ink);
+            g.drawText (juce::String (v (id), 1), line, juce::Justification::centredRight);
+        }
+        if (! on)
+        {
+            g.setColour (juce::Colours::black.withAlpha (0.35f));
+            g.fillRoundedRectangle (pl, 6.0f);
+            g.setColour (juce::Colours::white.withAlpha (0.8f));
+            g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+            g.drawText (FxUI::jp (u8"AMP OFF（素通り）"), pl, juce::Justification::centred);
+        }
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (14, 22);
+        auto bottom = r.removeFromBottom (54);
+        onButton.setBounds (bottom.withSizeKeepingCentre (juce::jmin (120, bottom.getWidth() - 70), 46));
+        placeArrows (bottom);
+        r.removeFromBottom (8);
+        edit.setBounds (r.removeFromBottom (32).reduced (4, 0));
+    }
+
+private:
+    int model() const { return juce::jlimit (0, ampsim::numModels - 1, (int) proc.apvts.getRawParameterValue ("ampModel")->load()); }
+    float v (const char* id) const { return proc.apvts.getRawParameterValue (id)->load(); }
+
+    AIOGuitarProcessor& proc;
+    juce::TextButton onButton { "AMP ON" };
+    juce::TextButton edit { juce::String (juce::CharPointer_UTF8 (u8"AMP 画面で調整 ▸")) };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAtt;
 };
 
@@ -102,82 +272,229 @@ class EffectsPage : public juce::Component, private juce::Timer
 public:
     explicit EffectsPage (AIOGuitarProcessor& p)
         : proc (p),
-          comp (p.apvts, "COTTON COMP", "compressor", "ccOn", { { "ccComp", "COMP" }, { "ccLevel", "LEVEL" }, { "ccBlend", "BLEND" } },
+          comp (p.apvts, rig::blkComp, "COTTON COMP", "compressor", "ccOn", { { "ccComp", "COMP" }, { "ccLevel", "LEVEL" }, { "ccBlend", "BLEND" } },
                 { juce::Colour (0xffe9e4d8), juce::Colour (0xff2d5c58), juce::Colour (0xff3a8a80) }),
-          drive (p.apvts, "PORCH DRIVE", "overdrive", "pdOn", { { "pdLevel", "LEVEL" }, { "pdTone", "TONE" }, { "pdGain", "GAIN" } },
+          drive (p.apvts, rig::blkDrive, "PORCH DRIVE", "overdrive", "pdOn", { { "pdLevel", "LEVEL" }, { "pdTone", "TONE" }, { "pdGain", "GAIN" } },
                  { juce::Colour (0xff2f6fb3), juce::Colour (0xff10284a), juce::Colour (0xff8fd0ff) }),
-          fuzz (p.apvts, "WOOL FUZZ", "fuzz", "wfOn", { { "wfSustain", "SUSTAIN" }, { "wfTone", "TONE" }, { "wfVolume", "VOLUME" } },
-                { juce::Colour (0xffb8b2a4), juce::Colour (0xff8a1c1c), juce::Colour (0xff8a1c1c) })
+          fuzz (p.apvts, rig::blkFuzz, "WOOL FUZZ", "fuzz", "wfOn", { { "wfSustain", "SUSTAIN" }, { "wfTone", "TONE" }, { "wfVolume", "VOLUME" } },
+                { juce::Colour (0xffb8b2a4), juce::Colour (0xff8a1c1c), juce::Colour (0xff8a1c1c) }),
+          ampBlock (p)
     {
-        addAndMakeVisible (comp);
-        addAndMakeVisible (drive);
-        addAndMakeVisible (fuzz);
-        swap.setTooltip (juce::String (juce::CharPointer_UTF8 (u8"ペダルの順番を入れ替える")));
-        swap.onClick = [this]
+        for (auto* b : blocks())
         {
-            if (auto* o = proc.apvts.getParameter ("pedalOrder"))
-                o->setValueNotifyingHost (o->getValue() > 0.5f ? 0.0f : 1.0f);
-        };
-        addAndMakeVisible (swap);
+            addAndMakeVisible (*b);
+            b->addMouseListener (this, false);   // drag the block by its body (the knobs keep their own drags)
+            b->setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+            b->onMove = [this] (int block, int step)
+            {
+                const auto o = currentOrder();
+                setOrder (rig::moved (o, block, rig::posOf (o, block) + step));
+            };
+        }
+        ampBlock.onEdit = [this] { if (onEditAmp) onEditAmp(); };
         startTimerHz (10);
     }
 
+    std::function<void()> onEditAmp;   // set by the editor: show the AMP page
+
     void paint (juce::Graphics& g) override
     {
+        using FxUI::jp;
         auto r = getLocalBounds().toFloat();
         g.setColour (juce::Colour (0xff1d1e23));
         g.fillRoundedRectangle (r.withTrimmedTop (34.0f), 12.0f);
         g.setColour (juce::Colour (0xff8b8d96));
         g.setFont (juce::FontOptions (13.0f));
-        g.drawText (juce::String (juce::CharPointer_UTF8 (u8"コンプはいちばん前に固定。ドライブ・ファズは単体の Porch Drive・Wool Fuzz と同じ音。OFF のペダルは計算しません。鳴っていない間は休ませます")),
-                    r.removeFromTop (30.0f).withTrimmedLeft (4.0f), juce::Justification::centredLeft);
+        g.drawText (jp (u8"箱をドラッグか ◀ ▶ で順番を入れ替え。AMP の箱を押すと AMP ページ。CAB（スピーカー）はいつも最後。OFF のペダルは計算しません"),
+                    r.removeFromTop (30.0f).withTrimmedLeft (4.0f).withTrimmedRight (150.0f), juce::Justification::centredLeft);
         if (proc.fxSleeping.load())
         {
             g.setColour (juce::Colour (0xff4cc46a));
-            g.drawText (juce::String (juce::CharPointer_UTF8 (u8"休止中（弾くと戻ります）")), getLocalBounds().removeFromTop (30).withTrimmedRight (6), juce::Justification::centredRight);
+            g.drawText (jp (u8"休止中（弾くと戻ります）"), getLocalBounds().removeFromTop (30).withTrimmedRight (6), juce::Justification::centredRight);
         }
-        // signal flow
-        auto flow = board.toFloat();
+
+        // the signal line, with an arrow between the blocks
+        const float y = (float) row.getCentreY();
+        g.setColour (juce::Colour (0xff3a3c44));
+        g.fillRect (juce::Rectangle<float> ((float) row.getX() + 30.0f, y - 2.0f, (float) row.getWidth() - 60.0f, 4.0f));
         g.setColour (juce::Colour (0xff8b8d96));
         g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-        g.drawText ("IN", flow.removeFromLeft (50.0f), juce::Justification::centred);
-        g.drawText ("AMP >", flow.removeFromRight (70.0f), juce::Justification::centred);
-        g.setColour (juce::Colour (0xff3a3c44));
-        g.fillRect (board.toFloat().withSizeKeepingCentre ((float) board.getWidth() - 100.0f, 4.0f));
+        g.drawText ("IN", juce::Rectangle<int> (row.getX(), row.getCentreY() - 12, kInW, 24), juce::Justification::centred);
+        g.drawText ("OUT", juce::Rectangle<int> (row.getRight() - kOutW, row.getCentreY() - 12, kOutW, 24), juce::Justification::centred);
+        for (int k = 0; k <= rig::numBlocks; ++k)   // between the blocks, and before the CAB
+        {
+            const float x = k < rig::numBlocks ? (float) slots[(size_t) k].getX() - kGap * 0.5f : (float) cabBox.getX() - kGap * 0.5f;
+            juce::Path a; a.addTriangle (x - 5.0f, y - 7.0f, x - 5.0f, y + 7.0f, x + 6.0f, y);
+            g.fillPath (a);
+        }
+
+        // pedals after the amp: "AMP の後" (between the amp and the speaker)
+        const auto o = currentOrder();
+        const int ampAt = rig::posOf (o, rig::blkAmp);
+        for (int k = ampAt + 1; k < rig::numBlocks; ++k)
+        {
+            auto s = slots[(size_t) k];
+            g.setColour (juce::Colour (0xffe05a47).withAlpha (0.8f));
+            g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+            g.drawText (jp (u8"AMP の後"), s.withY (s.getBottom() + 6).withHeight (18), juce::Justification::centred);
+        }
+
+        paintCab (g);
     }
 
     void resized() override { layout(); }
 
+    // ---- drag to reorder
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        dragBlock = nullptr; dragging = false;
+        cabPressed = e.eventComponent == this && cabBox.contains (e.getPosition());
+        for (auto* b : blocks())
+            if (e.eventComponent == b) { dragBlock = b; dragStart = b->getPosition(); }
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (dragBlock == nullptr) return;
+        const int dx = e.getDistanceFromDragStartX();
+        if (! dragging && std::abs (dx) < 6) return;
+        dragging = true;
+        dragBlock->toFront (false);
+        const int x = juce::jlimit (slots[0].getX(), slots[(size_t) rig::numBlocks - 1].getX(), dragStart.x + dx);
+        dragBlock->setTopLeftPosition (x, slots[0].getY());
+        // where it would land: the slot nearest to its centre; the others make room
+        const auto preview = rig::moved (currentOrder(), dragBlock->block, slotNearest (x + slots[0].getWidth() / 2));
+        placeBlocks (preview, dragBlock);
+        previewOrder = preview;
+    }
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (cabPressed)   // the CAB box: its settings are on the AMP page
+        {
+            cabPressed = false;
+            if (e.eventComponent == this && cabBox.contains (e.getPosition()) && onEditAmp) onEditAmp();
+            return;
+        }
+        if (dragBlock == nullptr) return;
+        if (dragging) setOrder (previewOrder);
+        else if (dragBlock == &ampBlock && onEditAmp) onEditAmp();   // a click on the amp (no drag): its page
+        dragBlock = nullptr; dragging = false;
+        layout();
+    }
+
 private:
+    static constexpr int kInW = 34, kOutW = 40, kGap = 18, kCabW = 120;
+
+    std::array<MovableBlock*, rig::numBlocks> blocks() { return { &comp, &drive, &fuzz, &ampBlock }; }
+    MovableBlock* blockFor (int id) { return blocks()[(size_t) juce::jlimit (0, rig::numBlocks - 1, id)]; }
+
+    rig::Order currentOrder() const { return rig::orderAt ((int) proc.apvts.getRawParameterValue ("fxOrder")->load()); }
+
+    void setOrder (const rig::Order& o)
+    {
+        if (auto* p = proc.apvts.getParameter ("fxOrder"))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) rig::indexOf (o)));
+            p->endChangeGesture();
+        }
+        layout();
+        repaint();
+    }
+
+    int slotNearest (int centreX) const
+    {
+        int best = 0;
+        for (int k = 1; k < rig::numBlocks; ++k)
+            if (std::abs (slots[(size_t) k].getCentreX() - centreX) < std::abs (slots[(size_t) best].getCentreX() - centreX)) best = k;
+        return best;
+    }
+
     void layout()
     {
-        auto r = getLocalBounds().withTrimmedTop (50).reduced (20, 20);
-        board = r;
-        r.removeFromLeft (50); r.removeFromRight (70);
-        const int gapW = 36, swapW = 76;
-        const int pedalW = juce::jmin (280, (r.getWidth() - gapW - swapW) / 3), pedalH = juce::jmin (440, r.getHeight());
-        auto row = r.withSizeKeepingCentre (pedalW * 3 + gapW + swapW, pedalH);
-        comp.setBounds (row.removeFromLeft (pedalW));
-        row.removeFromLeft (gapW);
-        auto first = row.removeFromLeft (pedalW), mid = row.removeFromLeft (swapW), second = row;
-        const bool fuzzFirst = proc.apvts.getRawParameterValue ("pedalOrder")->load() > 0.5f;
-        (fuzzFirst ? fuzz : drive).setBounds (first);
-        (fuzzFirst ? drive : fuzz).setBounds (second);
-        swap.setBounds (mid.withSizeKeepingCentre (56, 34));
-        shownOrder = fuzzFirst;
+        auto r = getLocalBounds().withTrimmedTop (50).reduced (16, 12);
+        r.removeFromBottom (26);   // room for "AMP の後"
+        const int h = juce::jmin (470, r.getHeight());
+        row = r.withSizeKeepingCentre (r.getWidth(), h);
+        auto inner = row.withTrimmedLeft (kInW + kGap).withTrimmedRight (kOutW + kGap);
+        cabBox = inner.removeFromRight (kCabW).withSizeKeepingCentre (kCabW, juce::jmin (220, h));
+        inner.removeFromRight (kGap);
+        const int w = (inner.getWidth() - kGap * (rig::numBlocks - 1)) / rig::numBlocks;
+        for (int k = 0; k < rig::numBlocks; ++k)
+        {
+            slots[(size_t) k] = inner.removeFromLeft (w);
+            inner.removeFromLeft (kGap);
+        }
+        if (! dragging) placeBlocks (currentOrder(), nullptr);
+        shownOrder = (int) proc.apvts.getRawParameterValue ("fxOrder")->load();
+    }
+
+    void placeBlocks (const rig::Order& o, MovableBlock* skip)
+    {
+        for (int k = 0; k < rig::numBlocks; ++k)
+        {
+            auto* b = blockFor (o[(size_t) k]);
+            b->setArrowsEnabled (k > 0, k < rig::numBlocks - 1);
+            if (b != skip) b->setBounds (slots[(size_t) k]);
+        }
+        repaint();
+    }
+
+    void paintCab (juce::Graphics& g)
+    {
+        using FxUI::jp;
+        auto c = cabBox.toFloat();
+        const bool on = proc.apvts.getRawParameterValue ("cabOn")->load() > 0.5f;
+        const int type = juce::jlimit (0, ampsim::numCabs - 1, (int) proc.apvts.getRawParameterValue ("cabType")->load());
+        const int mic = juce::jlimit (0, 2, (int) proc.apvts.getRawParameterValue ("cabMicType")->load());
+        g.setColour (juce::Colours::black.withAlpha (0.35f));
+        g.fillRoundedRectangle (c.translated (0, 4), 10.0f);
+        g.setColour (juce::Colour (0xff2a2b30));
+        g.fillRoundedRectangle (c, 10.0f);
+        auto grille = c.reduced (10.0f).removeFromTop (c.getHeight() * 0.38f);
+        g.setColour (juce::Colour (0xff3a3833));
+        g.fillRoundedRectangle (grille, 5.0f);
+        g.setColour (juce::Colour (0xff4a4740));
+        for (float yy = grille.getY() + 4.0f; yy < grille.getBottom(); yy += 5.0f) g.drawHorizontalLine ((int) yy, grille.getX() + 4.0f, grille.getRight() - 4.0f);
+        auto t = c.reduced (10.0f).withTrimmedTop (c.getHeight() * 0.38f + 8.0f);
+        g.setColour (juce::Colour (0xffe8e6e1));
+        g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+        g.drawText (on ? "CAB" : "CAB OFF", t.removeFromTop (20.0f), juce::Justification::centred);
+        g.setFont (juce::FontOptions (12.0f));
+        g.setColour (juce::Colour (0xffb8b8c0));
+        const auto irName = proc.getCabIRName();
+        g.drawFittedText (type == ampsim::numCabs - 1 ? (irName.isNotEmpty() ? irName : juce::String ("IR")) : ampsim::cabNames()[type],
+                          t.removeFromTop (30.0f).toNearestInt(), juce::Justification::centred, 2);
+        if (type != ampsim::numCabs - 1) g.drawText (ampsim::micNames()[mic], t.removeFromTop (16.0f), juce::Justification::centred);
+        g.setColour (juce::Colour (0xff8b8d96));
+        g.setFont (juce::FontOptions (11.0f));
+        g.drawText (jp (u8"いつも最後"), c.removeFromBottom (20.0f), juce::Justification::centred);
     }
 
     void timerCallback() override
     {
-        const bool fuzzFirst = proc.apvts.getRawParameterValue ("pedalOrder")->load() > 0.5f;
-        if (fuzzFirst != shownOrder) { layout(); repaint(); }
+        const int o = (int) proc.apvts.getRawParameterValue ("fxOrder")->load();
+        if (o != shownOrder && ! dragging) { layout(); repaint(); }
         const bool sl = proc.fxSleeping.load();
         if (sl != shownSleep) { shownSleep = sl; repaint(); }
+        const auto k = ampBlock.key();
+        if (k != shownAmp) { shownAmp = k; ampBlock.repaint(); }
+        const auto ck = juce::String (proc.apvts.getRawParameterValue ("cabOn")->load()) + "/" + juce::String (proc.apvts.getRawParameterValue ("cabType")->load())
+                      + "/" + juce::String (proc.apvts.getRawParameterValue ("cabMicType")->load()) + "/" + proc.getCabIRName();
+        if (ck != shownCab) { shownCab = ck; repaint (cabBox.expanded (6)); }
     }
 
     AIOGuitarProcessor& proc;
     PedalPanel comp, drive, fuzz;
-    juce::TextButton swap { juce::String (juce::CharPointer_UTF8 (u8"⇄")) };
-    juce::Rectangle<int> board;
-    bool shownOrder = false, shownSleep = false;
+    AmpBlock ampBlock;
+    std::array<juce::Rectangle<int>, rig::numBlocks> slots;
+    juce::Rectangle<int> row, cabBox;
+    MovableBlock* dragBlock = nullptr;
+    juce::Point<int> dragStart;
+    bool dragging = false, cabPressed = false;
+    rig::Order previewOrder { 0, 1, 2, 3 };
+    int shownOrder = -1;
+    bool shownSleep = false;
+    juce::String shownAmp, shownCab;
 };
