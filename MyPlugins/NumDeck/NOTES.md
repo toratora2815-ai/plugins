@@ -53,3 +53,4 @@ v1.23.0: 「トラック」にオートメーションの Latch ⇔ Read（⌃�
 v1.24.0: Hum Keys をやめたので分類「Hum Keys」（Cat::HumKeys・"hk:"）を消した。icOpen（"ic:open"）は「できた MIDI を出す（ドラッグ用）」（Idea Catcher 1.4.0 から Logic は開かず、画面を出すだけ）
 v1.24.1: アプリのタイルで前面のアプリを隠すとき、戻る先が分からなくても Finder を開き直さない（Finder はウィンドウがないと新しいフォルダを出すため）。戻る先は「このタイルで開く前のアプリ」→「直前に使っていたアプリ（lastFrontPid）」→ なし。Finder は戻る先にしない（前にも出さない）。Num Deck 自身のタイルは、ほかのアプリに触らず Num Deck の画面を隠す・出すだけ（[NSApp hide:] / unhide + orderFrontRegardless）
 v1.24.2: 補助アプリ（いつも手前）は [NSApp hide:] も外からの hide も効かないので、Num Deck のタイルはウィンドウを orderOut でしまい、しまった分だけ orderFrontRegardless で出す
+v1.25.0: 起動したときはいつも「業務 / リンク」（隠していれば業務の最初のページ）から始める（Deck のコンストラクター）。起動したら画面を前に出す（makeForegroundProcess + toFront）。前回の位置が今つながっていない画面なら真ん中に出す

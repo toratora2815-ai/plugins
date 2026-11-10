@@ -11,6 +11,9 @@ public:
     void initialise (const juce::String&) override
     {
         mainWindow = std::make_unique<MainWindow> (getApplicationName());
+        // 起動したら Num Deck の画面を前に出す（後ろに隠れて見えない、を防ぐ）
+        juce::Process::makeForegroundProcess();
+        mainWindow->toFront (true);
     }
 
     void shutdown() override { mainWindow = nullptr; }
@@ -31,7 +34,10 @@ public:
             setContentOwned (content, true);
             setResizable (true, true);
             setResizeLimits (360, 250, 1800, 1300);
-            if (! restoreWindowStateFromString (content->savedWindowState()))
+            // 前回の位置が、今つながっていない画面（外したモニターなど）なら、今の画面の真ん中に出す
+            const auto screens = juce::Desktop::getInstance().getDisplays().getTotalBounds (true);
+            if (! restoreWindowStateFromString (content->savedWindowState())
+                || ! screens.contains (getBounds().getTopLeft().translated (40, 12)))
                 centreWithSize (getWidth(), getHeight());
             setVisible (true);
         }

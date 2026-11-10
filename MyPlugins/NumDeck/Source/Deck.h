@@ -231,6 +231,13 @@ namespace numdeck
                     names[(size_t) m][(size_t) p] = defaultPageName (m, p);
                 }
             load();
+
+            // 起動したときは、いつも「業務 / リンク」から始める（前回 Logic Pro モードで終わっていても）。
+            // リンクのページを隠していれば、業務の最初のページ
+            constexpr int kLinkPage = 3;
+            mode = ModeWork;
+            auto& o = order[(size_t) ModeWork];
+            pages[(size_t) ModeWork] = isVisible (ModeWork, kLinkPage) ? kLinkPage : o.front();
         }
 
         static juce::String modeName (int m) { return m == ModeLogic ? "Logic Pro" : jp ("業務"); }
