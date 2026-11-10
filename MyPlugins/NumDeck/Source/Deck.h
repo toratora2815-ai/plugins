@@ -236,8 +236,7 @@ namespace numdeck
             // リンクのページを隠していれば、業務の最初のページ
             constexpr int kLinkPage = 3;
             mode = ModeWork;
-            auto& o = order[(size_t) ModeWork];
-            pages[(size_t) ModeWork] = isVisible (ModeWork, kLinkPage) ? kLinkPage : o.front();
+            pages[(size_t) ModeWork] = isVisible (ModeWork, kLinkPage) ? kLinkPage : order[(size_t) ModeWork].front();
         }
 
         static juce::String modeName (int m) { return m == ModeLogic ? "Logic Pro" : jp ("業務"); }
