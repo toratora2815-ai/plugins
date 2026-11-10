@@ -901,7 +901,7 @@ int main (int argc, char** argv)
         // every note alternates its down / up take: a spare pass between two takes makes them use the same recordings
         auto take = [&] (int order)
         {
-            setP (proc, "fxOrder", (float) order); proc.prepareToPlay (sr, 256);
+            setP (proc, "fxChain", (float) order); proc.prepareToPlay (sr, 256);
             auto out = render (proc, riff(), 1.6, sr);
             render (proc, riff(), 1.6, sr);   // spare
             return out;
@@ -912,14 +912,14 @@ int main (int argc, char** argv)
             for (int c = 0; c < 2; ++c) for (int i = 0; i < a.getNumSamples(); ++i) d = juce::jmax (d, std::abs (a.getSample (c, i) - b.getSample (c, i)));
             return d;
         };
-        const int ampFirst = rig::indexOf ({ rig::blkAmp, rig::blkComp, rig::blkDrive, rig::blkFuzz });
-        const int driveAfter = rig::indexOf ({ rig::blkComp, rig::blkFuzz, rig::blkAmp, rig::blkDrive });
-        const int compLast = rig::indexOf ({ rig::blkDrive, rig::blkFuzz, rig::blkAmp, rig::blkComp });
+        const int ampFirst = rig::indexOf ({ rig::blkAmp, rig::blkComp, rig::blkDrive, rig::blkFuzz, rig::blkTrem });
+        const int driveAfter = rig::indexOf ({ rig::blkComp, rig::blkFuzz, rig::blkAmp, rig::blkDrive, rig::blkTrem });
+        const int compLast = rig::indexOf ({ rig::blkDrive, rig::blkFuzz, rig::blkAmp, rig::blkComp, rig::blkTrem });
 
         // names, the round trip index <-> order, moving one block
-        bool namesOk = rig::orderNames().size() == rig::kNumOrders && rig::orderNames()[0] == "Comp > Drive > Fuzz > Amp";
+        bool namesOk = rig::orderNames().size() == rig::kNumOrders && rig::orderNames()[0] == "Comp > Drive > Fuzz > Amp > Trem";
         for (int k = 0; k < rig::kNumOrders; ++k) namesOk = namesOk && rig::indexOf (rig::orderAt (k)) == k;
-        namesOk = namesOk && rig::moved (rig::orderAt (0), rig::blkAmp, 1) == rig::Order { rig::blkComp, rig::blkAmp, rig::blkDrive, rig::blkFuzz };
+        namesOk = namesOk && rig::moved (rig::orderAt (0), rig::blkAmp, 1) == rig::Order { rig::blkComp, rig::blkAmp, rig::blkDrive, rig::blkFuzz, rig::blkTrem };
         check (namesOk, "24 orders: names, index round trip, moving one block");
         bool padOk = true;
         for (int m = 0; m < ampsim::numModels; ++m) for (float g : { 0.0f, 3.3f, 10.0f }) for (float ms : { 0.0f, 6.1f, 10.0f })
@@ -940,7 +940,7 @@ int main (int argc, char** argv)
         const auto ampLast = take (rig::kDefault), ampFront = take (ampFirst);
         const float dPad = juce::Decibels::gainToDecibels (maxDiff (ampLast, ampFront) / juce::jmax (1.0e-9f, ampLast.getMagnitude (0, 0, ampLast.getNumSamples())), -200.0f);
         check (dPad < -80.0f, "AMP first, pedals off after it: the same as AMP last (" + juce::String (dPad, 1) + " dB)");
-        check (proc.getLatencySamples() == [&] { setP (proc, "fxOrder", 0); proc.prepareToPlay (sr, 256); return proc.getLatencySamples(); }(),
+        check (proc.getLatencySamples() == [&] { setP (proc, "fxChain", 0); proc.prepareToPlay (sr, 256); return proc.getLatencySamples(); }(),
                "the reported latency is the same for every order (" + juce::String (proc.getLatencySamples()) + " samples)");
 
         // drive after the amp: about as loud as before it (the amp's output is brought back to guitar level in between)
@@ -954,7 +954,7 @@ int main (int argc, char** argv)
             setP (proc, "pdOn", 0); setP (proc, "ampModel", 0); setP (proc, "ampGain", 3); setP (proc, "ccComp", 6);
             auto twoNotes = [&] (bool compOn)
             {
-                setP (proc, "ccOn", compOn ? 1 : 0); setP (proc, "fxOrder", (float) compLast); proc.prepareToPlay (sr, 256);
+                setP (proc, "ccOn", compOn ? 1 : 0); setP (proc, "fxChain", (float) compLast); proc.prepareToPlay (sr, 256);
                 std::vector<Ev> ev { { 0.01, juce::MidiMessage::noteOn (1, 52, 0.3f) }, { 0.75, juce::MidiMessage::noteOff (1, 52) },
                                      { 0.8, juce::MidiMessage::noteOn (1, 57, 1.0f) }, { 1.5, juce::MidiMessage::noteOff (1, 57) } };
                 auto out = render (proc, ev, 1.6, sr);
@@ -985,7 +985,7 @@ int main (int argc, char** argv)
         {
             auto run = [&] (int from, int to, bool switching)
             {
-                setP (proc, "fxOrder", (float) from);
+                setP (proc, "fxChain", (float) from);
                 proc.prepareToPlay (sr, 256);
                 std::vector<Ev> ev { { 0.01, juce::MidiMessage::noteOn (1, 45, 0.8f) }, { 1.4, juce::MidiMessage::noteOff (1, 45) } };
                 juce::MidiBuffer all; for (auto& e : ev) all.addEvent (e.m, (int) (e.t * sr));
@@ -993,7 +993,7 @@ int main (int argc, char** argv)
                 juce::AudioBuffer<float> out (2, total), block (2, bs);
                 for (int pos = 0; pos < total; pos += bs)
                 {
-                    if (switching && pos == (int) (0.6 * sr) / bs * bs) setP (proc, "fxOrder", (float) to);
+                    if (switching && pos == (int) (0.6 * sr) / bs * bs) setP (proc, "fxChain", (float) to);
                     const int n = juce::jmin (bs, total - pos);
                     block.setSize (2, n, false, false, true);
                     juce::MidiBuffer mb;
@@ -1026,10 +1026,10 @@ int main (int argc, char** argv)
 
         // reordering while resting: the next note starts in the new order at once (no fade in its first 30 ms)
         {
-            setP (proc, "fxOrder", (float) rig::kDefault);
+            setP (proc, "fxChain", (float) rig::kDefault);
             proc.prepareToPlay (sr, 256);
             render (proc, {}, 1.0, sr);                       // rests
-            setP (proc, "fxOrder", (float) driveAfter);
+            setP (proc, "fxChain", (float) driveAfter);
             render (proc, {}, 0.1, sr);                       // still resting: taken at once
             const auto got = render (proc, riff(), 1.6, sr);
             render (proc, riff(), 1.6, sr);   // spare: the same takes again below
@@ -1045,16 +1045,16 @@ int main (int argc, char** argv)
             juce::MemoryBlock mb; p5.getStateInformation (mb);
             juce::MemoryInputStream in (mb, false); in.readInt(); in.readInt();
             auto tree = juce::ValueTree::readFromStream (in);
-            for (auto c : tree) if (c["id"].toString() == "fxOrder") { c.setProperty ("id", "pedalOrder", nullptr); c.setProperty ("value", 1.0f, nullptr); }
+            for (auto c : tree) if (c["id"].toString() == "fxChain") { c.setProperty ("id", "pedalOrder", nullptr); c.setProperty ("value", 1.0f, nullptr); }
             juce::MemoryBlock old;
             { juce::MemoryOutputStream mos (old, false); mos.writeInt (0x47494f41); mos.writeInt (2); tree.writeToStream (mos); juce::ValueTree ("NOKIT").writeToStream (mos); }
             p5.setStateInformation (old.getData(), (int) old.getSize());
-            const int got = (int) p5.apvts.getRawParameterValue ("fxOrder")->load();
+            const int got = (int) p5.apvts.getRawParameterValue ("fxChain")->load();
             check (got == rig::fromOldPedalOrder (true), "0.2.0 project with Fuzz > Drive: opens as " + rig::orderNames()[got]);
         }
 
         for (auto* id : { "ccOn", "pdOn", "wfOn" }) setP (proc, id, 0);
-        setP (proc, "fxOrder", (float) rig::kDefault); setP (proc, "ampModel", 3); setP (proc, "ampGain", 4); setP (proc, "pdGain", 4);
+        setP (proc, "fxChain", (float) rig::kDefault); setP (proc, "ampModel", 3); setP (proc, "ampGain", 4); setP (proc, "pdGain", 4);
         setP (proc, "ccComp", 5); setP (proc, "kitHuman", 0.5f); setP (proc, "strumOn", 1);
         proc.prepareToPlay (sr, 256);
     }
@@ -1975,14 +1975,14 @@ int main (int argc, char** argv)
         // NaN once: the rig (pedals + amp + cab) drops that block and plays on
         {
             Rig rg; FXParams fp; fp.ampModel = 3;
-            rg.prepare (48000.0, 256, rig::indexOf ({ rig::blkAmp, rig::blkComp, rig::blkDrive, rig::blkFuzz }), fp);
+            rg.prepare (48000.0, 256, rig::indexOf ({ rig::blkAmp, rig::blkComp, rig::blkDrive, rig::blkFuzz, rig::blkTrem }), fp);
             rg.drive.setOn (true); rg.drive.setParams (4.0f, 5.0f, -6.0f);
             juce::AudioBuffer<float> b (2, 48000); sine (b, 0.3f);
             b.setSample (0, 5000, std::numeric_limits<float>::quiet_NaN());
             for (int pos = 0; pos < b.getNumSamples(); pos += 256)
             {
                 juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, juce::jmin (256, b.getNumSamples() - pos));
-                rg.process (blk, blk.getNumSamples(), fp, rig::indexOf ({ rig::blkAmp, rig::blkComp, rig::blkDrive, rig::blkFuzz }));
+                rg.process (blk, blk.getNumSamples(), fp, rig::indexOf ({ rig::blkAmp, rig::blkComp, rig::blkDrive, rig::blkFuzz, rig::blkTrem }));
             }
             bool fin = true; for (int i = 0; i < 48000; ++i) fin = fin && std::isfinite (b.getSample (0, i)) && std::isfinite (b.getSample (1, i));
             check (fin && b.getRMSLevel (0, 24000, 24000) > 0.01f, "a NaN in the input: no NaN out, the amp plays on");
@@ -2128,7 +2128,7 @@ int main (int argc, char** argv)
         for (int i = 0; i < 3; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
         snap ("editor_amp.png");
         // the amp in the middle: COMP > DRIVE > AMP > FUZZ, then CAB
-        setP (proc, "fxOrder", (float) rig::indexOf ({ rig::blkComp, rig::blkDrive, rig::blkAmp, rig::blkFuzz }));
+        setP (proc, "fxChain", (float) rig::indexOf ({ rig::blkComp, rig::blkDrive, rig::blkAmp, rig::blkFuzz, rig::blkTrem }));
         setP (proc, "wfOn", 1); setP (proc, "ampModel", 4);
         for (int i = 0; i < 3; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
         snap ("editor_amp_mid.png");
@@ -2137,7 +2137,7 @@ int main (int argc, char** argv)
                 if (b->getButtonText() == "EFFECTS") b->triggerClick();
         for (int i = 0; i < 3; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
         snap ("editor_effects_mid.png");
-        setP (proc, "fxOrder", (float) rig::kDefault); setP (proc, "wfOn", 0); setP (proc, "ampModel", 3);
+        setP (proc, "fxChain", (float) rig::kDefault); setP (proc, "wfOn", 0); setP (proc, "ampModel", 3);
     }
 
     std::cout << (failures == 0 ? "ALL PASSED" : juce::String (failures) + " FAILED") << std::endl;

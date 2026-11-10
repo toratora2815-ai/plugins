@@ -59,9 +59,24 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
     l.add (std::make_unique<APF> (juce::ParameterID { "wfSustain", 1 }, "Fuzz Sustain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 6.0f, fmt ("", 1)));
     l.add (std::make_unique<APF> (juce::ParameterID { "wfTone", 1 }, "Fuzz Tone", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
     l.add (std::make_unique<APF> (juce::ParameterID { "wfVolume", 1 }, "Fuzz Volume", juce::NormalisableRange<float> (-36.0f, 6.0f, 0.1f), -12.0f, fmt (" dB", 1)));
-    // the order of COMP / DRIVE / FUZZ / AMP (EFFECTS page; CAB and OUTPUT always last). Not automatable:
-    // reordering in the middle of a song would only make level jumps
-    l.add (std::make_unique<APC> (juce::ParameterID { "fxOrder", 2 }, "Effects Order", rig::orderNames(), rig::kDefault,
+    // ---- TREM（My Tremolo の小型版、0.4.0）: DEPTH / RATE（SYNC 中は音符、OFF と単体アプリは Hz）/ SHAPE
+    //   版のヒントは 3（前の fxOrder の 2 より上）。1 だと Logic のパラメーター番号が 45 個ずれ、前の曲のオートメーションが別のつまみに行く
+    {
+        juce::StringArray rates, shapes;
+        for (int i = 0; i < pedal::TremDSP::kNumRates; ++i) rates.add (pedal::TremDSP::rateName (i));
+        for (int i = 0; i < pedal::TremDSP::kNumShapes; ++i) shapes.add (pedal::TremDSP::shapeName (i));
+        l.add (std::make_unique<APB> (juce::ParameterID { "trOn", 3 }, "Trem On", false));
+        l.add (std::make_unique<APF> (juce::ParameterID { "trDepth", 3 }, "Trem Depth", juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f), 60.0f, fmt (" %", 0)));
+        l.add (std::make_unique<APC> (juce::ParameterID { "trRate", 3 }, "Trem Rate", rates, 3));
+        l.add (std::make_unique<APF> (juce::ParameterID { "trHz", 3 }, "Trem Rate Hz", juce::NormalisableRange<float> (1.0f, 12.0f, 0.01f, 0.6f), 5.5f, fmt (" Hz", 2)));
+        l.add (std::make_unique<APC> (juce::ParameterID { "trShape", 3 }, "Trem Shape", shapes, 2));
+        l.add (std::make_unique<APB> (juce::ParameterID { "trSync", 3 }, "Trem Sync", true));
+    }
+    // the order of COMP / DRIVE / FUZZ / AMP / TREM (EFFECTS page; CAB and OUTPUT always last). Not automatable:
+    // reordering in the middle of a song would only make level jumps.
+    // 0.4.0: 5 blocks = 120 orders under a new ID (the old "fxOrder" had 24); old projects are read with the TREM right after the AMP.
+    // Version hint 3 (above the old fxOrder's 2) so that no existing parameter changes its number in Logic
+    l.add (std::make_unique<APC> (juce::ParameterID { "fxChain", 3 }, "Effects Order", rig::orderNames(), rig::kDefault,
                                   juce::AudioParameterChoiceAttributes().withAutomatable (false)));
 
     // ---- Amp
@@ -227,10 +242,11 @@ void AIOGuitarProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     expectedPpq = -1.0;
     volume.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (get ("gtVolume")));
     readParams();
-    rig.prepare (sampleRate, samplesPerBlock, (int) get ("fxOrder"), fx);
+    rig.prepare (sampleRate, samplesPerBlock, (int) get ("fxChain"), fx);
     rig.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));
     rig.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
     rig.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
+    rig.trem.snapParams (get ("trDepth"), get ("trRate"), get ("trShape"));
     setLatencySamples (rig.latency());   // the same for every order
     quietSamples = 0;
     lastOutPeak = 1.0f;
@@ -459,6 +475,10 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     rig.comp.setParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));
     rig.drive.setParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
     rig.fuzz.setParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
+    rig.trem.setOn (get ("trOn") > 0.5f);
+    rig.trem.setParams (get ("trDepth"), get ("trRate"), get ("trShape"));
+    // TREM の時計: SYNC 中は Logic の拍（止まっている間は Logic のテンポで自分で回る）。単体アプリは Logic がないので Hz だけ
+    rig.trem.get().setClock (! isStandaloneApp() && get ("trSync") > 0.5f, get ("trHz"), playing, havePpq, ppq, bpm);
 
     const bool silentIn = buffer.getMagnitude (0, n) < 1.0e-6f && (buffer.getNumChannels() < 2 || buffer.getMagnitude (1, 0, n) < 1.0e-6f);
     quietSamples = silentIn ? quietSamples + n : 0;
@@ -468,16 +488,17 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (sleeping)
     {
         fx.offline = isNonRealtime();
-        rig.rest (fx, (int) get ("fxOrder"), n);
+        rig.rest (fx, (int) get ("fxChain"), n);
         rig.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));    // the next note starts as set
         rig.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
         rig.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
+        rig.trem.snapParams (get ("trDepth"), get ("trRate"), get ("trShape"));
         buffer.clear();
         return;
     }
     fx.offline = isNonRealtime();
     if (buffer.getNumChannels() >= 2)
-        rig.process (buffer, n, fx, (int) get ("fxOrder"));
+        rig.process (buffer, n, fx, (int) get ("fxChain"));
 
     // safety on the way out: linear up to -6 dBFS, rounded off above, never over 0 dBFS
     // (the pedals alone reach +26 dBFS, a clean amp turned all the way up +7)
@@ -782,24 +803,32 @@ void AIOGuitarProcessor::getStateInformation (juce::MemoryBlock& destData)
     score.toTree().writeToStream (mos);
 }
 
-// "Pedal Order" (0.2.0 and before: Drive > Fuzz / Fuzz > Drive, the comp first and the amp last) -> "Effects Order"
+// 並びの読み替え:
+//  "Pedal Order"（0.2.0 まで: Drive > Fuzz / Fuzz > Drive、COMP が先頭で AMP が最後）
+//  "fxOrder"（0.3.0: COMP / DRIVE / FUZZ / AMP の 24 通り）
+//  → "fxChain"（0.4.0: TREM を足した 120 通り。TREM は AMP の直後・OFF で入る）
 static void migrateOrder (juce::ValueTree& tree)
 {
-    juce::ValueTree oldOrder, newOrder;
+    juce::ValueTree pedal, order4, chain;
     for (auto c : tree)
         if (c.hasType ("PARAM"))
         {
-            if (c["id"].toString() == "pedalOrder") oldOrder = c;
-            if (c["id"].toString() == "fxOrder")    newOrder = c;
+            const auto id = c["id"].toString();
+            if (id == "pedalOrder") pedal = c;
+            if (id == "fxOrder")    order4 = c;
+            if (id == "fxChain")    chain = c;
         }
-    if (oldOrder.isValid() && ! newOrder.isValid())
+    if (! chain.isValid() && (order4.isValid() || pedal.isValid()))
     {
+        const int idx = order4.isValid() ? rig::fromOrder4 ((int) std::lround ((float) order4["value"]))
+                                         : rig::fromOldPedalOrder ((float) pedal["value"] > 0.5f);
         juce::ValueTree m ("PARAM");
-        m.setProperty ("id", "fxOrder", nullptr);
-        m.setProperty ("value", (float) rig::fromOldPedalOrder ((float) oldOrder["value"] > 0.5f), nullptr);
+        m.setProperty ("id", "fxChain", nullptr);
+        m.setProperty ("value", (float) idx, nullptr);
         tree.appendChild (m, nullptr);
     }
-    if (oldOrder.isValid()) tree.removeChild (oldOrder, nullptr);
+    if (pedal.isValid())  tree.removeChild (pedal, nullptr);
+    if (order4.isValid()) tree.removeChild (order4, nullptr);
 }
 
 void AIOGuitarProcessor::setStateInformation (const void* data, int sizeInBytes)
@@ -834,7 +863,7 @@ void AIOGuitarProcessor::setStateInformation (const void* data, int sizeInBytes)
             }
         }
     }
-    // projects / presets from before 0.3.0: "Pedal Order" (Drive > Fuzz / Fuzz > Drive) -> the order of all four blocks
+    // projects / presets from before 0.4.0: the old orders -> the order of all five blocks (TREM right after the AMP)
     migrateOrder (tree);
     const auto irTree = tree.getChildWithName ("CABIR");
     tree.removeChild (irTree, nullptr);

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
-project(AIOGuitar VERSION 0.3.0)
+project(AIOGuitar VERSION 0.4.0)
 
 option(COPY_AFTER_BUILD "Copy plugin to system folder after build" ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -54,8 +54,9 @@ target_link_libraries(AIOGuitar
 
 # 自作プラグイン共通の部品（Plugin Link・プリセット）
 target_include_directories(AIOGuitar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../Shared
-    # EFFECTS のペダルは単体プラグインと同じ音の部品を使う
-    ${CMAKE_CURRENT_SOURCE_DIR}/../WoolFuzz/Source ${CMAKE_CURRENT_SOURCE_DIR}/../PorchDrive/Source)
+    # EFFECTS のペダルは単体プラグインと同じ音の部品を使う（TREM は My Tremolo の揺れ方の計算と形の表）
+    ${CMAKE_CURRENT_SOURCE_DIR}/../WoolFuzz/Source ${CMAKE_CURRENT_SOURCE_DIR}/../PorchDrive/Source
+    ${CMAKE_CURRENT_SOURCE_DIR}/../MyTremolo/Source)
 
 # ---- オフラインの数値テスト（開発用・任意。-DAIO_BUILD_RENDER_TEST=ON） ----
 option(AIO_BUILD_RENDER_TEST "Build offline render test tool" OFF)
@@ -69,7 +70,8 @@ if(AIO_BUILD_RENDER_TEST)
     target_compile_definitions(RenderTest PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
     target_include_directories(RenderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../Shared
-        ${CMAKE_CURRENT_SOURCE_DIR}/../WoolFuzz/Source ${CMAKE_CURRENT_SOURCE_DIR}/../PorchDrive/Source)
+        ${CMAKE_CURRENT_SOURCE_DIR}/../WoolFuzz/Source ${CMAKE_CURRENT_SOURCE_DIR}/../PorchDrive/Source
+        ${CMAKE_CURRENT_SOURCE_DIR}/../MyTremolo/Source)
     target_link_libraries(RenderTest PRIVATE
         juce::juce_audio_utils juce::juce_dsp
         juce::juce_recommended_config_flags)

@@ -117,7 +117,7 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
 
 ## 並べ替え（2026-11-10 本人「エフェクターの順番を自由に。アンプをどこに置くかも。真ん中に置いたらアンプをいじるのがアンプの画面」）
 - 本人の決定: CAB はいつも最後（AMP と一緒に動かさない）、内蔵リバーブは外す。mix-engineer「作る価値あり」（条件: CAB 固定・リバーブを外す・AMP の後ろに固定のそろえ）
-- fxOrder（AudioParameterChoice、24 通り＝4 つの並べ方、版のヒント 2、オートメーション不可）。並びの番号は std::next_permutation の順（0 = Comp > Drive > Fuzz > Amp）。
+- fxOrder（AudioParameterChoice、24 通り＝4 つの並べ方、版のヒント 2、オートメーション不可）→ 0.4.0 で fxChain（120 通り）に置き換え。並びの番号は std::next_permutation の順（0 = Comp > Drive > Fuzz > Amp）。
   rig::orderAt / indexOf / moved（1 つ取り出して入れ直す）/ fromOldPedalOrder（前の pedalOrder 1 = 2 番 Comp > Fuzz > Drive > Amp）。
   状態の読み込み（migrateOrder）で pedalOrder → fxOrder。自分のプリセット（PresetBar の XML）にある古い pedalOrder は読み替えない（Shared を触らないため。0.2.0 は 1 日だけ）
 - Rig::processChunk: 入口と各チャンクの後で NaN / inf / |x| ≥ 1e4 を見張る（あれば全部 reset）。並びを変えたら S 字 5 ms 下げ → 次のチャンクで入れ替え → 5 ms 上げ（CAB の前で）。
@@ -159,6 +159,16 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
 ## 版
 - 0.1.0（2026-11-08）… リポジトリに移す。MY GUITAR ページ（録音 4 欄、弦とフレットの表、PLAYING、奏法）、SCORE ページ（タブ譜、FOLLOW LOGIC / PLAY IN SYNC、DRAG TO LOGIC）、タブ 4 つ（EFFECTS / AMP は仮）、LINK 欄・プリセット欄。
   DSP 検査 1 回目「直してから」→ 確保 0 回・キット差し替え 12 ms フェード・グライドを段ごと・Palm Mute をならす・96k を間引く・decode の範囲チェック → 2 回目「渡してよい」
+- 0.4.0（2026-11-10）… EFFECTS に TREM（My Tremolo の小型版）。本人「My Tremolo ができたら愛用ギターにも入れて」→ mix-engineer「形を変えれば価値あり」→ 本人「小型版」。
+  並べ替え 5 個目（初期位置 AMP の直後）、DEPTH / RATE（SYNC 中は音符 trRate、OFF・単体アプリは trHz）/ SHAPE（5 種）＋ trSync。色付け・4 倍なし（遅れ 0）。
+  Source/TremPedalDSP.h（JUCE なし）が ../MyTremolo/Source の MyTremoloDSP.h（Modulator::gain・kShapes）を使う → **My Tremolo の Source を変えたら AIO Guitar もビルド**。
+  並びのパラメーターは新しい ID fxChain（120 通り）。新しいパラメーター 7 個（tr* と fxChain）は版のヒント 3
+  （前の fxOrder の 2 より上。1 だと Logic のパラメーター番号が 48 個中 45 個ずれ、前の曲のオートメーションが別のつまみに行く。DSP 検査係が au_order.py で計算）。前の fxOrder（24 通り）・pedalOrder は migrateOrder で「TREM を AMP の直後」に読み替え（rig::fromOrder4）。
+  前に保存した自分のプリセット（.mypreset）は fxOrder を持っているので、読むと並びは標準（fxChain の初期値）に戻る。内蔵プリセット「Vintage Amp Trem」（番号がずれないよう、いちばん最後に足した）。
+  休止（rest）中は trem.reset()（戻った最初の音が古い揺れの位置から鳴らないように）。SYNC の切り替え・位置の飛び・RATE / SHAPE の変更は 10 ms のつなぎ。
+  Rig がブロックを分けて呼ぶとき、Logic の位置を使うのは最初の分だけ（clockFresh）。tools/RenderTest.cpp も fxChain・5 個の並びに直した。
+  まだ: PLAY IN SYNC で鳴らしている間、TREM は楽譜の位置ではなく Logic のテンポで自分で回る
+  数値テスト build/aiotrem/t.cpp: My Tremolo（Digital）との差 平均 0.2 %、Hz の周期ぴったり、遅れ 0、位置が飛んだ・RATE を変えた所の段差 0.02〜0.06（Square の角 0.13 より小さい）
 - 0.3.0（2026-11-10）… EFFECTS で COMP / DRIVE / FUZZ / AMP を好きな順に（Rig.h、AMP の後ろはそろえ AmpPad.h）、CAB はいつも最後、内蔵リバーブを外す、
   持ち越し 4 件（IR 2 つ続けて・手弾きアップストローク・UP STRINGS All）、内蔵プリセット「Even Lead (Drive > Comp)」。mix-engineer「作る価値あり」、DSP 検査 2 回
 - 0.2.0（2026-11-09）… 強さ MEDIUM の層（3 層、ベロシティ 1〜60 / 61〜100 / 101〜127、層は同じ音量でベロシティのカーブ約 20 dB）、

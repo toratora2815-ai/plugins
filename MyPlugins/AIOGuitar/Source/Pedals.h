@@ -1,11 +1,12 @@
 #pragma once
 // EFFECTS ページのペダル 1 台分。中身は単体プラグインと同じ音の部品（WoolFuzzDSP / PorchDriveDSP）と、
-// AIO Guitar だけのコンプ（CottonCompDSP）。並べる順番は Rig.h。
+// AIO Guitar だけのコンプ（CottonCompDSP）、My Tremolo の小型版（TremPedalDSP）。並べる順番は Rig.h。
 // OFF のペダルは計算しない（タイミングをそろえる短い遅らせだけ）。ON/OFF は 15 ms でつなぐ。
 #include <JuceHeader.h>
 #include "WoolFuzzDSP.h"
 #include "PorchDriveDSP.h"
 #include "CottonCompDSP.h"
+#include "TremPedalDSP.h"
 
 template <typename DSP>
 class PedalSlot
@@ -26,6 +27,7 @@ public:
     int latency() const { return lat; }
 
     void setParams (float a, float b, float c) { dsp.setParams (a, b, c); }
+    DSP& get() { return dsp; }   // TREM の時計など、3 つのつまみ以外を渡すとき
     void snapParams (float a, float b, float c) { dsp.setParams (a, b, c, true); }
 
     void setOn (bool shouldBeOn)

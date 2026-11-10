@@ -1,5 +1,6 @@
 #pragma once
-// 音の流れ全体（EFFECTS ページの並び）: IN → [COMP / DRIVE / FUZZ / AMP を好きな順に] → CAB → OUTPUT
+// 音の流れ全体（EFFECTS ページの並び）: IN → [COMP / DRIVE / FUZZ / AMP / TREM を好きな順に] → CAB → OUTPUT
+//  - TREM（0.4.0）は My Tremolo の小型版。初期位置は AMP の直後（本物のアンプのトレモロと同じ所）
 //  - CAB（スピーカー＋マイク）と OUTPUT はいつも最後（本物のギターと同じ。AMP の後ろの歪みもスピーカーが丸める）
 //  - 並びを変えたら: 5 ms で下げる → 次のブロックで入れ替え、ペダルと AMP をまっさらにして 20 ms 無音で慣らす → 8 ms で上げる
 //    （前の位置での状態＝コンプの下げ量などを持ち越すと、つないだ直後に音が飛び出すため）。遅れの合計は並びに関係なく同じ
@@ -12,33 +13,44 @@
 
 namespace rig
 {
-    enum Block { blkComp = 0, blkDrive, blkFuzz, blkAmp, numBlocks };
+    enum Block { blkComp = 0, blkDrive, blkFuzz, blkAmp, blkTrem, numBlocks };
     using Order = std::array<int, numBlocks>;
-    constexpr int kNumOrders = 24;   // 4 blocks: 4! orders
-    constexpr int kDefault = 0;      // Comp > Drive > Fuzz > Amp
+    constexpr int kNumOrders = 120;  // 5 blocks: 5! orders（パラメーター fxChain の番号）
+    constexpr int kDefault = 0;      // Comp > Drive > Fuzz > Amp > Trem
 
     inline Order orderAt (int index)
     {
-        Order o { 0, 1, 2, 3 };
+        Order o { 0, 1, 2, 3, 4 };
         for (int k = juce::jlimit (0, kNumOrders - 1, index); k > 0; --k) std::next_permutation (o.begin(), o.end());
         return o;
     }
     inline int indexOf (const Order& o)
     {
-        Order p { 0, 1, 2, 3 };
+        Order p { 0, 1, 2, 3, 4 };
         for (int k = 0; k < kNumOrders; ++k) { if (p == o) return k; std::next_permutation (p.begin(), p.end()); }
         return kDefault;
     }
-    inline const char* blockName (int b) { static const char* n[] { "Comp", "Drive", "Fuzz", "Amp" }; return n[juce::jlimit (0, 3, b)]; }
+    inline const char* blockName (int b) { static const char* n[] { "Comp", "Drive", "Fuzz", "Amp", "Trem" }; return n[juce::jlimit (0, numBlocks - 1, b)]; }
     inline juce::StringArray orderNames()
     {
         juce::StringArray s;
         for (int k = 0; k < kNumOrders; ++k)
         {
             const auto o = orderAt (k);
-            s.add (juce::String (blockName (o[0])) + " > " + blockName (o[1]) + " > " + blockName (o[2]) + " > " + blockName (o[3]));
+            juce::String t;
+            for (int j = 0; j < numBlocks; ++j) t << (j ? " > " : "") << blockName (o[(size_t) j]);
+            s.add (t);
         }
         return s;
+    }
+    // 0.3.0 の「Effects Order」（COMP / DRIVE / FUZZ / AMP の 24 通り、パラメーター fxOrder）→ TREM を AMP の直後に入れた番号
+    inline int fromOrder4 (int index4)
+    {
+        std::array<int, 4> o4 { 0, 1, 2, 3 };
+        for (int k = juce::jlimit (0, 23, index4); k > 0; --k) std::next_permutation (o4.begin(), o4.end());
+        Order o {}; int j = 0;
+        for (int b : o4) { o[(size_t) j++] = b; if (b == blkAmp) o[(size_t) j++] = blkTrem; }
+        return indexOf (o);
     }
     inline int posOf (const Order& o, int block) { for (int k = 0; k < numBlocks; ++k) if (o[(size_t) k] == block) return k; return 0; }
     // one block taken out and put back at position `to` (the others keep their order)
@@ -51,8 +63,8 @@ namespace rig
         for (int k = 0, j = 0; k < numBlocks; ++k) r[(size_t) k] = k == to ? block : rest[j++];
         return r;
     }
-    // projects from before 0.3.0: "Pedal Order" (Drive > Fuzz / Fuzz > Drive), the comp first and the amp last
-    inline int fromOldPedalOrder (bool fuzzFirst) { return fuzzFirst ? indexOf ({ blkComp, blkFuzz, blkDrive, blkAmp }) : kDefault; }
+    // projects from before 0.3.0: "Pedal Order" (Drive > Fuzz / Fuzz > Drive), the comp first, then the amp and the trem
+    inline int fromOldPedalOrder (bool fuzzFirst) { return fuzzFirst ? indexOf ({ blkComp, blkFuzz, blkDrive, blkAmp, blkTrem }) : kDefault; }
 }
 
 class Rig
@@ -61,13 +73,14 @@ public:
     PedalSlot<pedal::CottonCompDSP> comp;    // Cotton Comp
     PedalSlot<pedal::PorchDriveDSP> drive;   // Porch Drive
     PedalSlot<pedal::WoolFuzzDSP>   fuzz;    // Wool Fuzz
+    PedalSlot<pedal::TremDSP>       trem;    // TREM（My Tremolo の小型版）
     FXChain chain;                           // AMP / CAB / OUTPUT
 
     void prepare (double sampleRate, int maxBlockSize, int orderIndex, const FXParams& p)
     {
         chain.prepare (sampleRate, maxBlockSize);
         maxBlock = chain.getMaxBlock();
-        comp.prepare (sampleRate, maxBlock); drive.prepare (sampleRate, maxBlock); fuzz.prepare (sampleRate, maxBlock);
+        comp.prepare (sampleRate, maxBlock); drive.prepare (sampleRate, maxBlock); fuzz.prepare (sampleRate, maxBlock); trem.prepare (sampleRate, maxBlock);
         fadeLen = juce::jmax (1, (int) (sampleRate * 0.005));
         fadeInLen = juce::jmax (1, (int) (sampleRate * 0.008));
         warmLen = juce::jmax (1, (int) (sampleRate * 0.020));
@@ -76,8 +89,8 @@ public:
         setOrderNow (orderIndex, p);
     }
 
-    int latency() const { return comp.latency() + drive.latency() + fuzz.latency() + chain.getLatencySamples(); }
-    bool anyPedalRunning() const { return comp.isRunning() || drive.isRunning() || fuzz.isRunning(); }
+    int latency() const { return comp.latency() + drive.latency() + fuzz.latency() + trem.latency() + chain.getLatencySamples(); }
+    bool anyPedalRunning() const { return comp.isRunning() || drive.isRunning() || fuzz.isRunning() || trem.isRunning(); }
     int orderIndex() const { return orderIdx; }
 
     // prepare / load / resting: this order at once, no fade
@@ -94,6 +107,7 @@ public:
     {
         chain.rest (p, numSamples);
         setOrderNow (orderIndex, p);
+        trem.reset();   // 弾き始めたら、古い揺れの位置からではなく Logic の今の位置から（SYNC OFF なら頭から。つなぎもなし）
     }
 
     void process (juce::AudioBuffer<float>& buffer, int numSamples, const FXParams& p, int wantOrder)
@@ -123,7 +137,7 @@ private:
     void resetAll()
     {
         chain.reset();
-        comp.reset(); drive.reset(); fuzz.reset();
+        comp.reset(); drive.reset(); fuzz.reset(); trem.reset();
     }
 
     // the AMP output brought to the guitar's own level (up or down), only when pedals follow it
@@ -141,7 +155,7 @@ private:
         {
             orderIdx = wantOrder; order = rig::orderAt (orderIdx);
             pad.setCurrentAndTargetValue (padTarget (p));
-            comp.reset(); drive.reset(); fuzz.reset(); chain.resetAmp();
+            comp.reset(); drive.reset(); fuzz.reset(); trem.reset(); chain.resetAmp();
             fadeState = 4; holdLeft = warmLen; fadePos = 0;
         }
         if (fadeState == 0 && wantOrder != orderIdx) { fadeState = 1; fadePos = fadeLen; }
@@ -161,6 +175,7 @@ private:
                 case rig::blkComp:  comp.process (d, n); break;
                 case rig::blkDrive: drive.process (d, n); break;
                 case rig::blkFuzz:  fuzz.process (d, n); break;
+                case rig::blkTrem:  trem.process (d, n); break;
                 default:
                     chain.processAmp (L, R, n, p);
                     if (usePad) for (int i = 0; i < n; ++i) { L[i] *= padBuf[(size_t) i]; R[i] *= padBuf[(size_t) i]; }
@@ -186,7 +201,7 @@ private:
     }
 
     int maxBlock = 512;
-    rig::Order order { 0, 1, 2, 3 };
+    rig::Order order { 0, 1, 2, 3, 4 };
     int orderIdx = rig::kDefault;
     int fadeLen = 240, fadeInLen = 384, warmLen = 960, holdLeft = 0, fadePos = 0;
     int fadeState = 0;   // 0 steady, 1 fading out, 3 silent (swap next chunk), 4 silent (settling), 2 fading in

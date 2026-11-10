@@ -1,5 +1,6 @@
 #pragma once
-// EFFECTS ページ: IN → [COTTON COMP / PORCH DRIVE / WOOL FUZZ / AMP を好きな順に] → CAB（いつも最後）→ OUT。
+// EFFECTS ページ: IN → [COTTON COMP / PORCH DRIVE / WOOL FUZZ / AMP / TREM を好きな順に] → CAB（いつも最後）→ OUT。
+// TREM（0.4.0）は My Tremolo の小型版。つまみは DEPTH / RATE / SHAPE と小さい SYNC だけ（細かく作るときは後ろに My Tremolo）。
 // 箱をドラッグするか ◀ ▶ で並べ替え。AMP の箱は小さく、押すと AMP ページ（つまみはそちら）。CAB の箱も押すと AMP ページ。
 // ドライブ・ファズは単体プラグインと同じ音。フットスイッチで ON/OFF（OFF は計算しない）。
 #include "PluginProcessor.h"
@@ -148,7 +149,7 @@ public:
         plate = r.toFloat().withSizeKeepingCentre ((float) r.getWidth(), juce::jmin (90.0f, (float) r.getHeight()));
     }
 
-private:
+protected:
     void place (int i, juce::Rectangle<int> col)
     {
         labels[(size_t) i]->setBounds (col.removeFromBottom (18));
@@ -163,6 +164,76 @@ private:
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> atts;
     juce::TextButton footswitch { "ON / OFF" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAtt;
+};
+
+// TREM: DEPTH / RATE / SHAPE。RATE は SYNC 中は音符の長さ（trRate）、SYNC OFF・単体アプリは Hz（trHz）に入れ替わる
+class TremPanel : public PedalPanel, private juce::Timer
+{
+public:
+    TremPanel (juce::AudioProcessorValueTreeState& s, int blockId, Look lookIn)
+        : PedalPanel (s, blockId, "TREM", "tremolo", "trOn", { { "trDepth", "DEPTH" }, { "trRate", "RATE" }, { "trShape", "SHAPE" } }, lookIn),
+          state (s)
+    {
+        knobs[2]->textFromValueFunction = [] (double v) { return juce::String (pedal::TremDSP::shapeName ((int) std::lround (v))); };
+        knobs[1]->textFromValueFunction = [] (double v) { return juce::String (pedal::TremDSP::rateName ((int) std::lround (v))); };
+        knobs[0]->textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v)) + " %"; };
+        for (auto& k : knobs) k->updateText();
+
+        hz.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        hz.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 16);
+        hz.setColour (juce::Slider::rotarySliderFillColourId, look.knob);
+        hz.setColour (juce::Slider::textBoxTextColourId, look.ink);
+        hz.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        hz.setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
+        hz.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
+        hz.setDoubleClickReturnValue (true, 5.5);
+        addChildComponent (hz);
+        hzAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (s, "trHz", hz);
+        hz.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " Hz"; };
+        hz.updateText();
+
+        sync.setButtonText ("SYNC");
+        sync.setClickingTogglesState (true);
+        sync.setColour (juce::TextButton::buttonColourId, juce::Colours::black.withAlpha (0.25f));
+        sync.setColour (juce::TextButton::buttonOnColourId, look.knob);
+        sync.setColour (juce::TextButton::textColourOffId, look.ink);
+        sync.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+        sync.setTooltip (FxUI::jp (u8"ON = Logic のテンポと拍に合わせる（RATE は音符の長さ）、OFF = RATE を Hz で"));
+        addAndMakeVisible (sync);
+        syncAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (s, "trSync", sync);
+        if (AIOGuitarProcessor::isStandaloneApp())   // 単体アプリには Logic のテンポがない: いつも Hz
+        {
+            sync.setEnabled (false);
+            sync.setTooltip (FxUI::jp (u8"単体アプリでは RATE は Hz だけ（Logic のテンポがないため）"));
+        }
+        setTooltip (FxUI::jp (u8"トレモロ（My Tremolo の小型版）。AMP の後ろ = 本物のアンプのトレモロ、前 = ペダル（歪みの量も揺れる）"));
+        swapRate();
+        startTimerHz (8);
+    }
+
+    void resized() override
+    {
+        PedalPanel::resized();
+        hz.setBounds (knobs[1]->getBounds());
+        auto p = plate.toNearestInt();
+        sync.setBounds (p.withSizeKeepingCentre (64, 22).withY (p.getBottom() - 24));
+    }
+
+private:
+    bool hzMode() const { return AIOGuitarProcessor::isStandaloneApp() || state.getRawParameterValue ("trSync")->load() < 0.5f; }
+    void swapRate()
+    {
+        const bool h = hzMode();
+        hz.setVisible (h);
+        knobs[1]->setVisible (! h);
+    }
+    void timerCallback() override { if (hz.isVisible() != hzMode()) swapRate(); }
+
+    juce::AudioProcessorValueTreeState& state;
+    juce::Slider hz;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> hzAtt;
+    juce::TextButton sync;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> syncAtt;
 };
 
 // the amp in the chain: a small head. Its knobs are on the AMP page (clicking the head goes there)
@@ -278,7 +349,8 @@ public:
                  { juce::Colour (0xff2f6fb3), juce::Colour (0xff10284a), juce::Colour (0xff8fd0ff) }),
           fuzz (p.apvts, rig::blkFuzz, "WOOL FUZZ", "fuzz", "wfOn", { { "wfSustain", "SUSTAIN" }, { "wfTone", "TONE" }, { "wfVolume", "VOLUME" } },
                 { juce::Colour (0xffb8b2a4), juce::Colour (0xff8a1c1c), juce::Colour (0xff8a1c1c) }),
-          ampBlock (p)
+          ampBlock (p),
+          trem (p.apvts, rig::blkTrem, { juce::Colour (0xff24504b), juce::Colour (0xffe8f3f1), juce::Colour (0xff7fd6c8) })
     {
         for (auto* b : blocks())
         {
@@ -305,7 +377,7 @@ public:
         g.fillRoundedRectangle (r.withTrimmedTop (34.0f), 12.0f);
         g.setColour (juce::Colour (0xff8b8d96));
         g.setFont (juce::FontOptions (13.0f));
-        g.drawText (jp (u8"箱をドラッグか ◀ ▶ で順番を入れ替え。AMP の箱を押すと AMP ページ。CAB（スピーカー）はいつも最後。OFF のペダルは計算しません"),
+        g.drawText (jp (u8"箱をドラッグか ◀ ▶ で順番を入れ替え。AMP の箱を押すと AMP ページ。CAB（スピーカー）はいつも最後。TREM は AMP の後ろが本物のアンプのトレモロ"),
                     r.removeFromTop (30.0f).withTrimmedLeft (4.0f).withTrimmedRight (150.0f), juce::Justification::centredLeft);
         if (proc.fxSleeping.load())
         {
@@ -386,14 +458,14 @@ public:
 private:
     static constexpr int kInW = 34, kOutW = 40, kGap = 18, kCabW = 120;
 
-    std::array<MovableBlock*, rig::numBlocks> blocks() { return { &comp, &drive, &fuzz, &ampBlock }; }
+    std::array<MovableBlock*, rig::numBlocks> blocks() { return { &comp, &drive, &fuzz, &ampBlock, &trem }; }
     MovableBlock* blockFor (int id) { return blocks()[(size_t) juce::jlimit (0, rig::numBlocks - 1, id)]; }
 
-    rig::Order currentOrder() const { return rig::orderAt ((int) proc.apvts.getRawParameterValue ("fxOrder")->load()); }
+    rig::Order currentOrder() const { return rig::orderAt ((int) proc.apvts.getRawParameterValue ("fxChain")->load()); }
 
     void setOrder (const rig::Order& o)
     {
-        if (auto* p = proc.apvts.getParameter ("fxOrder"))
+        if (auto* p = proc.apvts.getParameter ("fxChain"))
         {
             p->beginChangeGesture();
             p->setValueNotifyingHost (p->convertTo0to1 ((float) rig::indexOf (o)));
@@ -427,7 +499,7 @@ private:
             inner.removeFromLeft (kGap);
         }
         if (! dragging) placeBlocks (currentOrder(), nullptr);
-        shownOrder = (int) proc.apvts.getRawParameterValue ("fxOrder")->load();
+        shownOrder = (int) proc.apvts.getRawParameterValue ("fxChain")->load();
     }
 
     void placeBlocks (const rig::Order& o, MovableBlock* skip)
@@ -474,7 +546,7 @@ private:
 
     void timerCallback() override
     {
-        const int o = (int) proc.apvts.getRawParameterValue ("fxOrder")->load();
+        const int o = (int) proc.apvts.getRawParameterValue ("fxChain")->load();
         if (o != shownOrder && ! dragging) { layout(); repaint(); }
         const bool sl = proc.fxSleeping.load();
         if (sl != shownSleep) { shownSleep = sl; repaint(); }
@@ -488,12 +560,13 @@ private:
     AIOGuitarProcessor& proc;
     PedalPanel comp, drive, fuzz;
     AmpBlock ampBlock;
+    TremPanel trem;
     std::array<juce::Rectangle<int>, rig::numBlocks> slots;
     juce::Rectangle<int> row, cabBox;
     MovableBlock* dragBlock = nullptr;
     juce::Point<int> dragStart;
     bool dragging = false, cabPressed = false;
-    rig::Order previewOrder { 0, 1, 2, 3 };
+    rig::Order previewOrder { 0, 1, 2, 3, 4 };
     int shownOrder = -1;
     bool shownSleep = false;
     juce::String shownAmp, shownCab;

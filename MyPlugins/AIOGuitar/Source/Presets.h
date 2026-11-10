@@ -13,7 +13,8 @@ struct Preset
 
 inline const std::vector<Preset>& getFactoryPresets()
 {
-    // pedals: Cotton Comp = cc*, Porch Drive = pd*, Wool Fuzz = wf* (the last two: same sound as the stand-alone plugins)
+    // pedals: Cotton Comp = cc*, Porch Drive = pd*, Wool Fuzz = wf* (the last two: same sound as the stand-alone plugins), TREM = tr*
+    //   trRate 0 1/2, 1 1/4, 2 1/4T, 3 1/8, 4 1/8T, 5 1/16, 6 1/16T, 7 1/32; trShape 0 Sine, 1 Triangle, 2 Vintage, 3 Soft Square, 4 Square
     // amp: ampModel 0 American Clean, 1 Tweed, 2 British Chime, 3 British Crunch, 4 Modern High Gain
     // cab: 0 1x12 Open, 1 2x12 Open, 2 4x12 Closed, 3 4x12 Modern, 4 4x10 Open; mic 0 Dynamic, 1 Condenser, 2 Ribbon
     static const std::vector<Preset> presets
@@ -64,7 +65,7 @@ inline const std::vector<Preset>& getFactoryPresets()
             { "cabOn", 1 }, { "cabType", 0 }, { "cabMicType", 0 }, { "cabPos", 4.5f }, { "cabDist", 2 } } },
 
         { "Fuzz into Drive", {
-            { "fxOrder", (float) rig::fromOldPedalOrder (true) },   // Comp > Fuzz > Drive > Amp
+            { "fxChain", (float) rig::fromOldPedalOrder (true) },   // Comp > Fuzz > Drive > Amp > Trem
             { "wfOn", 1 }, { "wfSustain", 5 }, { "wfTone", 6 }, { "wfVolume", -14 },
             { "pdOn", 1 }, { "pdGain", 2 }, { "pdTone", 5 }, { "pdLevel", -3 },
             { "ampOn", 1 }, { "ampModel", 3 }, { "ampGain", 4 }, { "ampBass", 5 }, { "ampMid", 6 }, { "ampTreble", 5.5f },
@@ -73,13 +74,21 @@ inline const std::vector<Preset>& getFactoryPresets()
 
         // the comp AFTER the drive: the distorted notes come out even (a lead that sits in front)
         { "Even Lead (Drive > Comp)", {
-            { "fxOrder", (float) rig::indexOf ({ rig::blkDrive, rig::blkComp, rig::blkFuzz, rig::blkAmp }) },
+            { "fxChain", (float) rig::indexOf ({ rig::blkDrive, rig::blkComp, rig::blkFuzz, rig::blkAmp, rig::blkTrem }) },
             { "gtRelease", 0.2f },
             { "pdOn", 1 }, { "pdGain", 6 }, { "pdTone", 5.5f }, { "pdLevel", -3 },
             { "ccOn", 1 }, { "ccComp", 5 }, { "ccLevel", 0 }, { "ccBlend", 85 },
             { "ampOn", 1 }, { "ampModel", 2 }, { "ampGain", 5 }, { "ampBass", 4.5f }, { "ampMid", 6 }, { "ampTreble", 5 },
             { "ampPresence", 5 }, { "ampMaster", 6 },
             { "cabOn", 1 }, { "cabType", 2 }, { "cabMicType", 2 }, { "cabPos", 3 }, { "cabDist", 2 } } },
+
+        // 0.4.0: added at the end so that the numbers of the presets above do not change
+        // the amp's own tremolo: a clean amp, the TREM right after it (where a real amp has it)
+        { "Vintage Amp Trem", {
+            { "trOn", 1 }, { "trDepth", 70 }, { "trRate", 4 }, { "trShape", 2 }, { "trSync", 1 },
+            { "ampOn", 1 }, { "ampModel", 1 }, { "ampGain", 3.5f }, { "ampBass", 5 }, { "ampMid", 5 }, { "ampTreble", 5.5f },
+            { "ampPresence", 5 }, { "ampMaster", 5 },
+            { "cabOn", 1 }, { "cabType", 0 }, { "cabMicType", 0 }, { "cabPos", 3 }, { "cabDist", 2 } } }
     };
     return presets;
 }
