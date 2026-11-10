@@ -13,6 +13,7 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 | Elder Verb | ElderVerb | 70〜80 年代のデジタルリバーブ機材ふうの、色の付いたリバーブ |
 | Meld Verb | MeldVerb | EARLY / PLATE / HALL を三角形で混ぜる、自動で引っ込む実用リバーブ |
 | My Tremolo | MyTremolo | トレモロの全部入り（形・リズム描き・スウィング・アクセント・入力で速さ/深さが変わる・7 種類の色付け・オートパン） |
+| My Filter | MyFilter | 音に合わせて動くフィルターの全部入り（オートワウ・スイープ・刻み・サンプル＆ホールド・ADSR、フィルター 2 つの直列 / 並列、7 種類の色付け） |
 | Echo Drift | EchoDrift | テープ・BBD・ラジオなど 31 種類の性格を持つディレイ |
 | Horizon Spread | HorizonSpread | モノラルで崩れないステレオの広げ役 |
 | Hush Field | HushField | 耳に刺さる響きを鳴った瞬間だけ下げる（動的レゾナンス抑制） |

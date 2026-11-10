@@ -36,7 +36,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`, `Myfl`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -88,7 +88,7 @@
 ### 迷ったときの早見
 - リバーブ: Lumen Rooms = 細かく作り込む部屋・ホール、長い響き / Elder Verb = 昔のデジタル機材の色付き / Meld Verb = ボーカルやミックスで自動で引っ込む実用リバーブ
 - 聴き比べ: Reference Monitor = 他人の曲と / Mix Time Machine = 自分の前のバウンスと（マスタリング段階で使う） / Balance Scope = トラックに挿す測定器・Plugin Link の配り役
-- 揺らす: トレモロ・オートパン・刻みは My Tremolo（中のプラグインのつまみを揺らすのは Mod Host）
+- 揺らす: トレモロ・オートパン・刻みは My Tremolo（中のプラグインのつまみを揺らすのは Mod Host）。フィルターを動かす（オートワウ・スイープ・S&H）は My Filter
 - 声: Vox Chop = 声を別の声に変える・声を切って鍵盤で弾く（ボーカルチョップ） / Sample Sculptor = 1 つの音を整える。声の加工の新機能は Vox Chop に足す
 - 鼻歌: Idea Catcher だけ（録ってから解析 → きれいな MIDI → Logic へドラッグ）。口ドラムは本人が「いらない」ので作らない
 - リミッター: 普通のリミッター（2 ミックス・マスター）は本人の Pro-L2 / ドラムは Drum Transient / Forge Strip・Fire Box の最後のリミッターはそれぞれの中だけ
@@ -127,6 +127,11 @@
 - My Tremolo（MyTremolo）1.1.0 … トレモロの全部入り（本人の Mac の市販トレモロを測って合わせ込み）。DEPTH / GROOVE / FEEL / ACCENT / RATE＋SYNC＋TAP / WIDTH / LOW KEEP、
   RHYTHM（4 Bars〜1/32、付点・3 連、Pattern = 升目で描く）、SHAPE 15 種＋Custom（点で描く、SMOOTH 5 種）、ENVELOPE（THRESHOLD・ATTACK・RELEASE・RATE MOD ±6 oct・DEPTH MOD・Env/Gate）、
   STYLE 8 種（Digital＋測った色付け 7 種）、内蔵プリセット 30 個。DSP は MyTremoloDSP.h（JUCE なし）。Plugin Link は Fader Pilot の歌で揺れを浅く（Kind 21 は未登録）。測定の道具は build/tremlab
+
+- My Filter（MyFilter）1.0.0 … 音に合わせて動くフィルターの全部入り（本人の Mac の市販フィルター 1 つ版・2 つ版を測って合わせ込み、1 つにまとめた）。
+  LP / BP / HP / Notch・2〜8 極・RES（0.965 から上は自己発振）、1 Filter / 2 Filters（Serial / Parallel・LINK）、MOD × FREQ MOD（オクターブ）、
+  動かし方 LFO / RHYTHM / ENVELOPE / RANDOM / STEP / ADSR、TWEAK（RES MOD・LEVEL MOD・L/R OFFSET / MODE はモノ → ステレオだけ）、色付け 7 種類＋DIGITAL、内蔵プリセット 16 個。
+  揺れの時計・形・パターン・色付けは My Tremolo の Source を include（My Tremolo の Source を変えたら My Filter もビルド）。Plugin Link は Fader Pilot の歌で MOD を小さく（Kind 22 は未登録）。測定の道具は build/fflab
 
 ### 単体 Mac アプリ（.app）
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作
