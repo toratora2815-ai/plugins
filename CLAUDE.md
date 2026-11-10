@@ -36,7 +36,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -88,6 +88,7 @@
 ### 迷ったときの早見
 - リバーブ: Lumen Rooms = 細かく作り込む部屋・ホール、長い響き / Elder Verb = 昔のデジタル機材の色付き / Meld Verb = ボーカルやミックスで自動で引っ込む実用リバーブ
 - 聴き比べ: Reference Monitor = 他人の曲と / Mix Time Machine = 自分の前のバウンスと（マスタリング段階で使う） / Balance Scope = トラックに挿す測定器・Plugin Link の配り役
+- 揺らす: トレモロ・オートパン・刻みは My Tremolo（中のプラグインのつまみを揺らすのは Mod Host）
 - 声: Vox Chop = 声を別の声に変える・声を切って鍵盤で弾く（ボーカルチョップ） / Sample Sculptor = 1 つの音を整える。声の加工の新機能は Vox Chop に足す
 - 鼻歌: Idea Catcher だけ（録ってから解析 → きれいな MIDI → Logic へドラッグ）。口ドラムは本人が「いらない」ので作らない
 - リミッター: 普通のリミッター（2 ミックス・マスター）は本人の Pro-L2 / ドラムは Drum Transient / Forge Strip・Fire Box の最後のリミッターはそれぞれの中だけ
@@ -109,9 +110,9 @@
 - Fire Box（FireBox）1.2.0 … 太く・大きくする全部入り（本人の持っている市販プラグインを測って、音の処理を同じ動きに合わせ込み）。IN / BASS / THICK / BODY / COMP⇄OTT / SOFT CLIP / CRUNCH / MIX / LOUD / OUT、GAIN MATCH（ID unity、4 秒平均で追う）・LIVE・192k・BYPASS。測定の道具は build/fuellab（コミットしない）。Plugin Link は Gain Stage で MATCH
   v1.1.0: OTT 作り直し（88 Hz の分割は Q の違う 2 段ずつ、dB 型検出器を持ち上げ用・下げ用に、OTT 時の MIX のドライも帯域分けを通す、量の表 29 段階）。FUEL との差 量24 dB で −33 dB
 - Mod Host（ModHost）1.2.0 … 好きな AU を中に読み込み、MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS / LINK）でつまみを動かす。3 帯域・DRIVE・MORPH・前後の解析
-- AIO Guitar（AIOGuitar）0.3.0 … 本人のエレキをライン録りした音で鳴らす全部入りギター音源（AU 音源 aumu Aiog ＋単体アプリ、CMakeLists の ALSO_APP で AIOGuitar-App.zip も）。
+- AIO Guitar（AIOGuitar）0.4.0 … 本人のエレキをライン録りした音で鳴らす全部入りギター音源（AU 音源 aumu Aiog ＋単体アプリ、CMakeLists の ALSO_APP で AIOGuitar-App.zip も）。
   MY GUITAR（カポで録った数十音 → 弦・フレットを自動判定、音程・音量を自動補正、ダウン/アップ交互、1 弦 1 音、強さ SOFT / MEDIUM / HARD の 3 層、STRUM で和音を弦の順にずらす、単体アプリは RECORD GUIDE で 1 音ずつ案内しながら録る）/ SCORE（タブ譜で 1 音ずつ奏法、FOLLOW LOGIC と PLAY IN SYNC）/ EFFECTS / AMP の 4 ページ。
-  2026-11-08 本人の判断で全部入り。EFFECTS は Cotton Comp（AIO Guitar だけ）・Porch Drive・Wool Fuzz（単体と同じ DSP を WoolFuzzDSP.h・PorchDriveDSP.h で共有。変えたら AIO Guitar もビルド）と AMP を好きな順に並べる（ドラッグ / ◀ ▶、CAB はいつも最後、Rig.h）。ディレイ・リバーブは入れない（内蔵リバーブも 0.3.0 で外した。自作を後ろに）。
+  2026-11-08 本人の判断で全部入り。EFFECTS は Cotton Comp（AIO Guitar だけ）・Porch Drive・Wool Fuzz（単体と同じ DSP を WoolFuzzDSP.h・PorchDriveDSP.h で共有。変えたら AIO Guitar もビルド）と AMP・TREM（0.4.0、My Tremolo の小型版。MyTremoloDSP.h を共有。My Tremolo の Source を変えたら AIO Guitar もビルド）を好きな順に並べる（ドラッグ / ◀ ▶、CAB はいつも最後、Rig.h）。ディレイ・リバーブは入れない（内蔵リバーブも 0.3.0 で外した。自作を後ろに）。
   AMP は 5 種類＋キャビ 5 種類（か IR）＋マイク 3 種類・位置・距離。Logic の Amp Designer を 57 通りバウンスして合わせ込み（build/AmpLab、AmpTables.h は自動生成）。Plugin Link は LINK 欄だけ（Kind 17 は未登録）
 - Forge Strip（ForgeStrip）1.3.0 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Plugin Link の相手だった Forge Mixer は削除（受け取る処理と独自の種類 200 / 201 はソースに残っている）
 - Vox Chop（VoxChop）1.0.0 … 自分の声を別の声に変えて、切って鍵盤で弾く AU 音源（aumu Vxch）。CAPTURE（サイドチェーン）かファイル → 後から丸ごと計算（TD-PSOLA、VoxEngine.h）。
@@ -122,6 +123,10 @@
 
 - Deca Satu（DecaSatu）1.1.0 … トラック用サチュレーター（本人の Mac の市販サチュレーターを測って合わせ込み）。STYLE A/E/N/T/P・DRIVE・PUNISH・LOW CUT＋THUMP・TONE・HIGH CUT＋STEEP・MIX・OUTPUT。
   本物の AUTO は GAIN MATCH に統合（ON の間だけ AUTO の量を中で使う）。DSP は DecaSatuDSP.h（JUCE なし、後で Forge Strip に入れられる）。Plugin Link は Gain Stage の LEVEL MATCH だけ（Kind 20 は未登録）。測定の道具は build/decalab
+
+- My Tremolo（MyTremolo）1.0.0 … トレモロの全部入り（本人の Mac の市販トレモロを測って合わせ込み）。DEPTH / GROOVE / FEEL / ACCENT / RATE＋SYNC＋TAP / WIDTH / LOW KEEP、
+  RHYTHM（4 Bars〜1/32、付点・3 連、Pattern = 升目で描く）、SHAPE 15 種＋Custom（点で描く、SMOOTH 5 種）、ENVELOPE（THRESHOLD・ATTACK・RELEASE・RATE MOD ±6 oct・DEPTH MOD・Env/Gate）、
+  STYLE 8 種（Digital＋測った色付け 7 種）、内蔵プリセット 30 個。DSP は MyTremoloDSP.h（JUCE なし）。Plugin Link は Fader Pilot の歌で揺れを浅く（Kind 21 は未登録）。測定の道具は build/tremlab
 
 ### 単体 Mac アプリ（.app）
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作
