@@ -36,7 +36,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`, `Myfl`, `Mycr`, `Nzot`, `Twtk`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`, `Myfl`, `Mycr`, `Nzot`, `Twtk`, `Rtrt`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -89,6 +89,7 @@
 - リバーブ: Lumen Rooms = 細かく作り込む部屋・ホール、長い響き / Elder Verb = 昔のデジタル機材の色付き / Meld Verb = ボーカルやミックスで自動で引っ込む実用リバーブ
 - 聴き比べ: Reference Monitor = 他人の曲と / Mix Time Machine = 自分の前のバウンスと（マスタリング段階で使う） / Balance Scope = トラックに挿す測定器・Plugin Link の配り役
 - 揺らす: トレモロ・オートパン・刻みは My Tremolo（中のプラグインのつまみを揺らすのは Mod Host）。フィルターを動かす（オートワウ・スイープ・S&H）は My Filter
+- 古っぽくする（Lo-Fi）: ノイズ・揺れ・歪み・ビット落とし・響き・劣化・エコーをまとめて = Retro Retro（歪みだけは Deca Satu、揺らすだけは My Tremolo）。Lo-Fi の新機能は Retro Retro に足す
 - エコー: 普通のエコー（テープ・BBD など）= Echo Drift / 逆再生・音程が変わるエコー・シマー = My Crystal
 - 声: Vox Chop = 声を別の声に変える・声を切って鍵盤で弾く（ボーカルチョップ） / Sample Sculptor = 1 つの音を整える。声の加工の新機能は Vox Chop に足す
 - 鼻歌: Idea Catcher だけ（録ってから解析 → きれいな MIDI → Logic へドラッグ）。口ドラムは本人が「いらない」ので作らない
@@ -151,6 +152,11 @@
 - Twin Take（TwinTake）1.0.0 … 1 本録りの歌・ギターを「2 回録って重ねた」ように聞かせるダブラー（2026-11-11。提案の Double Take は実在製品名なので改名）。
   音の頭ごとに各ダブルの遅れ・音程（±2〜9 セント）・音色・音量を選び直す。VOCAL（遅れ 0、ダブル 1/2/4 本、子音・息はダブルしない）/ GUITAR（原音を左・ダブルを右、40 ms の遅れを申告）。
   DSP は TwinTakeDSP.h（JUCE なし）、試作・テストは tools/render.cpp。Plugin Link は LINK 欄だけ（Kind 25 は未登録）
+
+- Retro Retro（RetroRetro）1.0.0 … 音を古っぽくする全部入り（本人の Mac の市販 Lo-Fi プラグインを測って合わせ込み。2026-11-12 本人「rc version2」→ 実在製品名に近いので「Retro Retro」に）。
+  NOISE（計算で作る 10 種類）/ WOBBLE / DISTORT 9 種類 / DIGITAL / SPACE 10 種類（FDN）/ LOSS（MAGNETIC・CODEC）/ ECHO ＋ MASTER（VARISPEED・EQ・COMPRESS・WIDTH）、MAGNITUDE で全部の量に掛け算。
+  表（MAIN）はモジュールごとに大きいつまみ 1 本＋種類、全部のつまみは DETAIL。相手の録音データ（ノイズ素材・IR・プリセット）は使っていない。
+  4 倍は My Tremolo の Source を include（変えたら Retro Retro もビルド）。遅れ 283（48 kHz）。Plugin Link は Fader Pilot の歌でノイズを下げる（Kind 26 は未登録）。測定の道具は build/rclab
 
 ### 単体 Mac アプリ（.app）
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作
