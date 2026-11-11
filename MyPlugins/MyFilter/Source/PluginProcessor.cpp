@@ -390,6 +390,17 @@ namespace
         { "Talking Wah (2 filters)",    "filters=1,routing=1,shape1=1,shape2=1,res1=65,res2=65,freq1=500,freq2=1400,mod=60,freqMod1=1.5,freqMod2=-1,modMode=0,lfoShape=0,lfoRate=0.8", nullptr },
         { "Telephone",                  "filters=1,routing=0,shape1=2,poles1=1,shape2=0,poles2=1,freq1=450,freq2=3200,res1=20,res2=20,mod=0,style=4,input=6,output=-4", nullptr },
         { "Fat Low Boost",              "shape1=0,res1=45,freq1=110,mod=0,style=1,input=4", nullptr },
+        // 1.1.0: 曲全体（マスターかバス）にかけてキメを作る用。MIX 0 % にしておき、キメの小節だけ MIX を上げる使い方（README）
+        // 0 dBFS 近い曲で、ピークは入力以下・RMS −1〜−6 dB（render_myfilter で確認）
+        { "Mix Build-Up LP 4 Bars",     "shape1=0,poles1=1,res1=30,freq1=150,mod=100,freqMod1=7,modMode=1,rhythm=0,lfoShape=5", nullptr },
+        { "Mix Build-Up HP 4 Bars",     "shape1=2,poles1=0,res1=25,freq1=20,mod=100,freqMod1=5.6,modMode=1,rhythm=0,lfoShape=5", nullptr },
+        { "Mix Muffled Break",          "shape1=0,poles1=1,res1=15,freq1=400,mod=0", nullptr },
+        { "Mix Radio Break",            "filters=1,routing=0,shape1=2,poles1=1,shape2=0,poles2=1,freq1=350,freq2=3500,res1=15,res2=15,mod=0,output=4", nullptr },
+        { "Mix HP Drop Out",            "shape1=2,poles1=1,res1=20,freq1=250,mod=0", nullptr },
+        { "Mix 1/16 Stab",              "shape1=0,poles1=1,res1=25,freq1=200,mod=85,freqMod1=7,modMode=1,rhythm=12,lfoShape=6", nullptr },
+        { "Mix 1/8 Gate Stab",          "shape1=0,poles1=1,res1=25,freq1=200,mod=85,freqMod1=7,levelMod1=100,modMode=1,rhythm=9,lfoShape=6", nullptr },
+        { "Mix Kime Pattern",           "shape1=0,poles1=1,res1=25,freq1=200,mod=85,freqMod1=7,modMode=1,rhythm=15,lfoShape=6", "1;4;3;1001001001001010" },
+        { "Mix Hit Pluck (ADSR)",       "shape1=0,poles1=1,res1=30,freq1=150,mod=90,freqMod1=7,modMode=5,trigLevel=-10,adsrA=1,adsrD=120,adsrS=0,adsrR=80", nullptr },
     };
 }
 

@@ -128,7 +128,7 @@
   RHYTHM（4 Bars〜1/32、付点・3 連、Pattern = 升目で描く）、SHAPE 15 種＋Custom（点で描く、SMOOTH 5 種）、ENVELOPE（THRESHOLD・ATTACK・RELEASE・RATE MOD ±6 oct・DEPTH MOD・Env/Gate）、
   STYLE 8 種（Digital＋測った色付け 7 種）、内蔵プリセット 30 個。DSP は MyTremoloDSP.h（JUCE なし）。Plugin Link は Fader Pilot の歌で揺れを浅く（Kind 21 は未登録）。測定の道具は build/tremlab
 
-- My Filter（MyFilter）1.0.0 … 音に合わせて動くフィルターの全部入り（本人の Mac の市販フィルター 1 つ版・2 つ版を測って合わせ込み、1 つにまとめた）。
+- My Filter（MyFilter）1.1.0 … 音に合わせて動くフィルターの全部入り（本人の Mac の市販フィルター 1 つ版・2 つ版を測って合わせ込み、1 つにまとめた）。
   LP / BP / HP / Notch・2〜8 極・RES（0.965 から上は自己発振）、1 Filter / 2 Filters（Serial / Parallel・LINK）、MOD × FREQ MOD（オクターブ）、
   動かし方 LFO / RHYTHM / ENVELOPE / RANDOM / STEP / ADSR、TWEAK（RES MOD・LEVEL MOD・L/R OFFSET / MODE はモノ → ステレオだけ）、色付け 7 種類＋DIGITAL、内蔵プリセット 16 個。
   揺れの時計・形・パターン・色付けは My Tremolo の Source を include（My Tremolo の Source を変えたら My Filter もビルド）。Plugin Link は Fader Pilot の歌で MOD を小さく（Kind 22 は未登録）。測定の道具は build/fflab
