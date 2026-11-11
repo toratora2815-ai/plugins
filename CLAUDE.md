@@ -27,7 +27,7 @@
     - ビルド結果は Artifacts と、Releases の `latest` に置かれる
   - `MyPlugins/<名前>/` … 各プラグイン（CMakeLists.txt, Source/, README.md）
 - 新しいプラグインを足しても build.yml を書き換える必要はない（自動で見つかる）
-- `MyPlugins/Shared/` … プラグイン共通の部品（Plugin Link、PresetBar＝プリセット保存・取り消し、GainMatch＝GAIN MATCH）。CMakeLists に `../Shared` を足したものは、Shared を変えると一緒にビルドされる（Shared を変えると 14 個ほど全部ビルドになるので、まとめて変える）
+- `MyPlugins/Shared/` … プラグイン共通の部品（Plugin Link、PresetBar＝プリセット保存・取り消し、GainMatch＝GAIN MATCH）。CMakeLists に `../Shared` を足したものは、Shared を変えると一緒にビルドされる（Shared を変えると 20 個以上が全部ビルドになるので、まとめて変える）
 - 既存プラグインを変えていないときは再ビルド不要（無駄なビルドは走らせない／走ったら止めてよい）
 - Claude 側のブラウザは GitHub にログインしていない。ログインが必要な作業は、本人のいつもの Safari / Chrome で開くよう案内する
 
@@ -36,7 +36,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`, `Myfl`, `Mycr`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`, `Myfl`, `Mycr`, `Twtk`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -57,7 +57,7 @@
     3 秒でほぼ決まり、10 秒たまったら固定」（追いかけ続けない＝コンプにならない。オートメーションの再生・Logic 側の操作では測り直さない。開き直しても固定した値のまま）。上げるのは +12 dB まで。
     amount: MIX 90〜100%（センド使い）は少しずつ 0 へ、DELTA・ソロ・BYPASS など比べる元がない間は 0。最後にリミッターがあるなら ON の間 `limitBoost (0)`。
     内蔵プリセットで全部を初期値に戻す処理からは `gainMatch` を外す。数値テストは build/gmtest/main.cpp（コミットしない）。
-    付けないもの: 音を変えない測定器（Balance Scope）、音量を変えるのが仕事のもの（Gain Stage・Fader Pilot）、入力のない音源（Sample Sculptor・AIO Guitar）。
+    付けないもの: 音を変えない測定器（Balance Scope）、音量を変えるのが仕事のもの（Gain Stage・Fader Pilot）、音源（Sample Sculptor・AIO Guitar・Vox Chop）。
     前からある Horizon Spread `autoGain`・Fire Box `unity`・Mod Host `autoGain` は ID はそのまま、表示を GAIN MATCH にして同じ場所に置いた
   - 画面のいちばん下に「LINK 欄＋GAIN MATCH・プリセット・取り消し欄」（1 段 40 px か 2 段 72 px。GAIN MATCH が入ってプリセット欄が約 550 px になったので、LINK 欄に追加のつまみがあって幅 1200 未満なら 2 段）
 
@@ -93,6 +93,8 @@
 - 声: Vox Chop = 声を別の声に変える・声を切って鍵盤で弾く（ボーカルチョップ） / Sample Sculptor = 1 つの音を整える。声の加工の新機能は Vox Chop に足す
 - 鼻歌: Idea Catcher だけ（録ってから解析 → きれいな MIDI → Logic へドラッグ）。口ドラムは本人が「いらない」ので作らない
 - リミッター: 普通のリミッター（2 ミックス・マスター）は本人の Pro-L2 / ドラムは Drum Transient / Forge Strip・Fire Box の最後のリミッターはそれぞれの中だけ
+- ダブル・広げる: 1 本のまま広げる（モノにすると元に戻る）= Horizon Spread / 1 本録りの歌・ギターを 2 本録りに（音ごとにずれる別テイク。モノでも厚みが残る）= Twin Take /
+  いつも同じずれの加工っぽい厚み = Echo Drift の Chorus Doubler・My Crystal の Detune Double。ダブルの新機能は Twin Take に足す（Horizon Spread の DOUBLE・SHIFT はこれ以上ダブル寄りにしない。歌・ギター用プリセットは本人が使っているので残す、2026-11-12）
 - 参照曲まわりの新機能は Reference Monitor にだけ足す（Balance Scope の REF と二重にしない）。Mod Host は「中のプラグインのつまみを動かす」役。帯域・歪み・自動ゲインはこれ以上足さない（Forge Strip の仕事）
 
 ### プラグイン（AU）
@@ -137,6 +139,10 @@
 - My Crystal（MyCrystal）1.0.0 … 音を短く切って音程を変え・逆再生しながら重ねるエコー（本人の Mac の市販グラニュラー・エコーを測って合わせ込み）。
   PITCH ±3 oct（半音で止まる、shift でセント）/ SPLICE / DELAY（SYNC で音符）/ RECYCLE / REVERSE / ANALOG、GATE⇄DUCK、TWEAK（PITCH・SPLICE・DELAY OFFSET、SMOOTHING、LOW / HIGH CUT は輪の中、ATTACK / RELEASE、DUCK MODE、Mixed / Dual / Ping-Pong）、内蔵プリセット 15 個。
   センドで使う飛び道具。遅れなし。色付け・4 倍は My Tremolo の Source を include（変えたら My Crystal もビルド）。Plugin Link は Fader Pilot の歌でウェットを下げる（Kind 23 は未登録）。測定の道具は build/crylab
+
+- Twin Take（TwinTake）1.0.0 … 1 本録りの歌・ギターを「2 回録って重ねた」ように聞かせるダブラー（2026-11-11。提案の Double Take は実在製品名なので改名）。
+  音の頭ごとに各ダブルの遅れ・音程（±2〜9 セント）・音色・音量を選び直す。VOCAL（遅れ 0、ダブル 1/2/4 本、子音・息はダブルしない）/ GUITAR（原音を左・ダブルを右、40 ms の遅れを申告）。
+  DSP は TwinTakeDSP.h（JUCE なし）、試作・テストは tools/render.cpp。Plugin Link は LINK 欄だけ（Kind 25 は未登録）
 
 ### 単体 Mac アプリ（.app）
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作

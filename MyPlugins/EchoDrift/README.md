@@ -56,7 +56,7 @@ Logic Pro では **Audio Units → MyPlugins → Echo Drift**。
 | 11〜15 | Telephone / AM Radio / FM Radio / Shortwave / Transmitter | 電話・ラジオ系の帯域と歪み |
 | 16 | Digital | きれいなデジタル（そのままくり返す） |
 | 17 | Analog | 上がやわらかい、ゆっくり揺れるアナログディレイ |
-| 18〜21 | Digital Chorus / Analog Chorus / Pedal Chorus / Vibrato | 揺れが主役。時間を 10〜30 ms にするとコーラス・ダブリングに |
+| 18〜21 | Digital Chorus / Analog Chorus / Pedal Chorus / Vibrato | 揺れが主役。時間を 10〜30 ms にするとコーラス（揺れる厚み）に |
 | 22〜27 | Saturated / Fat / Distressed / Limited / Distorted / Squawk | 歪み・圧縮の性格 |
 | 28〜31 | Ambient / Diffused / Splattered / Verbed | にじむ・響きになる |
 
@@ -65,7 +65,7 @@ Logic Pro では **Audio Units → MyPlugins → Echo Drift**。
 - **ギターの付点 8 分**: Dotted Eighth Lead（Master Reel、Dotted 1/8、FEEDBACK 38%）
 - **ダブ**: Dub Tape Spin（Roller Echo、1/4、FEEDBACK 72%、SATURATION 9 dB）。再生中に FEEDBACK を 100% 超えまで上げ下げすると発振を演出できる
 - **広げる**: Wide Ping-Pong（Digital、1/8 と 1/4）
-- **ダブリング**: Chorus Doubler（Pedal Chorus、18 ms、FEEDBACK 0%）
+- **コーラスの揺れる厚み**: Chorus Doubler（Pedal Chorus、18 ms、FEEDBACK 0%）。人が 2 回録ったような自然なダブルは Twin Take
 - **奥に溶かす**: Ambient Wash（Diffused、DUAL 420 / 610 ms）
 
 ## Plugin Link（いちばん下の LINK 欄）

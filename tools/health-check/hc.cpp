@@ -840,18 +840,13 @@ static void testClick (AudioComponent comp, Json& j)
 
 // ---------------------------------------------------------------- 検査: random
 static bool isMixName (const std::string& name) { auto n = lower (name); return has (n, "mix") || has (n, "wet") || has (n, "dry"); }
-static bool isOutputName (const std::string& name)
-{
-    auto n = lower (name);
-    return has (n, "output") || n == "out" || has (n, "out trim") || has (n, "out gain") || has (n, "trim");
-}
 static std::vector<std::pair<Param, float>> randomValues (const std::vector<Param>& ps, Rng& rk, bool moderate, bool skipMix)
 {
     std::vector<std::pair<Param, float>> r;
     for (auto& p : ps)
     {
         if (! p.writable || classify (p.name) != kUse) continue;
-        if (skipMix && (isMixName (p.name) || isOutputName (p.name))) continue;
+        if (skipMix && isMixName (p.name)) continue;   // OUTPUT は動かす（GAIN MATCH は出口のつまみも打ち消す決まり、Shared/NOTES.md）
         float v;
         if (p.discrete) { int nst = std::max (1, (int) std::lround (p.hi - p.lo) + 1); v = p.lo + (float) (rk.next() % (uint32_t) nst); }
         else { float u = rk.uni(); if (moderate) u = 0.1f + 0.8f * u; v = p.lo + u * (p.hi - p.lo); }
@@ -1110,7 +1105,7 @@ static void testGainMatch (AudioComponent comp, Json& j, uint32_t seed)
     for (auto& p : ps) if (p.writable && isGainMatch (p.name)) gm = &p;
     j.kb ("present", gm != nullptr);
     if (gm == nullptr || N->instrument()) return;
-    // つまみはほどほどにランダム。ただし MIX・OUTPUT は動かさない（OUTPUT は GAIN MATCH の後でかけるプラグインがある）。
+    // つまみはほどほどにランダム（OUTPUT も動かす）。MIX は動かさない。
     // MIX の既定が 90% 以上（センド使い）だと GAIN MATCH は仕様で効かないので、30% にして試す
     Rng rk (seed ^ 0x6a1du);
     auto vals = randomValues (ps, rk, true, true);
@@ -1146,7 +1141,7 @@ static void testGainMatch (AudioComponent comp, Json& j, uint32_t seed)
     j.kb ("within_range", within);
     metric ("gm_residual_db", within ? res : NAN);
     if (within && std::fabs (res) > 1.5)
-        addF ("注意", fmt ("GAIN MATCH を ON にしても音量が %+.1f dB ずれる（OFF だと %+.1f dB、10 秒たった後。MIX・OUTPUT は動かさずに試した）", res, nat));
+        addF ("注意", fmt ("GAIN MATCH を ON にしても音量が %+.1f dB ずれる（OFF だと %+.1f dB、10 秒たった後。MIX は動かさずに試した）", res, nat));
 }
 
 // ---------------------------------------------------------------- 1 つの検査を動かす（子プロセス）

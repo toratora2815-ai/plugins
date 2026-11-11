@@ -54,6 +54,7 @@ CREATE でモノラルっぽい音から広がりを作り、SHAPE で帯域ご�
 
 ## CREATE ページ（生み出す）
 モノラルっぽい音（ボーカル、ギター、シンセ1本など）から広がりを作るページです。
+1 本の音のまま広げる用です。歌・ギターを「2 本録り」のように聞かせたいなら Twin Take を使います（同じトラックで DOUBLE・SHIFT と重ねないでください）。
 どのセクションも量のつまみは最初 0% なので、回したものだけが効きます。SPREAD も効きます。
 
 ### SHIFT（ずらし）
@@ -66,7 +67,7 @@ CREATE でモノラルっぽい音から広がりを作り、SHAPE で帯域ご�
 ### DOUBLE（ダブル）
 - **AMOUNT** … 効き具合
 - **DETUNE** … 少し高い音と少し低い音を作って左右逆向きに足すときの、ずらす量（0〜20 セント）。軽く揺れも付けています。
-  同じフレーズを2回録って左右に振ったような感じになります
+  1 本の音のまま左右に広げます（ずれ方はいつも同じ。モノにすると元の音に戻ります）。「2 回録って重ねた」別テイクの感じは Twin Take です
 
 ### BANDS（ばらまき）
 - **AMOUNT** … 効き具合
@@ -94,7 +95,7 @@ CREATE でモノラルっぽい音から広がりを作り、SHAPE で帯域ご�
 - 点の雲が縦長 → 真ん中寄り、横に広がる → 広い
 - **CORRELATION** … +1 に近いほど真ん中寄り、0 付近は広い、**マイナス（赤）はモノラルで音が消えやすい危険ゾーン**
 - **GUARD** … GUARD が働いているときは抑えている量（dB）が出ます
-- **AUTO GAIN** … AUTO GAIN で戻している量（dB）
+- **GAIN MATCH** … GAIN MATCH で戻している量（dB）
 - **WIDTH BY BAND** … 低域・中域・高域それぞれの広さ（Side が Mid より何 dB 小さいか）。右に行くほど広い。
   白い線は市販曲によくある広さの目安（AUTO と同じ基準）。0 dB 近く（赤）は Side が Mid と同じくらいで広げすぎ
 
@@ -113,7 +114,7 @@ CREATE でモノラルっぽい音から広がりを作り、SHAPE で帯域ご�
 | Mono Guitar | モノラルのギターを SHIFT と BANDS で広げる |
 | Wide & Moving | 広くて動きのある音。4小節で1周ゆらし、DYNAMIC も使う |
 
-- プリセットを選ぶと、書いていないつまみは初期値に戻ります（MONO CHECK、SIDE SOLO、AUTO GAIN はそのまま）
+- プリセットを選ぶと、書いていないつまみは初期値に戻ります（MONO CHECK、SIDE SOLO、GAIN MATCH はそのまま）
 
 ## おすすめ設定（SPREAD 100%、MIX 100% から）
 
@@ -139,7 +140,7 @@ CREATE でモノラルっぽい音から広がりを作り、SHAPE で帯域ご�
 | ピアノ | HAZE SMOOTH 30%・SIZE 50%、DOUBLE 15%・5 ct（SHAPE で LOW を 80% に） |
 | シンセパッド | HAZE CLOUD 50%・SIZE 70%、MOTION 0.2 Hz・40% |
 
-- CREATE で広げると、左右それぞれの音量が少し（最大 +3 dB くらい）上がりますが、AUTO GAIN が ON なら自動で元の音量に戻ります
+- CREATE で広げると、左右それぞれの音量が少し（最大 +3 dB くらい）上がりますが、GAIN MATCH が ON なら自動で元の音量に戻ります
 - 広げすぎて相関メーターがマイナスに行きそうになったら、GUARD が自動で抑えます
 
 ## Plugin Link：ボーカルを上げた瞬間に広がりを少し抑える（v1.3）
@@ -172,7 +173,7 @@ CREATE でモノラルっぽい音から広がりを作り、SHAPE で帯域ご�
 入力 → CREATE（SHIFT → DOUBLE → BANDS → HAZE で Mid から Side を作って足す → MOTION）→ Mid / Side に分解 → Side を4帯域に分割（24 dB/oct のクロスオーバー。Mid も同じ位相回転を通して位相を揃える）
 → 帯域ごとの幅 → AIR（Side のハイシェルフ）→ TRANSIENT（速い包絡と遅い包絡の差でアタック検出）
 → SIDE DRIVE（4倍オーバーサンプリングで倍音の差分だけを作って足し、音量は自動で戻す）
-→ DYNAMIC → GUARD（Side が Mid に迫りすぎたら抑える）→ MIX → AUTO GAIN → OUTPUT → SIDE SOLO / MONO CHECK → 出力
+→ DYNAMIC → GUARD（Side が Mid に迫りすぎたら抑える）→ MIX → GAIN MATCH → OUTPUT → SIDE SOLO / MONO CHECK → 出力
 （MIX と GUARD の基準になる「元の音」は、CREATE を通す前の入力）
 
 - 遅れ（レイテンシー）：約 61 サンプル（48 kHz で 1.3 ms）。Logic が自動で補正します
@@ -192,7 +193,7 @@ CREATE でモノラルっぽい音から広がりを作り、SHAPE で帯域ご�
 - モノラルの音への効き（相関、+1 = 真ん中）：SHIFT SAFE +0.04、DOUBLE +0.54、BANDS ALT +0.80 / TILT +0.57、HAZE CLOUD +0.18 / SMOOTH +0.01
 - DOUBLE：1 kHz の音から、ちょうど ±8 セントの音（1004.6 Hz / 995.4 Hz）ができる
 - GUARD：CREATE で広げすぎた音の相関を -0.67 → +0.13 に戻す
-- AUTO GAIN：広げて +2.5 dB 大きくなった音を、元の音量（差 0.01 dB）に戻す
+- GAIN MATCH：広げて +2.5 dB 大きくなった音を、元の音量（差 0.01 dB）に戻す
 - SIDE SOLO：出てくる音は Side と同じ（差 -140 dB）。モノラルの音で CREATE なしなら無音
 - DYNAMIC 100%：音が大きいところの Side が -6 dB、静かなところは広がる
 - 帯域メーター：HIGH の WIDTH を 200% にすると HIGH の表示だけ +6 dB 動く

@@ -19,6 +19,15 @@ if [ ! -x "$BIN" ] || [ "$SRC" -nt "$BIN" ]; then
     || { echo "検査ツール（hc）のビルドに失敗しました"; exit 1; }
 fi
 
+# Logic が開いている間は待つ（夜中に Mac が寝ていて、起こした作業中に動き出したとき、録音と CPU を取り合わないように）
+logic_open() { /usr/bin/pgrep -xq "Logic Pro" || /usr/bin/pgrep -xq "Logic Pro X"; }
+WAITED=0
+while logic_open; do
+  if [ "$WAITED" -ge 28800 ]; then echo "SKIPPED=Logic が 8 時間開いたままだったので、今回は検査しませんでした"; exit 0; fi
+  [ "$WAITED" -eq 0 ] && echo "Logic が開いているので、閉じるまで待ちます"
+  sleep 120; WAITED=$((WAITED + 120))
+done
+
 PREV="$(ls -d "$OUT"/runs/*/ 2>/dev/null | sort | tail -1)"
 RUN="$OUT/runs/$(date +%Y-%m-%d-%H%M)"
 START=$(date +%s)

@@ -9,6 +9,7 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 | Wool Fuzz | WoolFuzz | ビッグマフ系の太いファズ |
 | Porch Drive | PorchDrive | ブルース系オーバードライブ（BD-2 系の味） |
 | Deca Satu | DecaSatu | トラックごとに挿す色付けの歪み（5 つの性格。軽く太く〜完全につぶすまで） |
+| Fire Box | FireBox | 太く・大きくする全部入り（低音・厚み・コンプ / OTT・ソフトクリップ・音圧） |
 | Lumen Rooms | LumenRooms | 部屋・ホールを細かく作り込むリバーブ。長い響きも |
 | Elder Verb | ElderVerb | 70〜80 年代のデジタルリバーブ機材ふうの、色の付いたリバーブ |
 | Meld Verb | MeldVerb | EARLY / PLATE / HALL を三角形で混ぜる、自動で引っ込む実用リバーブ |
@@ -16,7 +17,8 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 | My Filter | MyFilter | 音に合わせて動くフィルターの全部入り（オートワウ・スイープ・刻み・サンプル＆ホールド・ADSR、フィルター 2 つの直列 / 並列、7 種類の色付け） |
 | My Crystal | MyCrystal | 音を短く切って音程を変え・逆再生しながら重ねるエコー（オクターブ上のシマー、逆再生の飛ばし、5 度のパッド。センドで使う） |
 | Echo Drift | EchoDrift | テープ・BBD・ラジオなど 31 種類の性格を持つディレイ |
-| Horizon Spread | HorizonSpread | モノラルで崩れないステレオの広げ役 |
+| Horizon Spread | HorizonSpread | モノラルで崩れないステレオの広げ役（1 本のまま広げる） |
+| Twin Take | TwinTake | 1 本録りの歌・ギターを「2 回録って重ねた」ように聞かせるダブラー（音ごとにずれ方が変わる別テイク感） |
 | Hush Field | HushField | 耳に刺さる響きを鳴った瞬間だけ下げる（動的レゾナンス抑制） |
 | Drum Transient | DrumTransient | ドラム専用のリミッター。突っ込んでもアタックが死なず胴も揺れない（普通のリミッターは Pro-L2） |
 | Forge Strip | ForgeStrip | EQ・コンプなど 11 モジュールのチャンネルストリップ |
@@ -38,7 +40,7 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 | Num Deck | NumDeck | テンキーに Logic などの操作を割り当てる |
 | Aside | Aside | ひとりごとをリマインダー・カレンダーに入れる秘書 |
 
-- `Shared` … プラグイン共通の部品（Plugin Link、プリセット保存・取り消しの帯）。単体では使いません
+- `Shared` … プラグイン共通の部品（Plugin Link、プリセット保存・取り消しの帯、GAIN MATCH）。単体では使いません
 
 ## 迷いやすいものの早見
 - **リバーブ**
@@ -51,6 +53,15 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
   - Balance Scope … トラックに挿す測定器。Plugin Link でほかのプラグインに数値を配る
 - **鼻歌**
   - Idea Catcher … 思いついた瞬間を捕まえて、きれいな MIDI に（クオンタイズ・手直し → Logic へドラッグ）
+- **ダブル・広げる**
+  - Horizon Spread … 1 本の音のまま左右に広げる（モノにすると元の音に戻る）。歌・ギターも「広げるだけ」ならこれ（プリセット Lead Vocal - Subtle・Mono Guitar など）
+  - Twin Take … 1 本録りの歌・ギターを「2 回録って重ねた」ように（音ごとにずれる別テイク。モノでも厚みが残る）
+  - Echo Drift の Chorus Doubler・My Crystal の Detune Double … いつも同じずれの、加工っぽい厚み（効果として使う）
+- **エコー**
+  - Echo Drift … 普通のエコー（テープ・BBD など）
+  - My Crystal … 逆再生・音程が変わるエコー・シマー
+- **揺らす**
+  - My Tremolo … トレモロ・オートパン・刻み / My Filter … フィルターを動かす（オートワウ・スイープ）/ Mod Host … 中のプラグインのつまみを動かす
 - **サンプル・声の編集**
   - Sample Sculptor … 1 つの音を整える（切る・形・響き・逆再生）
   - Vox Chop … 声を別の声に変える・声を切って鍵盤で弾く（ボーカルチョップ）
