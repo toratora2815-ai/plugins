@@ -176,6 +176,14 @@
   その番号を、このファイルの決まりどおりに作ってビルドまで確認する。終わったら提案ファイルのその項目に「→ GO 済み（日付）」と書き足す
 - 提案の段階ではコードを変えない
 
+## 夜の健康診断（2026-11-11 本人の GO）
+- `tools/health-check/`（hc.cpp = 自前のオフラインのホスト、nightly.sh、NIGHTLY_PROMPT.md、KNOWN.md、README.md）。入っている Mypl の AU を全部、検査ごとに別プロセスで読み込む
+  （NaN・ピーク・既定の音量差・DC・CPU・遅れの申告・鳴り止むか・リセット・プチノイズ・ランダム設定・保存・ブロックの大きさ・サンプルレート・モノ・GAIN MATCH・auval・入っている版）
+- Claude アプリの定期実行「【毎晩】自作プラグイン健康診断」（taskId plugin-health-check、毎晩 3 時ごろ）が nightly.sh を動かし、引っかかった所のコードを読んで報告する（build/health/reports/）。コードは直さない
+- 結果は build/health/runs/<日時>/summary.md（最新は build/health/latest）。手で: `bash tools/health-check/nightly.sh --only <コード>`
+- 「健康診断の 1 を直して」と言われたら、いちばん新しい報告のその番号を、いつもの決まり（DSP 検査係 → push → ビルド → インストール）で直す
+- 仕様と決めたものは KNOWN.md へ（本人が決める）。新しいプラグインを足しても検査は自動で増える（hc.cpp を変える必要はない）
+
 ## 単体アプリ（.app）を Mac に入れるとき
 - `tools/install-app.sh <名前>`（例: `tools/install-app.sh NumDeck`）で、Releases の latest から ~/Applications に入れる
 - この Mac には専用の署名「MyPlugins Local Signing」がある（キーチェーン ~/Library/Keychains/myplugins-signing.keychain-db、
