@@ -8,6 +8,7 @@
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
 #include "../Source/RecordGuide.h"
+#include "../Source/DrivePedals.h"
 
 namespace
 {
@@ -257,6 +258,50 @@ static int ampProbe (int argc, char** argv)
     return 0;
 }
 
+// PEDAL probe: RenderTest --pedal <model> gain tone levelDb in.f32 out.f32 [sampleRate] [block] [voltsPerUnit]
+//   model 0 PORCH DRIVE, 1 WOOL FUZZ, 2 HEARTH DRIVE, 3 BRASS BOOST, 4 BARN DIST. f32 = stereo interleaved float. The output is moved back by the latency
+template <typename DSP>
+static int runPedal (DSP& d, int argc, char** argv)
+{
+    const float gain = (float) atof (argv[3]), tone = (float) atof (argv[4]), lev = (float) atof (argv[5]);
+    const double sr = argc > 8 ? atof (argv[8]) : 48000.0;
+    const int bs = argc > 9 ? atoi (argv[9]) : 512;
+    juce::MemoryBlock mb; juce::File (argv[6]).loadFileAsData (mb);
+    const int n = (int) (mb.getSize() / 8);
+    const float* in = (const float*) mb.getData();
+    d.prepare (sr, bs, 2);
+    d.setParams (gain, tone, lev, true);
+    const int lat = d.latency();
+    std::vector<float> L ((size_t) (n + lat), 0.0f), R ((size_t) (n + lat), 0.0f);
+    for (int i = 0; i < n; ++i) { L[(size_t) i] = in[2 * i]; R[(size_t) i] = in[2 * i + 1]; }
+    for (int pos = 0; pos < n + lat; pos += bs)
+    {
+        const int k = juce::jmin (bs, n + lat - pos);
+        float* ch[2] { L.data() + pos, R.data() + pos };
+        d.process (ch, 2, k);
+    }
+    std::vector<float> out ((size_t) n * 2);
+    for (int i = 0; i < n; ++i) { out[(size_t) (2 * i)] = L[(size_t) (i + lat)]; out[(size_t) (2 * i + 1)] = R[(size_t) (i + lat)]; }
+    juce::File o (argv[7]); o.deleteFile(); o.appendData (out.data(), out.size() * sizeof (float));
+    std::cout << "latency " << lat << std::endl;
+    return 0;
+}
+
+static int pedalProbe (int argc, char** argv)
+{
+    if (argc < 8) { std::cout << "usage: --pedal model gain tone levelDb in.f32 out.f32 [sr] [block] [voltsPerUnit]" << std::endl; return 2; }
+    const int model = atoi (argv[2]);
+    const float vpu = argc > 10 ? (float) atof (argv[10]) : 1.5f;
+    switch (model)
+    {
+        case 0: { pedal::PorchDriveDSP d; return runPedal (d, argc, argv); }
+        case 1: { pedal::WoolFuzzDSP d; return runPedal (d, argc, argv); }
+        case 2: { pedal::HearthDriveDSP d; d.voltsPerUnit = vpu; return runPedal (d, argc, argv); }
+        case 3: { pedal::BrassBoostDSP d; d.voltsPerUnit = vpu; return runPedal (d, argc, argv); }
+        default: { pedal::BarnDistDSP d; d.voltsPerUnit = vpu; return runPedal (d, argc, argv); }
+    }
+}
+
 // RenderTest --padtable: how loud the AMP makes the guitar's DI, for every model / GAIN / MASTER (prints AmpPad.h's table).
 // The DI: single notes and down-stroked chords, every string -21 dB RMS (10-350 ms after it starts) like the kit's picking
 static int padTable()
@@ -322,6 +367,7 @@ int main (int argc, char** argv)
 {
     if (argc > 1 && juce::String (argv[1]) == "--amp") return ampProbe (argc, argv);
     if (argc > 1 && juce::String (argv[1]) == "--padtable") return padTable();
+    if (argc > 1 && juce::String (argv[1]) == "--pedal") return pedalProbe (argc, argv);
     juce::ScopedJuceInitialiser_GUI init;
     const juce::File outDir (argc > 1 ? juce::String (argv[1]) : juce::File::getCurrentWorkingDirectory().getFullPathName());
     outDir.createDirectory();
@@ -918,7 +964,7 @@ int main (int argc, char** argv)
         const int compLast = rig::indexOf ({ rig::blkDrive, rig::blkFuzz, rig::blkAmp, rig::blkComp, rig::blkTrem });
 
         // names, the round trip index <-> order, moving one block
-        bool namesOk = rig::orderNames().size() == rig::kNumOrders && rig::orderNames()[0] == "Comp > Drive > Fuzz > Amp > Trem";
+        bool namesOk = rig::orderNames().size() == rig::kNumOrders && rig::orderNames()[0] == "Comp > Drive A > Drive B > Amp > Trem";
         for (int k = 0; k < rig::kNumOrders; ++k) namesOk = namesOk && rig::indexOf (rig::orderAt (k)) == k;
         namesOk = namesOk && rig::moved (rig::orderAt (0), rig::blkAmp, 1) == rig::Order { rig::blkComp, rig::blkAmp, rig::blkDrive, rig::blkFuzz, rig::blkTrem };
         check (namesOk, "24 orders: names, index round trip, moving one block");
@@ -1058,6 +1104,207 @@ int main (int argc, char** argv)
         setP (proc, "fxChain", (float) rig::kDefault); setP (proc, "ampModel", 3); setP (proc, "ampGain", 4); setP (proc, "pdGain", 4);
         setP (proc, "ccComp", 5); setP (proc, "kitHuman", 0.5f); setP (proc, "strumOn", 1);
         proc.prepareToPlay (sr, 256);
+    }
+
+    // ---- DRIVE A / B: five models in either box (0.6.0, DriveSlot.h / DrivePedals.h)
+    std::cout << "== drive models ==" << std::endl;
+    {
+        using DS = pedal::DriveSlotDSP;
+        // a DI like the kit's: single notes, then two strummed chords; every note -21 dB RMS (10-350 ms)
+        auto makeDI = [] (double rate, double seconds)
+        {
+            juce::Random rng (11);
+            std::vector<float> di ((size_t) (rate * seconds), 0.0f);
+            auto pluckAt = [&] (int at, double nn)
+            {
+                std::vector<float> one ((size_t) (rate * 1.2), 0.0f);
+                addPluck (one, 0, rate, noteHz (nn), 0.3f, 1.2, 0.6, false, rng);
+                double e = 0; const int a = (int) (0.01 * rate), b = (int) (0.35 * rate);
+                for (int i = a; i < b; ++i) e += (double) one[(size_t) i] * one[(size_t) i];
+                const float g = juce::Decibels::decibelsToGain (-21.0f) / (float) std::sqrt (e / (b - a));
+                for (size_t i = 0; i < one.size() && at + (int) i < (int) di.size(); ++i) di[(size_t) at + i] += one[i] * g;
+            };
+            int at = (int) (0.05 * rate);
+            for (double nn : { 40.0, 45.0, 52.0, 59.0, 64.0, 69.0 }) { pluckAt (at, nn); at += (int) (0.35 * rate); }
+            for (auto chord : { std::vector<double> { 40, 47, 52, 56, 59, 64 }, std::vector<double> { 45, 52, 57, 61, 64 } })
+            {
+                for (size_t k = 0; k < chord.size(); ++k) pluckAt (at + (int) (k * 0.008 * rate), chord[k]);
+                at += (int) (1.3 * rate);
+            }
+            return di;
+        };
+        auto runDSP = [] (auto& d, const std::vector<float>& in, int bs)
+        {
+            juce::AudioBuffer<float> out (2, (int) in.size());
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < (int) in.size(); ++i) out.setSample (c, i, in[(size_t) i]);
+            for (int pos = 0; pos < (int) in.size(); pos += bs)
+            {
+                const int k = juce::jmin (bs, (int) in.size() - pos);
+                float* ch[2] { out.getWritePointer (0) + pos, out.getWritePointer (1) + pos };
+                d.process (ch, 2, k);
+            }
+            return out;
+        };
+        auto slotOut = [&] (float slotDefault, int model, float g, float t, float l, double rate, int bs, const std::vector<float>& in)
+        {
+            DS d (slotDefault);
+            d.prepare (rate, bs, 2); d.setModel (model, true); d.setParams (g, t, l, true);
+            return runDSP (d, in, bs);
+        };
+        auto maxAbsDiff = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+        {
+            float m = 0;
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < a.getNumSamples(); ++i) m = juce::jmax (m, std::abs (a.getSample (c, i) - b.getSample (c, i)));
+            return m;
+        };
+        const double dsr = 48000.0;
+        const auto di = makeDI (dsr, 5.0);
+
+        // the old sound is untouched: PORCH in A and WOOL in B are the stand-alone parts, sample for sample
+        {
+            pedal::PorchDriveDSP p; p.prepare (dsr, 512, 2); p.setParams (4.0f, 5.0f, -6.0f, true);
+            pedal::WoolFuzzDSP w; w.prepare (dsr, 512, 2); w.setParams (6.0f, 5.0f, -12.0f, true);
+            const float dA = maxAbsDiff (slotOut (-6.0f, DS::porch, 4.0f, 5.0f, -6.0f, dsr, 512, di), runDSP (p, di, 512));
+            const float dB = maxAbsDiff (slotOut (-12.0f, DS::wool, 6.0f, 5.0f, -12.0f, dsr, 512, di), runDSP (w, di, 512));
+            check (dA == 0.0f && dB == 0.0f, "DRIVE A = PORCH DRIVE and DRIVE B = WOOL FUZZ exactly as before (" + juce::String (dA, 9) + " / " + juce::String (dB, 9) + ")");
+            DS d (-6.0f); d.prepare (dsr, 512, 2);
+            check (d.latency() == p.latency(), "all five models: the same latency (" + juce::String (d.latency()) + " samples)");
+        }
+
+        // at the box's default LEVEL every model is about as loud as PORCH DRIVE's defaults (GAIN 5 / TONE 5)
+        {
+            const float ref = rmsDb (slotOut (-6.0f, DS::porch, 4.0f, 5.0f, -6.0f, dsr, 512, di), 0.05, 4.9, dsr);
+            juce::String txt; bool ok = true;
+            for (int m = 0; m < DS::numModels; ++m)
+                for (float slot : { -6.0f, -12.0f })
+                {
+                    const float lv = rmsDb (slotOut (slot, m, m == DS::porch ? 4.0f : (m == DS::wool ? 6.0f : 5.0f), 5.0f, slot, dsr, 512, di), 0.05, 4.9, dsr);
+                    ok = ok && std::abs (lv - ref) < 4.5f;
+                    if (slot < -7.0f) txt << DS::modelNames()[m] << " " << juce::String (lv - ref, 1) << "  ";
+                }
+            check (ok, "every model in A or B at the default LEVEL: within 4.5 dB of PORCH's defaults (" + txt.trim() + ")");
+        }
+
+        // knob ends, sample rates, block sizes: always finite, never wild, the same sound in any block size
+        {
+            bool fin = true, sizeOk = true; float worst = 0, worstPeak = -200.0f; juce::String bad;
+            for (double rate : { 44100.0, 96000.0, 192000.0 })
+            {
+                const auto x = makeDI (rate, 3.0);
+                for (int m = 0; m < DS::numModels; ++m)
+                    for (auto k : { std::array<float, 3> { 0, 0, 12 }, std::array<float, 3> { 10, 10, 12 }, std::array<float, 3> { 10, 0, -30 }, std::array<float, 3> { 5, 5, -6 } })
+                    {
+                        const auto o = slotOut (-6.0f, m, k[0], k[1], k[2], rate, 512, x);
+                        const float pk = juce::Decibels::gainToDecibels (o.getMagnitude (0, 0, o.getNumSamples()), -200.0f);
+                        worstPeak = juce::jmax (worstPeak, pk);
+                        if (! allFinite (o) || pk > 30.0f) { fin = false; bad << DS::modelNames()[m] << "@" << (int) rate << " "; }
+                    }
+            }
+            for (int m = 0; m < DS::numModels; ++m)
+            {
+                const auto a = slotOut (-6.0f, m, 7.0f, 6.0f, -6.0f, dsr, 64, di), b = slotOut (-6.0f, m, 7.0f, 6.0f, -6.0f, dsr, 512, di);
+                const float d = maxAbsDiff (a, b) / juce::jmax (1.0e-9f, a.getMagnitude (0, 0, a.getNumSamples()));
+                worst = juce::jmax (worst, d);
+                sizeOk = sizeOk && d < 1.0e-4f;
+            }
+            check (fin, "five models x 3 sample rates x knob ends: finite, peak <= +30 dBFS (worst " + juce::String (worstPeak, 1) + " dB)" + (bad.isEmpty() ? juce::String() : " bad: " + bad));
+            check (sizeOk, "block size 64 vs 512: the same sound (worst " + juce::String (worst, 7) + ")");
+        }
+
+        // changing the model while a chord rings: 5 ms down, switch from rest, 10 ms up - no click, a short gap
+        {
+            std::vector<float> held ((size_t) (dsr * 2.0), 0.0f);
+            for (double nn : { 40.0, 47.0, 52.0, 56.0, 59.0, 64.0 })
+                for (int i = 0; i < (int) held.size(); ++i)
+                    held[(size_t) i] += 0.05f * std::exp (-(float) i / (float) (dsr * 3.0)) * (float) std::sin (6.283185307 * noteHz (nn) * i / dsr);
+            auto bend = [] (const juce::AudioBuffer<float>& b, int a, int e)
+            {
+                float m = 0;
+                for (int i = juce::jmax (2, a); i < juce::jmin (b.getNumSamples(), e); ++i)
+                    m = juce::jmax (m, std::abs (b.getSample (0, i) - 2.0f * b.getSample (0, i - 1) + b.getSample (0, i - 2)));
+                return m;
+            };
+            bool ok = true; float worstGap = 0; juce::String txt;
+            const int order[] { DS::porch, DS::hearth, DS::brass, DS::barn, DS::wool, DS::porch };
+            for (int k = 0; k + 1 < 6; ++k)
+            {
+                DS d (-6.0f); d.prepare (dsr, 512, 2); d.setModel (order[k], true); d.setParams (5.0f, 5.0f, -6.0f, true);
+                juce::AudioBuffer<float> out (2, (int) held.size());
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < out.getNumSamples(); ++i) out.setSample (c, i, held[(size_t) i]);
+                for (int pos = 0; pos < out.getNumSamples(); pos += 512)
+                {
+                    if (pos == (int) (1.0 * dsr) / 512 * 512) d.setModel (order[k + 1]);
+                    const int n = juce::jmin (512, out.getNumSamples() - pos);
+                    float* ch[2] { out.getWritePointer (0) + pos, out.getWritePointer (1) + pos };
+                    d.process (ch, 2, n);
+                }
+                const int sw = (int) (1.0 * dsr) / 512 * 512;
+                const float during = bend (out, sw - 64, sw + (int) (0.04 * dsr));
+                const float steady = juce::jmax (bend (out, (int) (0.5 * dsr), sw - 256), bend (out, sw + (int) (0.1 * dsr), (int) (1.6 * dsr)));
+                // the gap: 2 ms windows quieter than -30 dB under the steady level
+                const float lvl = out.getRMSLevel (0, sw + (int) (0.1 * dsr), (int) (0.3 * dsr));
+                int quiet = 0;
+                for (int i = sw - 512; i < sw + (int) (0.06 * dsr); i += 96)
+                    if (out.getRMSLevel (0, i, 96) < lvl * 0.0316f) quiet += 96;
+                const float gapMs = 1000.0f * quiet / (float) dsr;
+                worstGap = juce::jmax (worstGap, gapMs);
+                ok = ok && during <= steady * 1.3f && gapMs < 25.0f;
+                txt << DS::modelNames()[order[k]].substring (0, 4) << ">" << DS::modelNames()[order[k + 1]].substring (0, 4) << " " << juce::String (during / juce::jmax (1.0e-9f, steady), 2) << "  ";
+            }
+            check (ok, "model change while a chord rings: no click (bend vs steady " + txt.trim() + "), gap at most " + juce::String (worstGap, 1) + " ms");
+        }
+
+        // CPU: 10 s of guitar per model (one box, 48 kHz)
+        {
+            const auto x = makeDI (dsr, 10.0);
+            juce::String txt; bool ok = true;
+            for (int m = 0; m < DS::numModels; ++m)
+            {
+                DS d (-6.0f); d.prepare (dsr, 512, 2); d.setModel (m, true); d.setParams (7.0f, 5.0f, -6.0f, true);
+                const double t0 = juce::Time::getMillisecondCounterHiRes();
+                runDSP (d, x, 512);
+                const double pct = (juce::Time::getMillisecondCounterHiRes() - t0) / 10000.0 * 100.0;
+                ok = ok && pct < 5.0;
+                txt << DS::modelNames()[m] << " " << juce::String (pct, 2) << "%  ";
+            }
+            check (ok, "CPU per box under 5 % of one core (" + txt.trim() + ")");
+        }
+
+        // in the plugin: defaults, every model in front of the amp, saved and loaded, factory presets go back to the old pedals
+        {
+            check ((int) proc.apvts.getRawParameterValue ("pdModel")->load() == DS::porch && (int) proc.apvts.getRawParameterValue ("wfModel")->load() == DS::wool,
+                   "defaults: DRIVE A = PORCH DRIVE, DRIVE B = WOOL FUZZ (old songs open as before)");
+            setP (proc, "strumOn", 0); setP (proc, "kitHuman", 0.0f); setP (proc, "fxChain", (float) rig::kDefault);
+            setP (proc, "ampOn", 1); setP (proc, "cabOn", 1); setP (proc, "ampModel", 3); setP (proc, "ampGain", 4);
+            auto riff = [] { return std::vector<Ev> { { 0.01, juce::MidiMessage::noteOn (1, 45, 0.8f) }, { 0.01, juce::MidiMessage::noteOn (1, 52, 0.8f) },
+                                                      { 0.7, juce::MidiMessage::noteOn (1, 57, 0.9f) }, { 1.4, juce::MidiMessage::noteOff (1, 45) },
+                                                      { 1.4, juce::MidiMessage::noteOff (1, 52) }, { 1.4, juce::MidiMessage::noteOff (1, 57) } }; };
+            bool ok = true; juce::String txt;
+            for (int m = 0; m < DS::numModels; ++m)
+            {
+                setP (proc, "pdOn", 1); setP (proc, "pdModel", (float) m); setP (proc, "pdGain", 6); setP (proc, "pdTone", 5); setP (proc, "pdLevel", -6);
+                proc.prepareToPlay (sr, 256);
+                const auto out = render (proc, riff(), 1.6, sr);
+                const float pk = out.getMagnitude (0, 0, out.getNumSamples()), lv = rmsDb (out, 0.05, 1.3, sr);
+                ok = ok && allFinite (out) && pk <= 1.0f && lv > -45.0f;
+                txt << DS::modelNames()[m] << " " << juce::String (lv, 1) << "  ";
+            }
+            check (ok, "each model as DRIVE A in front of the amp: sound, no NaN, never over 0 dBFS (" + txt.trim() + " dB)");
+
+            setP (proc, "pdModel", (float) DS::barn); setP (proc, "wfModel", (float) DS::brass);
+            juce::MemoryBlock mb; proc.getStateInformation (mb);
+            AIOGuitarProcessor p2; p2.setStateInformation (mb.getData(), (int) mb.getSize());
+            check ((int) p2.apvts.getRawParameterValue ("pdModel")->load() == DS::barn && (int) p2.apvts.getRawParameterValue ("wfModel")->load() == DS::brass,
+                   "the models are saved with the song and come back");
+            proc.setCurrentProgram (1);
+            check ((int) proc.apvts.getRawParameterValue ("pdModel")->load() == DS::porch && (int) proc.apvts.getRawParameterValue ("wfModel")->load() == DS::wool,
+                   "an old factory preset brings back PORCH DRIVE / WOOL FUZZ");
+            proc.setCurrentProgram (0);
+            for (auto* id : { "ccOn", "pdOn", "wfOn" }) setP (proc, id, 0);
+            setP (proc, "pdModel", 0); setP (proc, "wfModel", 1); setP (proc, "pdGain", 4); setP (proc, "pdLevel", -6);
+            setP (proc, "ampModel", 3); setP (proc, "ampGain", 4); setP (proc, "kitHuman", 0.5f); setP (proc, "strumOn", 1);
+            proc.prepareToPlay (sr, 256);
+        }
     }
 
     // ---- MEDIUM layer: velocity -> layer, no level step at the hand-overs
@@ -2139,6 +2386,14 @@ int main (int argc, char** argv)
         for (int i = 0; i < 3; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
         snap ("editor_effects_mid.png");
         setP (proc, "fxChain", (float) rig::kDefault); setP (proc, "wfOn", 0); setP (proc, "ampModel", 3);
+        // DRIVE A = HEARTH DRIVE, DRIVE B = BRASS BOOST (0.6.0)
+        setP (proc, "pdModel", 2); setP (proc, "wfModel", 3); setP (proc, "pdOn", 1); setP (proc, "wfOn", 1);
+        for (int i = 0; i < 4; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
+        snap ("editor_drives.png");
+        setP (proc, "pdModel", 4); setP (proc, "wfModel", 0);
+        for (int i = 0; i < 4; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
+        snap ("editor_drives2.png");
+        setP (proc, "pdModel", 0); setP (proc, "wfModel", 1); setP (proc, "pdOn", 0); setP (proc, "wfOn", 0);
     }
 
 

@@ -204,7 +204,7 @@ public:
         auto fl = flowArea.toFloat();
         const auto order = rig::orderAt ((int) proc.apvts.getRawParameterValue ("fxChain")->load());
         juce::StringArray names { "IN" };
-        for (int b : order) names.add (b == rig::blkComp ? "COMP" : b == rig::blkDrive ? "DRIVE" : b == rig::blkFuzz ? "FUZZ" : b == rig::blkTrem ? "TREM" : "AMP");
+        for (int b : order) names.add (b == rig::blkComp ? "COMP" : b == rig::blkDrive ? "DRIVE A" : b == rig::blkFuzz ? "DRIVE B" : b == rig::blkTrem ? "TREM" : "AMP");
         names.add ("CAB"); names.add ("OUT");
         g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
         float x = fl.getX() + 10.0f;

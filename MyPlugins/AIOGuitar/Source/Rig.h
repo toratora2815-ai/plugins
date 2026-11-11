@@ -1,5 +1,7 @@
 #pragma once
-// 音の流れ全体（EFFECTS ページの並び）: IN → [COMP / DRIVE / FUZZ / AMP / TREM を好きな順に] → CAB → OUTPUT
+// 音の流れ全体（EFFECTS ページの並び）: IN → [COMP / DRIVE A / DRIVE B / AMP / TREM を好きな順に] → CAB → OUTPUT
+//  - DRIVE A / B（0.6.0）は 0.5.0 までの DRIVE（PORCH DRIVE）と FUZZ（WOOL FUZZ）の箱。どちらでも 5 機種から選べる（DriveSlot.h）。
+//    並びの番号（fxChain）は 0.5.0 と同じ: DRIVE A = 前の DRIVE の位置、DRIVE B = 前の FUZZ の位置
 //  - TREM（0.4.0）は My Tremolo の小型版。初期位置は AMP の直後（本物のアンプのトレモロと同じ所）
 //  - CAB（スピーカー＋マイク）と OUTPUT はいつも最後（本物のギターと同じ。AMP の後ろの歪みもスピーカーが丸める）
 //  - 並びを変えたら: 5 ms で下げる → 次のブロックで入れ替え、ペダルと AMP をまっさらにして 20 ms 無音で慣らす → 8 ms で上げる
@@ -30,7 +32,7 @@ namespace rig
         for (int k = 0; k < kNumOrders; ++k) { if (p == o) return k; std::next_permutation (p.begin(), p.end()); }
         return kDefault;
     }
-    inline const char* blockName (int b) { static const char* n[] { "Comp", "Drive", "Fuzz", "Amp", "Trem" }; return n[juce::jlimit (0, numBlocks - 1, b)]; }
+    inline const char* blockName (int b) { static const char* n[] { "Comp", "Drive A", "Drive B", "Amp", "Trem" }; return n[juce::jlimit (0, numBlocks - 1, b)]; }
     inline juce::StringArray orderNames()
     {
         juce::StringArray s;
@@ -70,9 +72,11 @@ namespace rig
 class Rig
 {
 public:
+    Rig() { fuzz.get().setSlotDefaultLevel (-12.0f); }   // DRIVE B's LEVEL default (WOOL FUZZ's own)
+
     PedalSlot<pedal::CottonCompDSP> comp;    // Cotton Comp
-    PedalSlot<pedal::PorchDriveDSP> drive;   // Porch Drive
-    PedalSlot<pedal::WoolFuzzDSP>   fuzz;    // Wool Fuzz
+    PedalSlot<pedal::DriveSlotDSP>  drive;   // DRIVE A (PORCH DRIVE by default; params pd*)
+    PedalSlot<pedal::DriveSlotDSP>  fuzz;    // DRIVE B (WOOL FUZZ by default; params wf*)
     PedalSlot<pedal::TremDSP>       trem;    // TREM（My Tremolo の小型版）
     FXChain chain;                           // AMP / CAB / OUTPUT
 

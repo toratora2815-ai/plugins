@@ -46,19 +46,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
     l.add (std::make_unique<APC> (juce::ParameterID { "upStrings", 1 }, "Up-stroke Strings",
                                   juce::StringArray { "Top 3", "Top 4", "All" }, 1));
 
-    // ---- EFFECTS: Porch Drive / Wool Fuzz (same ranges and defaults as the stand-alone plugins)
+    // ---- EFFECTS: DRIVE A (pd*, PORCH DRIVE's ranges) / DRIVE B (wf*, WOOL FUZZ's ranges). 0.6.0: either can be any of the 5 models
+    //      (pdModel / wfModel at the end); the IDs stay, so old songs' automation stays on the same knobs
     l.add (std::make_unique<APB> (juce::ParameterID { "ccOn", 1 }, "Comp On", false));
     l.add (std::make_unique<APF> (juce::ParameterID { "ccComp", 1 }, "Comp Amount", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
     l.add (std::make_unique<APF> (juce::ParameterID { "ccLevel", 1 }, "Comp Level", juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f, fmt (" dB", 1)));
     l.add (std::make_unique<APF> (juce::ParameterID { "ccBlend", 1 }, "Comp Blend", juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 100.0f, fmt (" %", 0)));
-    l.add (std::make_unique<APB> (juce::ParameterID { "pdOn", 1 }, "Drive On", false));
-    l.add (std::make_unique<APF> (juce::ParameterID { "pdGain", 1 }, "Drive Gain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 4.0f, fmt ("", 1)));
-    l.add (std::make_unique<APF> (juce::ParameterID { "pdTone", 1 }, "Drive Tone", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
-    l.add (std::make_unique<APF> (juce::ParameterID { "pdLevel", 1 }, "Drive Level", juce::NormalisableRange<float> (-30.0f, 12.0f, 0.1f), -6.0f, fmt (" dB", 1)));
-    l.add (std::make_unique<APB> (juce::ParameterID { "wfOn", 1 }, "Fuzz On", false));
-    l.add (std::make_unique<APF> (juce::ParameterID { "wfSustain", 1 }, "Fuzz Sustain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 6.0f, fmt ("", 1)));
-    l.add (std::make_unique<APF> (juce::ParameterID { "wfTone", 1 }, "Fuzz Tone", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
-    l.add (std::make_unique<APF> (juce::ParameterID { "wfVolume", 1 }, "Fuzz Volume", juce::NormalisableRange<float> (-36.0f, 6.0f, 0.1f), -12.0f, fmt (" dB", 1)));
+    l.add (std::make_unique<APB> (juce::ParameterID { "pdOn", 1 }, "Drive A On", false));
+    l.add (std::make_unique<APF> (juce::ParameterID { "pdGain", 1 }, "Drive A Gain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 4.0f, fmt ("", 1)));
+    l.add (std::make_unique<APF> (juce::ParameterID { "pdTone", 1 }, "Drive A Tone", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
+    l.add (std::make_unique<APF> (juce::ParameterID { "pdLevel", 1 }, "Drive A Level", juce::NormalisableRange<float> (-30.0f, 12.0f, 0.1f), -6.0f, fmt (" dB", 1)));
+    l.add (std::make_unique<APB> (juce::ParameterID { "wfOn", 1 }, "Drive B On", false));
+    l.add (std::make_unique<APF> (juce::ParameterID { "wfSustain", 1 }, "Drive B Gain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 6.0f, fmt ("", 1)));
+    l.add (std::make_unique<APF> (juce::ParameterID { "wfTone", 1 }, "Drive B Tone", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
+    l.add (std::make_unique<APF> (juce::ParameterID { "wfVolume", 1 }, "Drive B Level", juce::NormalisableRange<float> (-36.0f, 6.0f, 0.1f), -12.0f, fmt (" dB", 1)));
     // ---- TREM（My Tremolo の小型版、0.4.0）: DEPTH / RATE（SYNC 中は音符、OFF と単体アプリは Hz）/ SHAPE
     //   版のヒントは 3（前の fxOrder の 2 より上）。1 だと Logic のパラメーター番号が 45 個ずれ、前の曲のオートメーションが別のつまみに行く
     {
@@ -123,6 +124,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
     // Version hint 4 (above every other): it goes to the END of the AU parameter list, so the numbers Logic
     // keeps in old songs (automation) stay on the same knobs
     l.add (std::make_unique<APB> (juce::ParameterID { "kitBuzz", 4 }, "Fix Buzz", true));
+    // DRIVE A / B model (0.6.0). Version hint 5: at the end of the AU parameter list (nothing else moves). Not automatable:
+    // changing the pedal in the middle of a song would only make level jumps
+    l.add (std::make_unique<APC> (juce::ParameterID { "pdModel", 5 }, "Drive A Model", pedal::DriveSlotDSP::modelNames(), pedal::DriveSlotDSP::porch,
+                                  juce::AudioParameterChoiceAttributes().withAutomatable (false)));
+    l.add (std::make_unique<APC> (juce::ParameterID { "wfModel", 5 }, "Drive B Model", pedal::DriveSlotDSP::modelNames(), pedal::DriveSlotDSP::wool,
+                                  juce::AudioParameterChoiceAttributes().withAutomatable (false)));
     l.add (std::make_unique<APF> (juce::ParameterID { "kitVelSens", 1 }, "Velocity Sensitivity",
                                   juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.7f, fmt ("", 2)));
 
@@ -247,6 +254,8 @@ void AIOGuitarProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     volume.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (get ("gtVolume")));
     readParams();
     rig.prepare (sampleRate, samplesPerBlock, (int) get ("fxChain"), fx);
+    rig.drive.get().setModel ((int) get ("pdModel"), true);
+    rig.fuzz.get().setModel ((int) get ("wfModel"), true);
     rig.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));
     rig.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
     rig.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
@@ -478,6 +487,8 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     rig.comp.setOn (get ("ccOn") > 0.5f);
     rig.drive.setOn (get ("pdOn") > 0.5f);
     rig.fuzz.setOn (get ("wfOn") > 0.5f);
+    rig.drive.get().setModel ((int) get ("pdModel"));   // a new model: 5 ms down, switch, 10 ms up
+    rig.fuzz.get().setModel ((int) get ("wfModel"));
     rig.comp.setParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));
     rig.drive.setParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
     rig.fuzz.setParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
@@ -495,6 +506,8 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     {
         fx.offline = isNonRealtime();
         rig.rest (fx, (int) get ("fxChain"), n);
+        rig.drive.get().setModel ((int) get ("pdModel"), true);
+        rig.fuzz.get().setModel ((int) get ("wfModel"), true);
         rig.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));    // the next note starts as set
         rig.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
         rig.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));

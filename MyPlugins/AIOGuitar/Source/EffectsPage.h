@@ -1,5 +1,6 @@
 #pragma once
-// EFFECTS ページ: IN → [COTTON COMP / PORCH DRIVE / WOOL FUZZ / AMP / TREM を好きな順に] → CAB（いつも最後）→ OUT。
+// EFFECTS ページ: IN → [COTTON COMP / DRIVE A / DRIVE B / AMP / TREM を好きな順に] → CAB（いつも最後）→ OUT。
+// DRIVE A / B（0.6.0）は「機種 ▾」で PORCH DRIVE / WOOL FUZZ / HEARTH DRIVE / BRASS BOOST / BARN DIST から選ぶ（DriveSlot.h）。
 // TREM（0.4.0）は My Tremolo の小型版。つまみは DEPTH / RATE / SHAPE と小さい SYNC だけ（細かく作るときは後ろに My Tremolo）。
 // 箱をドラッグするか ◀ ▶ で並べ替え。AMP の箱は小さく、押すと AMP ページ（つまみはそちら）。CAB の箱も押すと AMP ページ。
 // ドライブ・ファズは単体プラグインと同じ音。フットスイッチで ON/OFF（OFF は計算しない）。
@@ -164,6 +165,127 @@ protected:
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> atts;
     juce::TextButton footswitch { "ON / OFF" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAtt;
+};
+
+// DRIVE A / B（0.6.0）: 「機種 ▾」で 5 機種から選ぶ。つまみは箱ごとに同じパラメーター（GAIN / TONE / LEVEL）のままで、
+// 名前・箱の上の並び・色だけが機種に合わせて変わる（PORCH DRIVE は前と同じ LEVEL / TONE / GAIN の並び）
+class DrivePanel : public PedalPanel, private juce::Timer
+{
+public:
+    struct Face { const char* name; const char* sub; const char* desc; Look look; const char* labels[3]; int order[3]; };
+
+    static const Face& face (int m)
+    {
+        static const Face f[pedal::DriveSlotDSP::numModels] {
+            { "PORCH DRIVE", "overdrive", u8"素直に広く歪むオーバードライブ（単体の Porch Drive と同じ音）",
+              { juce::Colour (0xff2f6fb3), juce::Colour (0xff10284a), juce::Colour (0xff8fd0ff) }, { "GAIN", "TONE", "LEVEL" }, { 2, 1, 0 } },
+            { "WOOL FUZZ", "fuzz", u8"太く長く伸びるファズ（単体の Wool Fuzz と同じ音）",
+              { juce::Colour (0xffb8b2a4), juce::Colour (0xff8a1c1c), juce::Colour (0xff8a1c1c) }, { "SUSTAIN", "TONE", "VOLUME" }, { 0, 1, 2 } },
+            { "HEARTH DRIVE", "overdrive", u8"中域が前に出て低音が締まるオーバードライブ。歪んだアンプの前で刻みを締める・リードを前に出す",
+              { juce::Colour (0xffc8643b), juce::Colour (0xfffbefe0), juce::Colour (0xffffd9b8) }, { "DRIVE", "TONE", "LEVEL" }, { 0, 1, 2 } },
+            { "BRASS BOOST", "treble booster", u8"高音を持ち上げて押し出すブースター。RANGE 右で高音だけ、左で全体。クランチのアンプの前でリードが伸びる",
+              { juce::Colour (0xffc9a640), juce::Colour (0xff2a2010), juce::Colour (0xff6b4e12) }, { "BOOST", "RANGE", "LEVEL" }, { 0, 1, 2 } },
+            { "BARN DIST", "distortion", u8"オーバードライブとファズの間の、硬く荒いディストーション。GAIN 0 はほぼ素通し",
+              { juce::Colour (0xff8e2b22), juce::Colour (0xfff3e6d8), juce::Colour (0xffffc9a8) }, { "DIST", "TONE", "LEVEL" }, { 0, 1, 2 } },
+        };
+        return f[juce::jlimit (0, pedal::DriveSlotDSP::numModels - 1, m)];
+    }
+
+    DrivePanel (juce::AudioProcessorValueTreeState& s, int blockId, juce::String slotNameIn, const char* onId,
+                const char* gainId, const char* toneId, const char* levelId, const char* modelIdIn)
+        : PedalPanel (s, blockId, "", "", onId, { { gainId, "GAIN" }, { toneId, "TONE" }, { levelId, "LEVEL" } }, face (0).look),
+          state (s), slotName (std::move (slotNameIn)), modelId (modelIdIn)
+    {
+        pick.setButtonText (FxUI::jp (u8"機種 ▾"));
+        pick.setTooltip (FxUI::jp (u8"この箱のペダルを替える（つまみの値はそのまま）"));
+        pick.onClick = [this] { showModels(); };
+        addAndMakeVisible (pick);
+        applyFace (model());
+        startTimerHz (8);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        PedalPanel::paint (g);
+        g.setColour (look.ink.withAlpha (0.8f));
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText (slotName, getLocalBounds().reduced (16, 8).removeFromTop (14), juce::Justification::centredLeft);
+    }
+
+    void resized() override
+    {
+        PedalPanel::resized();   // knob i at place i (gain, tone, level)
+        juce::Rectangle<int> kb[3], lb[3];
+        for (int i = 0; i < 3; ++i) { kb[i] = knobs[(size_t) i]->getBounds(); lb[i] = labels[(size_t) i]->getBounds(); }
+        const auto& f = face (shown);
+        for (int p = 0; p < 3; ++p)   // place p shows knob order[p]
+        {
+            const int k = f.order[p];
+            knobs[(size_t) k]->setBounds (kb[p]);
+            labels[(size_t) k]->setBounds (lb[p]);
+        }
+        auto p = plate.toNearestInt();
+        pick.setBounds (p.withSizeKeepingCentre (juce::jmin (110, p.getWidth() - 20), 22).withY (p.getY() + 50));
+    }
+
+private:
+    int model() const { return juce::jlimit (0, pedal::DriveSlotDSP::numModels - 1, (int) state.getRawParameterValue (modelId)->load()); }
+
+    void applyFace (int m)
+    {
+        shown = m;
+        const auto& f = face (m);
+        name = f.name; sub = {};
+        look = f.look;
+        for (int i = 0; i < 3; ++i)
+        {
+            knobs[(size_t) i]->setColour (juce::Slider::rotarySliderFillColourId, look.knob);
+            knobs[(size_t) i]->setColour (juce::Slider::textBoxTextColourId, look.ink);
+            labels[(size_t) i]->setText (f.labels[i], juce::dontSendNotification);
+            labels[(size_t) i]->setColour (juce::Label::textColourId, look.ink);
+        }
+        FxUI::styleArrow (left, look.ink); FxUI::styleArrow (right, look.ink);
+        pick.setColour (juce::TextButton::buttonColourId, juce::Colours::black.withAlpha (0.22f));
+        pick.setColour (juce::TextButton::textColourOffId, look.ink);
+        setTooltip (FxUI::jp (f.desc));
+        if (getWidth() > 0) resized();
+        repaint();
+    }
+
+    void showModels()
+    {
+        juce::PopupMenu menu;
+        const int cur = model();
+        for (int m = 0; m < pedal::DriveSlotDSP::numModels; ++m)
+        {
+            const auto& f = face (m);
+            menu.addItem (m + 1, juce::String (f.name) + juce::String::fromUTF8 (u8"  —  ") + FxUI::jp (f.desc), true, m == cur);
+        }
+        juce::Component::SafePointer<DrivePanel> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&pick), [safe] (int r)
+        {
+            if (safe != nullptr && r > 0) safe->choose (r - 1);
+        });
+    }
+
+    void choose (int m)
+    {
+        if (auto* p = state.getParameter (modelId))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) m));
+            p->endChangeGesture();
+        }
+        applyFace (m);
+    }
+
+    void timerCallback() override { if (model() != shown) applyFace (model()); }   // a preset, undo or Logic changed it
+
+    juce::AudioProcessorValueTreeState& state;
+    juce::String slotName;
+    const char* modelId;
+    int shown = -1;
+    juce::TextButton pick;
 };
 
 // TREM: DEPTH / RATE / SHAPE。RATE は SYNC 中は音符の長さ（trRate）、SYNC OFF・単体アプリは Hz（trHz）に入れ替わる
@@ -345,10 +467,8 @@ public:
         : proc (p),
           comp (p.apvts, rig::blkComp, "COTTON COMP", "compressor", "ccOn", { { "ccComp", "COMP" }, { "ccLevel", "LEVEL" }, { "ccBlend", "BLEND" } },
                 { juce::Colour (0xffe9e4d8), juce::Colour (0xff2d5c58), juce::Colour (0xff3a8a80) }),
-          drive (p.apvts, rig::blkDrive, "PORCH DRIVE", "overdrive", "pdOn", { { "pdLevel", "LEVEL" }, { "pdTone", "TONE" }, { "pdGain", "GAIN" } },
-                 { juce::Colour (0xff2f6fb3), juce::Colour (0xff10284a), juce::Colour (0xff8fd0ff) }),
-          fuzz (p.apvts, rig::blkFuzz, "WOOL FUZZ", "fuzz", "wfOn", { { "wfSustain", "SUSTAIN" }, { "wfTone", "TONE" }, { "wfVolume", "VOLUME" } },
-                { juce::Colour (0xffb8b2a4), juce::Colour (0xff8a1c1c), juce::Colour (0xff8a1c1c) }),
+          drive (p.apvts, rig::blkDrive, "DRIVE A", "pdOn", "pdGain", "pdTone", "pdLevel", "pdModel"),
+          fuzz (p.apvts, rig::blkFuzz, "DRIVE B", "wfOn", "wfSustain", "wfTone", "wfVolume", "wfModel"),
           ampBlock (p),
           trem (p.apvts, rig::blkTrem, { juce::Colour (0xff24504b), juce::Colour (0xffe8f3f1), juce::Colour (0xff7fd6c8) })
     {
@@ -558,7 +678,8 @@ private:
     }
 
     AIOGuitarProcessor& proc;
-    PedalPanel comp, drive, fuzz;
+    PedalPanel comp;
+    DrivePanel drive, fuzz;
     AmpBlock ampBlock;
     TremPanel trem;
     std::array<juce::Rectangle<int>, rig::numBlocks> slots;

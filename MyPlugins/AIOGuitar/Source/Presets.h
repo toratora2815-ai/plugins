@@ -13,7 +13,8 @@ struct Preset
 
 inline const std::vector<Preset>& getFactoryPresets()
 {
-    // pedals: Cotton Comp = cc*, Porch Drive = pd*, Wool Fuzz = wf* (the last two: same sound as the stand-alone plugins), TREM = tr*
+    // pedals: Cotton Comp = cc*, DRIVE A = pd* (pdModel: 0 Porch Drive, 1 Wool Fuzz, 2 Hearth Drive, 3 Brass Boost, 4 Barn Dist; default Porch),
+    //         DRIVE B = wf* (wfModel, default Wool Fuzz), TREM = tr*
     //   trRate 0 1/2, 1 1/4, 2 1/4T, 3 1/8, 4 1/8T, 5 1/16, 6 1/16T, 7 1/32; trShape 0 Sine, 1 Triangle, 2 Vintage, 3 Soft Square, 4 Square
     // amp: ampModel 0 American Clean, 1 Tweed, 2 British Chime, 3 British Crunch, 4 Modern High Gain
     // cab: 0 1x12 Open, 1 2x12 Open, 2 4x12 Closed, 3 4x12 Modern, 4 4x10 Open; mic 0 Dynamic, 1 Condenser, 2 Ribbon
@@ -88,7 +89,29 @@ inline const std::vector<Preset>& getFactoryPresets()
             { "trOn", 1 }, { "trDepth", 70 }, { "trRate", 4 }, { "trShape", 2 }, { "trSync", 1 },
             { "ampOn", 1 }, { "ampModel", 1 }, { "ampGain", 3.5f }, { "ampBass", 5 }, { "ampMid", 5 }, { "ampTreble", 5.5f },
             { "ampPresence", 5 }, { "ampMaster", 5 },
-            { "cabOn", 1 }, { "cabType", 0 }, { "cabMicType", 0 }, { "cabPos", 3 }, { "cabDist", 2 } } }
+            { "cabOn", 1 }, { "cabType", 0 }, { "cabMicType", 0 }, { "cabPos", 3 }, { "cabDist", 2 } } },
+        // 0.6.0: the new pedals in DRIVE A / B (added at the end: the numbers of the presets above stay)
+        // the mid-forward overdrive pushing a crunchy amp: tight low end, the mids in front
+        { "Hearth Crunch Rhythm", {
+            { "pdModel", 2 }, { "pdOn", 1 }, { "pdGain", 2 }, { "pdTone", 5.5f }, { "pdLevel", 0 },
+            { "ampOn", 1 }, { "ampModel", 3 }, { "ampGain", 6 }, { "ampBass", 4.5f }, { "ampMid", 6 }, { "ampTreble", 6 },
+            { "ampPresence", 5.5f }, { "ampMaster", 5 },
+            { "cabOn", 1 }, { "cabType", 2 }, { "cabMicType", 0 }, { "cabPos", 3 }, { "cabDist", 2 } } },
+
+        // the treble booster into a chimey amp: a lead that cuts and sings
+        { "Brass Boost Lead", {
+            { "gtRelease", 0.2f },
+            { "pdModel", 3 }, { "pdOn", 1 }, { "pdGain", 6 }, { "pdTone", 7.5f }, { "pdLevel", -6 },
+            { "ampOn", 1 }, { "ampModel", 2 }, { "ampGain", 6 }, { "ampBass", 5 }, { "ampMid", 5.5f }, { "ampTreble", 5 },
+            { "ampPresence", 5 }, { "ampMaster", 6 },
+            { "cabOn", 1 }, { "cabType", 1 }, { "cabMicType", 2 }, { "cabPos", 3 }, { "cabDist", 2 } } },
+
+        // the hard distortion into a clean amp: alternative / grunge chords
+        { "Barn Dist Grunge", {
+            { "pdModel", 4 }, { "pdOn", 1 }, { "pdGain", 6.5f }, { "pdTone", 4.5f }, { "pdLevel", -11 },
+            { "ampOn", 1 }, { "ampModel", 0 }, { "ampGain", 4 }, { "ampBass", 5.5f }, { "ampMid", 5 }, { "ampTreble", 5.5f },
+            { "ampPresence", 5 }, { "ampMaster", 5 },
+            { "cabOn", 1 }, { "cabType", 2 }, { "cabMicType", 0 }, { "cabPos", 3 }, { "cabDist", 2 } } }
     };
     return presets;
 }

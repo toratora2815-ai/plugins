@@ -1,10 +1,10 @@
 #pragma once
-// EFFECTS ページのペダル 1 台分。中身は単体プラグインと同じ音の部品（WoolFuzzDSP / PorchDriveDSP）と、
-// AIO Guitar だけのコンプ（CottonCompDSP）、My Tremolo の小型版（TremPedalDSP）。並べる順番は Rig.h。
+// EFFECTS ページのペダル 1 台分。中身は DRIVE A / B（DriveSlot.h: 単体プラグインと同じ PORCH DRIVE / WOOL FUZZ と
+// AIO Guitar だけの HEARTH DRIVE / BRASS BOOST / BARN DIST から 1 つ）と、AIO Guitar だけのコンプ（CottonCompDSP）、
+// My Tremolo の小型版（TremPedalDSP）。並べる順番は Rig.h。
 // OFF のペダルは計算しない（タイミングをそろえる短い遅らせだけ）。ON/OFF は 15 ms でつなぐ。
 #include <JuceHeader.h>
-#include "WoolFuzzDSP.h"
-#include "PorchDriveDSP.h"
+#include "DriveSlot.h"
 #include "CottonCompDSP.h"
 #include "TremPedalDSP.h"
 

@@ -192,6 +192,39 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
 - まだ: 判定の基準値は合成音で決めた。本人の本物のビビり音（10 音ほど）ときれいな音（20 音ほど）で確かめ直す（mix-engineer のおすすめ）。
   弾いた瞬間（0.2 秒以内）からのビビりは直せない。ピックが鳴っている弦に軽く触れた（−24 dB の弾き直し）はビビりと見ることがある（下げる／尾を借りるだけで音は悪くならない）
 
+## DRIVE A / B（2026-11-11 本人「ギターリグのエフェクターを測って AIO に移植」「歪みはいくらあってもいい」）
+- mix-engineer「形を変えれば価値あり」→ 本人の選択（2026-11-11）: 入れるのは AMP の前に置く足元のペダルだけ（ディレイ・リバーブ・揺れものは後ろに挿す）、
+  1 回目は TS 系・トレブルブースター・RAT 系、アンプは Guitar Rig の新しいアンプと聴き比べ（→ 本人「どっちのアンプも使えるように」= 今の 5 機種を残して足す）、
+  AIO だけの新機能は DOUBLE（ペダルの 1 回目の後）→ 2026-11-12 本人「Twin Take を使う」: AIO には作らない（ダブルは AIO の後ろに Twin Take の GUITAR モード。CLAUDE.md「ダブルの新機能は Twin Take に足す」）。2 回目ワウ、3 回目フェイザー／ヴァイブ、箱は 7 個・歪みは 6〜7 機種で打ち止め（mix-engineer）
+- **Guitar Rig はこの Mac では無料版（Player）**: ~/Library/Preferences/com.native-instruments.Guitar Rig 7.plist の lic が "free"。Pro の部品（Cat・Treble Booster・
+  Skreamer Deluxe・Jump 以外のアンプ）はラックに入れても黙って捨てられる。動くのは Jump・Matched Cabinet(Pro)・Skreamer・Tube Compressor・Noise Gate・Twin Delay・Studio Reverb など。
+  最初に送ったアンプ聴き比べは Guitar Rig 側がキャビだけだった（本人に訂正済み、AIO 側の 5 本は正しい）。Helix Stadium Native（入っている）も測定ホストでは素通し。
+  本人「無料版だけ」（2026-11-12）→ ペダルは回路どおり（TS 系だけ Skreamer で答え合わせ）、Guitar Rig のアンプを足すのは見送り（無料版で動くアンプは Jump だけ）。
+  道具: build/grlab（gh・pack.py・mkrack.py・ngrr.py・ped/ = Skreamer の 23 通り）、build/hxlab
+- 形: 0.5.0 の DRIVE（pd*）と FUZZ（wf*）の箱 = DRIVE A / B。ID はそのまま（表示名だけ Drive A … / Drive B …）、機種は pdModel / wfModel（版のヒント 5、オートメーション不可）。
+  並び fxChain の番号も同じ（blkDrive = A、blkFuzz = B）。機種: 0 Porch Drive、1 Wool Fuzz、2 Hearth Drive、3 Brass Boost、4 Barn Dist。初期値 A = Porch、B = Wool
+- DriveSlot.h: 5 機種を全部 prepare して選んだ 1 つだけ process。LEVEL は「箱の初期値（A −6、B −12）で各機種の初期値の大きさ」になるよう ずらす
+  （Porch の home −6、Wool −12、新 3 機種 0）→ A の Porch・B の Wool は 0.5.0 と 1 サンプルも違わない（テストで 0）。切り替えは 5 ms 下げ → 次のブロックで reset → 10 ms 上げ
+- DrivePedals.h（JUCE の Oversampling だけ使う）: 3 機種とも Porch / Wool と同じ 4 倍 IIR（遅れ 4 サンプルで全機種同じ）。voltsPerUnit 1.5（デジタル 1.0 = 1.5 V）
+  - HEARTH（TS808）: 回路の値は公開の LTspice ファイル（build/pedcirc/ts808.asc、asc.py でネットリスト化）。クリップ段は帰還ノードを後退オイラー＋ニュートン（1N914: Is 2.52 nA、n 1.752）、
+    アース側 4.7k＋0.047 µF の電流で 720 Hz より上だけ増幅。トーン段は 1k/0.22µF＋R9 10k とトーン（20k、220Ω＋0.22µF、帰還 1k）をまとめた 2 次（双一次）。
+    TONE は本物だと最後の 1/3 で効くので Rb = 20k·(1−t)^2.2 で広げた。DRIVE は Rf = 51k·10^(0.98k)（dB で等間隔）
+    答え合わせ: Guitar Rig 無料版の Skreamer（TS 系の昔のモデル）と小信号の形が 9 通りで 1〜3 dB（低音の切れ・高音の落ち）。歪み始める大きさが合うのが 1.5 V/単位
+  - BRASS（ゲルマニウム 1 石）: Ic = Is·exp((Vb−Ve)/nVt)（Is 5 µA、n 1.3、β 80、470k/68k、Re 3.9k＋Ce 47 µF を陽的オイラー、Rc 10k、飽和はなめらかな min）。
+    上 +2.4 V（遮断）／下 −5.4 V（飽和）で非対称、強く弾くと Ve が上がって潰れる。RANGE = 入力の HP 80 Hz〜3.2 kHz、BOOST = 入力 −30〜0 dB（出口で半分戻す）
+  - BARN（RAT）: 47Ω＋2.2µF / 560Ω＋4.7µF の電流 → Rd（100k、対数）||100 pF → GBW 1 MHz/(1+Rd/43Ω) の 1 次 LP（DIST 最大で 433 Hz から上が落ちる = RAT の荒さ）→ レール ±4 V
+    → スルー 0.3 V/µs → 1k＋ダイオード 2 本をニュートン → フィルター 1.5k＋100k·(1−TONE)、3.3 nF（TONE 10 = 開く、本物と逆向きで他のペダルとそろえた）
+  - 大きさ: 本人の録音（Brit and Clean #11）を GAIN 5・TONE 5 で通して PORCH の初期値（−13.1 LUFS）に合わせた: Hearth +2.6 dB、Brass −9.6 dB、Barn −0.5 dB（kTrimDb）
+  - CPU（48 kHz・1 台）: Porch 0.9 %、Wool 0.6 %、Hearth 2.4 %、Brass 1.7 %、Barn 2.2 %
+- 画面: DrivePanel（EffectsPage.h）。「機種 ▾」のポップアップ、色・名前・つまみの名前と並びが機種で変わる（PORCH は LEVEL/TONE/GAIN のまま）。左上に DRIVE A / B
+- プリセット（最後に追加）: Hearth Crunch Rhythm、Brass Boost Lead、Barn Dist Grunge
+- DSP 検査 1 回目（2026-11-12）「直してから」→ 直した → 2 回目「渡してよい」（表の添字を NaN でも外に出さない 1 行も入れた）: TONE を SmoothedValue 40 ms＋動く間は毎サンプル係数（HEARTH の 2 次、BARN / BRASS は TPT の 1 次）、
+  切り替え途中の再切り替えはフェードの位置から続ける・ブロックの途中で切り替える、HEARTH のニュートン最大 8 回、BARN のダイオードは表＋ADAA（Newton なし、CPU 2.2 → 0.7 %）、
+  BRASS の静止点を同じ飽和の式で、LEVEL のずらしを l + (home − slotDefault)、Barn Dist Grunge の pdLevel −11。RenderTest ALL PASSED。
+  残り（任意）: BARN の GAIN 10 の折り返しは −30〜−38 dB（WOOL と同じくらい）。出どころはオペアンプ段（レールとスルー）で、そこだけ 4 倍の中で 4 回に刻むと約 20 dB 減る（検査係が試した）。
+  192 kHz で HEARTH 1 台 17 %、左右同じ音を 2 回計算している（片方だけ計算してコピーすれば半分）検査の道具は build/driveinspect（tonefix・zipper・swfix・converge・alias、ProcInspect tonetick）
+- 測定ホストの注意（メモリ measuring-commercial-au にも）: Guitar Rig のラックは入口のゲートが既定 ON、DUMP で読み戻して部品が残っているか必ず確かめる
+
 ## まだ直していないこと（DSP 検査 2026-11-10、急がない）
 - COMP を AMP の後ろに置いたまま、鳴らしながら AMP の機種・プリセットを替えると 20〜26 ms だけ +4〜5 dB（コンプのピック抜け +5 dB と、
   pad の 15 ms・機種切替の 5 ms 下げ 10 ms 上げ・GAIN の 30 ms のずれ、表の +12 dB 頭打ち）。出口のクリップで 0 dBFS は超えない。pad を 30 ms にすると GAIN 0→10 が悪化したので、時間合わせだけでは直らない
@@ -202,6 +235,7 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
 `RenderTest <出力> [弦の硬さ 0〜0.0004]`、`RenderTest --padtable`（AmpPad.h の表を出す、約 1 分）、`RenderTest --amp ...`（AMP の音を WAV で）
 
 ## 版
+- 0.6.0（2026-11-11）… DRIVE A / B（5 機種から選ぶ: Porch Drive・Wool Fuzz・Hearth Drive・Brass Boost・Barn Dist）。上の「DRIVE A / B」の節
 - 0.5.0（2026-11-10）… ビビり補正（Fix Buzz）。上の「ビビり補正」の節
 - 0.1.0（2026-11-08）… リポジトリに移す。MY GUITAR ページ（録音 4 欄、弦とフレットの表、PLAYING、奏法）、SCORE ページ（タブ譜、FOLLOW LOGIC / PLAY IN SYNC、DRAG TO LOGIC）、タブ 4 つ（EFFECTS / AMP は仮）、LINK 欄・プリセット欄。
   DSP 検査 1 回目「直してから」→ 確保 0 回・キット差し替え 12 ms フェード・グライドを段ごと・Palm Mute をならす・96k を間引く・decode の範囲チェック → 2 回目「渡してよい」
