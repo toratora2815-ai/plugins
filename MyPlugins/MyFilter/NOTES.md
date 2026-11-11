@@ -20,7 +20,8 @@
 - パターン・自分の形は apvts.state の "pattern"・"customShape"（My Tremolo と同じ形式。.myrhythm / .myshape も同じ）
 
 ## 測ったこと（build/fflab、コミットしない。th = 測定ホスト、SUB 環境変数で "FF1 " / "FF2 "）
-- 本物の遅れ 45 サンプル（自作は 29。4 倍の上げ下げの式では 28 だが、DSP 検査係の実測で山は 29・重心 28.6〜29.1 → 29 と申告、元の音の輪も 29）。つまみはホストに出ている: Bypass, InputGain, OutputGain（どちらも 0..1 = ±24 dB）, Mix, InOutMode（Digital/Analog）,
+- 本物の遅れ 45 サンプル（自作は 29。4 倍の上げ下げの式では 28 だが、DSP 検査係の実測で山は 29・重心 28.6〜29.1 → 29 と申告、元の音の輪も 29。
+  増えた 1 はオーバーサンプラーではなく、全開の LP 自体の遅れ（約 0.6）。同じ Oversampler4 の My Tremolo は山 28・重心 28.00・正弦波の位相 28.0 で、申告 28 のままで正しい（2026-11-11 実測））。つまみはホストに出ている: Bypass, InputGain, OutputGain（どちらも 0..1 = ±24 dB）, Mix, InOutMode（Digital/Analog）,
   Frequency（20 Hz × 1000^v、ぴったり）, Resonance, FilterOrder（0..1 を 3 倍して丸め = 2/4/6/8 極）, FilterShape, ModulationDepth, Trigger, Tempo（30..240）, LFO Rate。
   FF2 は Frequency1/2・Resonance1/2・Gain1/2（±24 dB）・Shape・Order、FilterLink、FilterRouting（Series/Parallel）
 - 動かし方・FREQ MOD などはホストに出ていない（.toy は中身が暗号化。中は解かない）。初期状態とプリセット経由で測った
