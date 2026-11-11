@@ -20,6 +20,7 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 | Horizon Spread | HorizonSpread | モノラルで崩れないステレオの広げ役（1 本のまま広げる） |
 | Twin Take | TwinTake | 1 本録りの歌・ギターを「2 回録って重ねた」ように聞かせるダブラー（音ごとにずれ方が変わる別テイク感） |
 | Hush Field | HushField | 耳に刺さる響きを鳴った瞬間だけ下げる（動的レゾナンス抑制） |
+| Noise Out | NoiseOut | 録った音の雑音（サーッ・ファン）・ハム（ブーン）・部屋鳴りを取る（ボーカル・ナレーション・ライン録り用） |
 | Drum Transient | DrumTransient | ドラム専用のリミッター。突っ込んでもアタックが死なず胴も揺れない（普通のリミッターは Pro-L2） |
 | Forge Strip | ForgeStrip | EQ・コンプなど 11 モジュールのチャンネルストリップ |
 | Gain Stage | GainStage | トラックの入口の音量をワンクリックでそろえる |

@@ -36,7 +36,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`, `Myfl`, `Mycr`, `Twtk`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`, `Myfl`, `Mycr`, `Nzot`, `Twtk`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -93,6 +93,7 @@
 - 声: Vox Chop = 声を別の声に変える・声を切って鍵盤で弾く（ボーカルチョップ） / Sample Sculptor = 1 つの音を整える。声の加工の新機能は Vox Chop に足す
 - 鼻歌: Idea Catcher だけ（録ってから解析 → きれいな MIDI → Logic へドラッグ）。口ドラムは本人が「いらない」ので作らない
 - リミッター: 普通のリミッター（2 ミックス・マスター）は本人の Pro-L2 / ドラムは Drum Transient / Forge Strip・Fire Box の最後のリミッターはそれぞれの中だけ
+- 抑える: 雑音（サーッ・ファン）・ハム・部屋鳴りを取る = Noise Out / キツい響き・サ行 = Hush Field（Noise Out に De-ess は入れない）
 - ダブル・広げる: 1 本のまま広げる（モノにすると元に戻る）= Horizon Spread / 1 本録りの歌・ギターを 2 本録りに（音ごとにずれる別テイク。モノでも厚みが残る）= Twin Take /
   いつも同じずれの加工っぽい厚み = Echo Drift の Chorus Doubler・My Crystal の Detune Double。ダブルの新機能は Twin Take に足す（Horizon Spread の DOUBLE・SHIFT はこれ以上ダブル寄りにしない。歌・ギター用プリセットは本人が使っているので残す、2026-11-12）
 - 参照曲まわりの新機能は Reference Monitor にだけ足す（Balance Scope の REF と二重にしない）。Mod Host は「中のプラグインのつまみを動かす」役。帯域・歪み・自動ゲインはこれ以上足さない（Forge Strip の仕事）
@@ -139,6 +140,11 @@
 - My Crystal（MyCrystal）1.0.0 … 音を短く切って音程を変え・逆再生しながら重ねるエコー（本人の Mac の市販グラニュラー・エコーを測って合わせ込み）。
   PITCH ±3 oct（半音で止まる、shift でセント）/ SPLICE / DELAY（SYNC で音符）/ RECYCLE / REVERSE / ANALOG、GATE⇄DUCK、TWEAK（PITCH・SPLICE・DELAY OFFSET、SMOOTHING、LOW / HIGH CUT は輪の中、ATTACK / RELEASE、DUCK MODE、Mixed / Dual / Ping-Pong）、内蔵プリセット 15 個。
   センドで使う飛び道具。遅れなし。色付け・4 倍は My Tremolo の Source を include（変えたら My Crystal もビルド）。Plugin Link は Fader Pilot の歌でウェットを下げる（Kind 23 は未登録）。測定の道具は build/crylab
+
+- Noise Out（NoiseOut）1.0.0 … 録った音の雑音・ハム・部屋鳴りを取る（本人の Mac の iZotope RX 12 試用版を約 830 通り測って合わせ込み）。並び固定 HUM → NOISE → ROOM。
+  HUM = RX 12 De-hum の Static と同じ形（RBJ ピーキング Q 1000 を倍音に並べる＋1.5 Hz の直流カット。波形の差 −80 dB）、AUTO は 50 / 60 Hz ±0.3 Hz を自分で探す（楽器の音程を拾わない）/
+  NOISE = Voice De-noise（Dialogue / Surgical）に合わせた STFT のノイズ除去、ADAPTIVE / LEARNED（LEARN は 3 秒で自動終了）/ ROOM = De-reverb に寄せた響きの予想と引き算。
+  遅れ 2048（48 kHz）。DELTA。Plugin Link は Fader Pilot が歌っている間 ADAPTIVE の推定を止める（Kind 24 は未登録）。測定の道具は build/noiselab
 
 - Twin Take（TwinTake）1.0.0 … 1 本録りの歌・ギターを「2 回録って重ねた」ように聞かせるダブラー（2026-11-11。提案の Double Take は実在製品名なので改名）。
   音の頭ごとに各ダブルの遅れ・音程（±2〜9 セント）・音色・音量を選び直す。VOCAL（遅れ 0、ダブル 1/2/4 本、子音・息はダブルしない）/ GUITAR（原音を左・ダブルを右、40 ms の遅れを申告）。
