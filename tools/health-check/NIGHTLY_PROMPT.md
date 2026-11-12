@@ -31,6 +31,9 @@
    - プラグインのコードは `MyPlugins/<フォルダ>/Source`、共通部品は `MyPlugins/Shared`。説明は各フォルダの `README.md`・`NOTES.md`
    - 確かめたいときは、1 つだけ測り直してよい: `build/health/hc run <コード> <検査> /tmp/hc-check.json --seed <番号> [--set <番号>]`
    - `.claude/agents/dsp-inspector.md`（DSP 検査係）のチェック項目を参考にする
+   - CPU の「重い」「ときどき重くなる」は、ほかの作業で Mac が混んでいると大きめに出る（summary.md の「Mac の混み具合」、raw の `load_avg`）。
+     `build/health/hc run <コード> basic /tmp/hc-check.json` で測り直し、空いている時にも出たときだけ不具合にする
+     （2026-11-11 の初回は負荷平均 16〜19 で、Lumen Rooms 73% → 空いている時 14%、Hush Field 44〜53% → 15〜17% だった）
    - 判断は次の 3 つのどれか
      - **不具合**（直したほうがいい）… Logic でどう困るか、原因の場所（ファイル:行）、直し方（1〜2 行）
      - **仕様**（README・NOTES に書いてある、または音作りとして意図した動き）… 理由 1 行。KNOWN.md に足す案も書く（足すのは本人が OK してから）

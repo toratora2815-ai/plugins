@@ -655,10 +655,17 @@ static void testBasic (AudioComponent comp, Json& j)
     double avg, p99, mx, tavg, tp99, tmx;
     cpuStats (o.cpu, 4, progBlocks, avg, p99, mx);
     cpuStats (o.cpu, progBlocks + 94, o.cpu.size(), tavg, tp99, tmx);   // 止めて 1 秒後から
+    // 調べるとき用: HC_DUMP_CPU=<ファイル> で、ブロックごとの CPU（1 コアの %）を 1 行ずつ書き出す
+    if (const char* dp = std::getenv ("HC_DUMP_CPU"))
+        if (FILE* f = std::fopen (dp, "w")) { for (double c : o.cpu) std::fprintf (f, "%.3f\n", c); std::fclose (f); }
     j.kn ("cpu_avg", avg); j.kn ("cpu_p99", p99); j.kn ("cpu_max", mx); j.kn ("cpu_tail_avg", tavg);
     metric ("cpu_avg", avg); metric ("cpu_p99", p99);
-    if (avg > 25) addF ("注意", fmt ("重い（1 コアの %.0f%% を使う、48 kHz・512 サンプル）", avg));
-    if (p99 > 60) addF ("注意", fmt ("ときどき重くなる瞬間がある（1%% のブロックで 1 コアの %.0f%% 以上）", p99));
+    // Mac がほかの作業で混んでいると、CPU は大きめに出る（2026-11-11 の初回: 負荷平均 16〜19 で、Lumen Rooms が 2 倍・Hush Field が 3 倍に出た）
+    double la[3] = { 0, 0, 0 }; getloadavg (la, 3);
+    const std::string busy = la[0] > 8.0 ? fmt ("。検査中 Mac が混んでいた（負荷平均 %.1f）ので大きめに出ているかも。hc run <コード> basic で測り直して確かめる", la[0]) : std::string();
+    j.kn ("load_avg", la[0]);
+    if (avg > 25) addF ("注意", fmt ("重い（1 コアの %.0f%% を使う、48 kHz・512 サンプル）", avg) + busy);
+    if (p99 > 60) addF ("注意", fmt ("ときどき重くなる瞬間がある（1%% のブロックで 1 コアの %.0f%% 以上）", p99) + busy);
     if (tavg > 3.0 * avg && tavg > 2.0) addF ("注意", fmt ("音を止めた後の無音の間に重くなる（%.1f%% → %.1f%%）。デノーマル（極小の数）の疑い", avg, tavg));
 
     // 遅れの申告が正しいか（スイープの所で相互相関）
@@ -1356,6 +1363,9 @@ static int cmdAll (const std::string& outDir, const std::string& repo, const std
     time_t tt = time (nullptr); char ts[64]; strftime (ts, sizeof ts, "%Y-%m-%d %H:%M", localtime (&tt));
     std::string md = fmt ("# 自作プラグイン健康診断（%s）\n\n", ts);
     md += fmt ("- 検査したプラグイン: %zu 個（%.0f 分、乱数の種 %u）\n", results.size(), (nowSec() - tStart) / 60.0, seed);
+    { double la[3] = { 0, 0, 0 }; getloadavg (la, 3);
+      md += fmt ("- Mac の混み具合（終わったときの負荷平均 1 分 / 5 分 / 15 分）: %.1f / %.1f / %.1f%s\n", la[0], la[1], la[2],
+                 la[1] > 8.0 ? "（混んでいた。CPU の数値は大きめに出ているかも）" : ""); }
     md += fmt ("- 異常あり %d 個 / 注意だけ %d 個 / 問題なし %d 個\n", nBad, nWarn, nOk);
     md += "- 検査: " ; for (auto& g : groups) md += std::string (groupJa (g)) + " "; md += skipAuval ? "\n\n" : "auval\n\n";
     md += "## 異常・注意\n\n";

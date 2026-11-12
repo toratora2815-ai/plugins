@@ -58,7 +58,7 @@
     amount: MIX 90〜100%（センド使い）は少しずつ 0 へ、DELTA・ソロ・BYPASS など比べる元がない間は 0。最後にリミッターがあるなら ON の間 `limitBoost (0)`。
     内蔵プリセットで全部を初期値に戻す処理からは `gainMatch` を外す。数値テストは build/gmtest/main.cpp（コミットしない）。
     付けないもの: 音を変えない測定器（Balance Scope）、音量を変えるのが仕事のもの（Gain Stage・Fader Pilot）、音源（Sample Sculptor・AIO Guitar・Vox Chop）。
-    前からある Horizon Spread `autoGain`・Fire Box `unity`・Mod Host `autoGain` は ID はそのまま、表示を GAIN MATCH にして同じ場所に置いた
+    前からある Horizon Spread `autoGain`・Fire Box `unity`・Mod Host `autoGain` は ID はそのまま、表示を GAIN MATCH にして同じ場所に置いた（2026-11-12: HS・Fire Box も ON の間は OUTPUT / IN で音量を変えないようにそろえた）
   - 画面のいちばん下に「LINK 欄＋GAIN MATCH・プリセット・取り消し欄」（1 段 40 px か 2 段 72 px。GAIN MATCH が入ってプリセット欄が約 550 px になったので、LINK 欄に追加のつまみがあって幅 1200 未満なら 2 段）
 
 ## 専門の係（サブエージェント、`.claude/agents/`）
@@ -102,17 +102,17 @@
 ### プラグイン（AU）
 - Wool Fuzz（WoolFuzz）1.1.0 … ビッグマフ系ファズ。SUSTAIN / TONE / VOLUME。Gain Stage から LEVEL MATCH を受ける
 - Porch Drive（PorchDrive）1.1.0 … BD-2系ブルースドライブ。LEVEL / TONE / GAIN。Gain Stage から LEVEL MATCH を受ける
-- Lumen Rooms（LumenRooms）1.5.0 … 映画・ポップス向けの広くなめらかな部屋のリバーブ（初期反射＋リバーブ、ECHO、EQ、テンポ同期、FREEZE、自前のプリセット画面）。Fader Pilot から VOCAL DUCK
-- Elder Verb（ElderVerb）1.1.0 … 70〜80 年代のデジタルリバーブ機材ふう。22 モード、COLOR 70s/80s/NOW、本物の .vpreset を読める。Fader Pilot から VOCAL DUCK
-- Meld Verb（MeldVerb）1.2.0 … EARLY / PLATE / HALL を三角形の BLEND パッドで混ぜる。SMOOTHING・LEARN・UNMASK、SHAPE タブ。Fader Pilot から VOCAL DUCK
+- Lumen Rooms（LumenRooms）1.5.1 … 映画・ポップス向けの広くなめらかな部屋のリバーブ（初期反射＋リバーブ、ECHO、EQ、テンポ同期、FREEZE、自前のプリセット画面）。Fader Pilot から VOCAL DUCK
+- Elder Verb（ElderVerb）1.1.1 … 70〜80 年代のデジタルリバーブ機材ふう。22 モード、COLOR 70s/80s/NOW、本物の .vpreset を読める。Fader Pilot から VOCAL DUCK
+- Meld Verb（MeldVerb）1.2.1 … EARLY / PLATE / HALL を三角形の BLEND パッドで混ぜる。SMOOTHING・LEARN・UNMASK、SHAPE タブ。Fader Pilot から VOCAL DUCK
 - Balance Scope（BalanceScope）1.3.1 … 帯域バランス解析。ジャンル別目標カーブ、REF A/B/C、ラウドネス。出すぎの帯域とオケの音量を送り、Hush Field の削り量・Gain Stage の GAIN を表示
-- Horizon Spread（HorizonSpread）1.4.0 … ステレオ感の全部入り（Side だけ加工）。SHAPE / CREATE ページ、GAIN MATCH（ID autoGain）、内蔵プリセット。Fader Pilot が歌っている間 SPREAD を下げる
-- Hush Field（HushField）1.2.1 … 動的レゾナンス抑制。帯域カーブ 8 本、STEREO L/R・M/S、SC、LINEAR PHASE / LOW LATENCY。Balance Scope の出すぎ帯域を受け、削り量を送る
+- Horizon Spread（HorizonSpread）1.4.1 … ステレオ感の全部入り（Side だけ加工）。SHAPE / CREATE ページ、GAIN MATCH（ID autoGain）、内蔵プリセット。Fader Pilot が歌っている間 SPREAD を下げる
+- Hush Field（HushField）1.2.2 … 動的レゾナンス抑制。帯域カーブ 8 本、STEREO L/R・M/S、SC、LINEAR PHASE / LOW LATENCY。Balance Scope の出すぎ帯域を受け、削り量を送る
 - Fader Pilot（FaderPilot）1.2.0 … ボーカルのフェーダーを自動で上げ下げ（遅延ゼロ）。AUTO RIDE / WRITE / FOLLOW MUSIC。フェーダー位置と「歌っているか」を送る
 - Gain Stage（GainStage）1.1.0 … トラックの入口の音量をワンクリックでそろえる（遅延ゼロ）。LEARN（鳴っている所だけ 5 秒測り GAIN を 1 回入れる）、TARGET / RMS・PEAK / Ø / MONO / SWAP、IN/OUT メーター。結果は apvts.state の "learnInfo"。GAIN / TARGET などを送る
 - Sample Sculptor（SampleSculptor）1.2.0 … サンプル編集（AU 音源 aumu Smsc）。切り取り→PITCH→STRETCH→形→REVERSE→ROOM→DRIVE→TONE→FADE→NORMALIZE、A/B、ドラッグで Logic へ。LINK 欄だけ
-- Echo Drift（EchoDrift）1.3.0 … テープ・BBD・ラジオ・コーラス系 31 スタイルのディレイ（市販の定番ディレイを測って合わせ込み）。SINGLE / DUAL / PING-PONG / RHYTHM。Fader Pilot から VOCAL DUCK
-- Fire Box（FireBox）1.2.0 … 太く・大きくする全部入り（本人の持っている市販プラグインを測って、音の処理を同じ動きに合わせ込み）。IN / BASS / THICK / BODY / COMP⇄OTT / SOFT CLIP / CRUNCH / MIX / LOUD / OUT、GAIN MATCH（ID unity、4 秒平均で追う）・LIVE・192k・BYPASS。測定の道具は build/fuellab（コミットしない）。Plugin Link は Gain Stage で MATCH
+- Echo Drift（EchoDrift）1.3.1 … テープ・BBD・ラジオ・コーラス系 31 スタイルのディレイ（市販の定番ディレイを測って合わせ込み）。SINGLE / DUAL / PING-PONG / RHYTHM。Fader Pilot から VOCAL DUCK
+- Fire Box（FireBox）1.2.1 … 太く・大きくする全部入り（本人の持っている市販プラグインを測って、音の処理を同じ動きに合わせ込み）。IN / BASS / THICK / BODY / COMP⇄OTT / SOFT CLIP / CRUNCH / MIX / LOUD / OUT、GAIN MATCH（ID unity、4 秒平均で追う。1.2.1 から IN・OUT の分も戻す）・LIVE・192k・BYPASS。測定の道具は build/fuellab（コミットしない）。Plugin Link は Gain Stage で MATCH
   v1.1.0: OTT 作り直し（88 Hz の分割は Q の違う 2 段ずつ、dB 型検出器を持ち上げ用・下げ用に、OTT 時の MIX のドライも帯域分けを通す、量の表 29 段階）。FUEL との差 量24 dB で −33 dB
 - Mod Host（ModHost）1.2.0 … 好きな AU を中に読み込み、MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS / LINK）でつまみを動かす。3 帯域・DRIVE・MORPH・前後の解析
 - AIO Guitar（AIOGuitar）0.6.0 … 本人のエレキをライン録りした音で鳴らす全部入りギター音源（AU 音源 aumu Aiog ＋単体アプリ、CMakeLists の ALSO_APP で AIOGuitar-App.zip も）。
@@ -121,7 +121,7 @@
   AMP は 5 種類＋キャビ 5 種類（か IR）＋マイク 3 種類・位置・距離。Logic の Amp Designer を 57 通りバウンスして合わせ込み（build/AmpLab、AmpTables.h は自動生成）。Plugin Link は LINK 欄だけ（Kind 17 は未登録）
   2026-11-11 本人: AIO に入れるのは AMP の前の足元のペダルだけ（2 回目ワウ、3 回目フェイザー／ヴァイブ、箱は 7 個・歪みは 6〜7 機種まで）、アンプは今の 5 種類を残して足す（Guitar Rig は無料版だけなので見送り）。DOUBLE は AIO に作らず、AIO の後ろに Twin Take（2026-11-12 本人）。
   この Mac の Guitar Rig 7 は無料版（Player）で、Pro の部品は測れない（NOTES.md の DRIVE A / B）
-- Forge Strip（ForgeStrip）1.3.0 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Plugin Link の相手だった Forge Mixer は削除（受け取る処理と独自の種類 200 / 201 はソースに残っている）
+- Forge Strip（ForgeStrip）1.3.1 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Plugin Link の相手だった Forge Mixer は削除（受け取る処理と独自の種類 200 / 201 はソースに残っている）
 - Vox Chop（VoxChop）1.0.0 … 自分の声を別の声に変えて、切って鍵盤で弾く AU 音源（aumu Vxch）。CAPTURE（サイドチェーン）かファイル → 後から丸ごと計算（TD-PSOLA、VoxEngine.h）。
   VOICE MAP（高さ × 体の大きさ）・BREATH・GRIT・ROBOT・ALIEN・声のプリセット 23 個 / AUTO（言葉の切れ目）・GRID で最大 64 片を C1 から / 片ごとの設定・MELODIC・WHOLE / 片・全部・MIDI・全体をドラッグで Logic へ。
   空間系・歪み・ボコーダー・ケロケロは入れない（自作と Logic 標準を後ろに）。Plugin Link は LINK 欄だけ（Kind 18 は未登録）
@@ -131,7 +131,7 @@
 - Deca Satu（DecaSatu）1.1.0 … トラック用サチュレーター（本人の Mac の市販サチュレーターを測って合わせ込み）。STYLE A/E/N/T/P・DRIVE・PUNISH・LOW CUT＋THUMP・TONE・HIGH CUT＋STEEP・MIX・OUTPUT。
   本物の AUTO は GAIN MATCH に統合（ON の間だけ AUTO の量を中で使う）。DSP は DecaSatuDSP.h（JUCE なし、後で Forge Strip に入れられる）。Plugin Link は Gain Stage の LEVEL MATCH だけ（Kind 20 は未登録）。測定の道具は build/decalab
 
-- My Tremolo（MyTremolo）1.1.0 … トレモロの全部入り（本人の Mac の市販トレモロを測って合わせ込み）。DEPTH / GROOVE / FEEL / ACCENT / RATE＋SYNC＋TAP / WIDTH / LOW KEEP、
+- My Tremolo（MyTremolo）1.1.1 … トレモロの全部入り（本人の Mac の市販トレモロを測って合わせ込み）。DEPTH / GROOVE / FEEL / ACCENT / RATE＋SYNC＋TAP / WIDTH / LOW KEEP、
   RHYTHM（4 Bars〜1/32、付点・3 連、Pattern = 升目で描く）、SHAPE 15 種＋Custom（点で描く、SMOOTH 5 種）、ENVELOPE（THRESHOLD・ATTACK・RELEASE・RATE MOD ±6 oct・DEPTH MOD・Env/Gate）、
   STYLE 8 種（Digital＋測った色付け 7 種）、内蔵プリセット 30 個。DSP は MyTremoloDSP.h（JUCE なし）。Plugin Link は Fader Pilot の歌で揺れを浅く（Kind 21 は未登録）。測定の道具は build/tremlab
 
@@ -149,8 +149,9 @@
   NOISE = Voice De-noise（Dialogue / Surgical）に合わせた STFT のノイズ除去、ADAPTIVE / LEARNED（LEARN は 3 秒で自動終了）/ ROOM = De-reverb に寄せた響きの予想と引き算。
   遅れ 2048（48 kHz）。DELTA。Plugin Link は Fader Pilot が歌っている間 ADAPTIVE の推定を止める（Kind 24 は未登録）。測定の道具は build/noiselab
 
-- Twin Take（TwinTake）1.0.0 … 1 本録りの歌・ギターを「2 回録って重ねた」ように聞かせるダブラー（2026-11-11。提案の Double Take は実在製品名なので改名）。
+- Twin Take（TwinTake）1.1.0 … 1 本録りの歌・ギターを「2 回録って重ねた」ように聞かせるダブラー（2026-11-11。提案の Double Take は実在製品名なので改名）。
   音の頭ごとに各ダブルの遅れ・音程（±2〜9 セント）・音色・音量を選び直す。VOCAL（遅れ 0、ダブル 1/2/4 本、子音・息はダブルしない）/ GUITAR（原音を左・ダブルを右、40 ms の遅れを申告）。
+  1.1.0: 語尾（原音が先に終わったらダブルも下げる）・長い音の中の小さな揺れ（VOCAL だけ）・DOUBLE ONLY（原音を消してダブルだけ、AUX のセンド用。プリセット・UNDO の対象外）。
   DSP は TwinTakeDSP.h（JUCE なし）、試作・テストは tools/render.cpp。Plugin Link は LINK 欄だけ（Kind 25 は未登録）
 
 - Retro Retro（RetroRetro）1.0.0 … 音を古っぽくする全部入り（本人の Mac の市販 Lo-Fi プラグインを測って合わせ込み。2026-11-12 本人「rc version2」→ 実在製品名に近いので「Retro Retro」に）。
