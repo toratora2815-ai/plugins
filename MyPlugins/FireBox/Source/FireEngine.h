@@ -525,7 +525,8 @@ namespace firebox
             }
             thick.prepare (sr);
             latency = body[0].LA + la + la;
-            for (int c = 0; c < 2; ++c) { dryD[c].prepare (latency - la); dry2[c].prepare (la); loudPass[c].prepare (la); bypD[c].prepare (latency); }
+            for (int c = 0; c < 2; ++c) { dryD[c].prepare (latency - la); loudPass[c].prepare (la); bypD[c].prepare (latency); }
+            ginRing.assign ((size_t) latency + 1, -1.0); ginPos = 0;
             rBass.prepare (sr, init.bassOn); rThick.prepare (sr, init.thickOn); rBody.prepare (sr, init.bodyOn); rComp.prepare (sr, init.compOn);
             rOtt.prepare (sr, init.compOn && init.ott); rDyn.prepare (sr, init.bodyOn || init.compOn); rSc.prepare (sr, init.scOn);
             rCr.prepare (sr, init.crunchOn); rLoud.prepare (sr, init.loudOn); rUnity.prepare (sr, init.unity); rByp.prepare (sr, false);
@@ -553,6 +554,8 @@ namespace firebox
                 const double wB = rBass.next(), wT = rThick.next(), wBo = rBody.next(), wO = rOtt.next(), wD = rDyn.next();
                 const double wS = rSc.next(), wR = rCr.next(), wL = rLoud.next(), wU = rUnity.next(), wY = rByp.next();
                 const double raw[2] = { L[i], R ? R[i] : L[i] };
+                if (ginRing[0] < 0) std::fill (ginRing.begin(), ginRing.end(), gin);
+                ginRing[(size_t) ginPos] = gin; ginPos = (ginPos + 1) % (int) ginRing.size(); const double ginD = ginRing[(size_t) ginPos];
                 double x[2] = { raw[0] * gin, raw[1] * gin };
                 const double d[2] = { x[0], x[1] };
                 for (int c = 0; c < 2; ++c) { const double b = bass[c].process (x[c], p.bass); x[c] += wB * (b - x[c]); }
@@ -576,11 +579,13 @@ namespace firebox
                     // LOUD: 先読みには常に gl を掛けた音を入れ、外すときは素通しの遅れと重ねる
                     const double zl = loud[c].process (y * gl), zp = loudPass[c].process (y);
                     double z = zp + wL * (zl - zp);
-                    const double dryAligned = dry2[c].process (dry);
-                    const double ug = unity[c].gain (dryAligned, z);
-                    z *= 1 + wU * (ug - 1);
-                    z *= gout;
+                    // GAIN MATCH（unity）: IN の分はすぐ戻し（IN は歪ませる量だけ変える）、処理で変わった分を元の音（IN の前）に 4 秒平均で合わせる。
+                    // ON の間は OUT でも音量を変えない（ほかのプラグインの GAIN MATCH と同じ。前は IN・OUT の分が残っていた。2026-11-12）
                     const double by = bypD[c].process (raw[c]);
+                    const double zU = z / std::max (1.0e-6, ginD);
+                    const double ug = unity[c].gain (by, zU);
+                    z += wU * (zU * ug - z);
+                    z *= gout + wU * (1.0 - gout);
                     const double o = z + wY * (by - z);
                     if (c == 0) L[i] = (float) o; else if (R) R[i] = (float) o;
                 }
@@ -603,8 +608,8 @@ namespace firebox
 
         double sr = 48000; bool isLive = false; int latency = 0;
         Bass bass[2]; Thick thick; Body body[2]; Comp comp[2]; Ott ott[2]; XoSum xo[2]; Clip clip[2]; Loud loud[2]; Unity unity[2];
-        Delay dryD[2], dry2[2], loudPass[2], bypD[2];   // dry2: LOUD の先読み分（UNITY の基準をそろえる）
+        Delay dryD[2], loudPass[2], bypD[2];   // UNITY（GAIN MATCH）の基準は bypD（IN の前の元の音を全体の遅れだけ遅らせたもの）
         Ramp rBass, rThick, rBody, rComp, rOtt, rDyn, rSc, rCr, rLoud, rUnity, rByp;
-        Params prev; bool havePrev = false;
+        Params prev; bool havePrev = false; std::vector<double> ginRing; int ginPos = 0;
     };
 }

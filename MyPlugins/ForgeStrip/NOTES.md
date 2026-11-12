@@ -19,3 +19,5 @@ v1.2.1: 並び順を apvts.state の "order" から、非オートメーショ�
 Vintage リリースは 1000 ms から先を √ で伸ばす。Spectral.h のフレームごとの std::vector をなくした。holdLeft を reset で 0 に
 2026-11-06: Forge Mixer（Frgm）を削除。Strip 側の受け取り（PluginProcessor.cpp の kindMixer、LINK 欄の「Forge Mixer を待っています」）はソースに残したまま（次に Strip を直すときに一緒に片付ける）
 - 1.3.0（2026-11-09）: GAIN MATCH を追加（Shared/GainMatch.h、ID gainMatch、既定 OFF、状態に gainMatchDb を保存）。ボタンはプリセット欄の左端（ストリップ全体用。モジュールごとの autogain とは別）。BYPASS の間は効かない
+- 1.3.1（2026-11-12）: オートメーションのジジッを直した（健康診断の click で 7 個、+52〜+77）。Strip.h: INPUT・OUTPUT・PAN・WIDTH（MONO も）・モジュールの MIX を 20 ms、DELAY L / R を 50 ms で 1 サンプルずつ（DELAY は小数の遅れ。目標は前と同じ四捨五入なので、止まっていれば前とビット単位で同じ）。Dynamics.h: COMP の帯域の GAIN・MIX と全体の GAIN を 20 ms
+  DSP 検査係（1 回目「直してから」）: DELAY が float の丸めで目標の整数に着かず、直線補間で高域が落ちたままだった（48 kHz・99 ms で 15 kHz −4.8 dB）→ double で 25 ms × 2 段で追う。MIX 100% の間もドライの遅れ線にいつも入れる（前から: MIX を下げた瞬間に古い音・空の線が出た。DENSITY で +39 dB）

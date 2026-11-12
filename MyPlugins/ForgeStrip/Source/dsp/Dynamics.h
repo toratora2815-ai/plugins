@@ -278,6 +278,7 @@ public:
         sr = s; split.prepare (s);
         for (int b = 0; b < 3; ++b) { core[b].prepare (s); punch[b].prepare (s); detf[b].reset(); }
         bandSplitDet.prepare (s);
+        aG = (float) (1.0 - std::exp (-1.0 / (0.02 * s))); gInit = false;
     }
     void reset() { split.reset(); bandSplitDet.reset(); for (int b = 0; b < 3; ++b) { core[b].reset(); punch[b].reset(); detf[b].reset(); } }
     void set (const CompSettings& s) { cfg = s; split.set (s.bands, s.xover1, s.xover2); bandSplitDet.set (s.bands, s.xover1, s.xover2);
@@ -309,26 +310,37 @@ public:
                 core[b].lastGr = -punch[b].lastDb;
                 continue;
             }
-            const float mk = dbToGain (bs.gain);
+            // 帯域の GAIN・MIX は 1 サンプルずつ 20 ms でなめらかに（ブロックごとの段でジジッと鳴っていた）
+            const float mkT = dbToGain (bs.gain), mixT = bs.mix;
+            if (! gInit) { mkS[b] = mkT; bmixS[b] = mixT; }
             for (int i = 0; i < n; ++i)
             {
+                mkS[b] += (mkT - mkS[b]) * aG; if (std::abs (mkT - mkS[b]) < 1.0e-6f) mkS[b] = mkT;
+                bmixS[b] += (mixT - bmixS[b]) * aG; if (std::abs (mixT - bmixS[b]) < 1.0e-6f) bmixS[b] = mixT;
                 const float d = std::max (std::abs (detf[b].process (dl[i], 0)), std::abs (detf[b].process (dr[i], 1)));
                 const float g = core[b].process (d, bs, cfg);
                 const float auto_ = cfg.autoGain ? dbToGain (core[b].makeupDb()) : 1.0f;
-                const float wet = g * auto_ * mk;
-                const float gg = bs.mix * wet + (1.0f - bs.mix) * 1.0f;
+                const float wet = g * auto_ * mkS[b];
+                const float gg = bmixS[b] * wet + (1.0f - bmixS[b]) * 1.0f;
                 l[i] *= gg; r[i] *= gg;
             }
         }
         split.sum (L, R, n);
-        const float gg = dbToGain (cfg.globalGain);
-        if (gg != 1.0f) for (int i = 0; i < n; ++i) { L[i] *= gg; R[i] *= gg; }
+        const float ggT = dbToGain (cfg.globalGain);
+        if (! gInit) { ggS = ggT; gInit = true; }
+        if (ggT != 1.0f || ggS != 1.0f)
+            for (int i = 0; i < n; ++i)
+            {
+                ggS += (ggT - ggS) * aG; if (std::abs (ggT - ggS) < 1.0e-6f) ggS = ggT;
+                L[i] *= ggS; R[i] *= ggS;
+            }
     }
     float gainReduction (int b) const { return core[b].lastGr; }
     const CompSettings& settings() const { return cfg; }
 
 private:
     CompSettings cfg;
+    float mkS[3] { 1, 1, 1 }, bmixS[3] { 1, 1, 1 }, ggS = 1, aG = 0.001f; bool gInit = false;   // なめらかにした GAIN・MIX
     BandSplit split, bandSplitDet;
     CompCore core[3];
     PunchCore punch[3];

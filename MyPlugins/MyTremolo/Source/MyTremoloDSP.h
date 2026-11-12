@@ -305,7 +305,7 @@ namespace mytrem
             lastSpeed = 1.0; spdMoved = false; spdSteady = true; spdCount = 0;
             for (auto& g : lastGain) g = 1;
             declickArm = false; declickLeft = 0; dcOffset[0] = dcOffset[1] = 0; declickLen = std::max (1, (int) (0.01 * fs));
-            depthS = 1; widthS = 0; feelS = 0; grooveS = 0; accS = 0; inS = -1; outS = -1; lkMix = 0;
+            depthS = 1; widthS = 0; feelS = 0; grooveS = 0; accS = 0; depthModS = 0; inS = -1; outS = -1; lkMix = 0;
             first = true;
             lkHz = 150; for (auto& l : lr) { l.set (fs * 4, lkHz); l.reset(); }
             for (auto& l : lrOld) { l.set (fs * 4, lkHz); l.reset(); }
@@ -430,11 +430,12 @@ namespace mytrem
                 feelS = smC * feelS + (1 - smC) * k.feel;
                 grooveS = smC * grooveS + (1 - smC) * k.groove;
                 accS = smC * accS + (1 - smC) * k.accentDb;
+                depthModS = smC * depthModS + (1 - smC) * k.depthMod;   // DEPTH MOD も 20 ms でなめらかに（ブロックごとの段でジジッと鳴っていた）
 
                 // 深さ: DEPTH MOD が + なら「無音のとき浅く、鳴ると DEPTH まで」、− なら「鳴ると浅く」
                 float d = depthS;
-                if (k.depthMod > 0) d *= 1.0f - k.depthMod * (1.0f - amtD);
-                else if (k.depthMod < 0) d *= 1.0f + k.depthMod * amtD;
+                if (depthModS > 0) d *= 1.0f - depthModS * (1.0f - amtD);
+                else if (depthModS < 0) d *= 1.0f + depthModS * amtD;
                 d *= k.duck;
 
                 const bool modNow = std::abs (k.rateModOct * amt) > 1e-3f;
@@ -546,7 +547,7 @@ namespace mytrem
         int declickLeft = 0, declickLen = 480;
         float dcOffset[2] { 0, 0 };
         void armDeclick() { declickArm = true; }   // 次のサンプルで「今の利得との差」を覚え、10 ms でまっすぐ 0 に
-        float depthS = 1, widthS = 0, feelS = 0, grooveS = 0, accS = 0, inS = -1, outS = -1, lkMix = 0;
+        float depthS = 1, widthS = 0, feelS = 0, grooveS = 0, accS = 0, depthModS = 0, inS = -1, outS = -1, lkMix = 0;
         bool first = true;
         int lastShape = -1, lastRhythm = -1, lastMode = -1;
         float lastSmooth = -1;

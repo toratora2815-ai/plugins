@@ -547,7 +547,7 @@ namespace echo
                 outMod[c].prepare ((int) (fs * 0.05));
             }
             dryDelay.clear();
-            configured = false;
+            configured = false; smInit = false;
             reset();
         }
         void reset()
@@ -559,6 +559,7 @@ namespace echo
             }
             mod.reset(); ppDiff.reset(); outMod[0].reset(); outMod[1].reset();
             rhythmSm = TimeState();
+            snapSmooth();
         }
 
         void set (const Params& p)
@@ -610,12 +611,14 @@ namespace echo
             configured = true;
             ppDiffInLoop = p.mode == 2 && prof->ppLoopDiff != 0 && outDiff[0].on;
             outLat = prof->modOut ? std::ceil (0.004 * fs) : 0.0;   // ±0.4 ms の揺れが入る余裕
-            inGain = std::pow (10.0f, p.inputDb / 20.0f);
-            outGain = std::pow (10.0f, p.outputDb / 20.0f);
+            // 音量（INPUT / OUTPUT / MIX）は目標だけ決め、process で 1 サンプルずつなめらかに追う（ブロックごとの段でジジッと鳴らないように）
+            inGainT = std::pow (10.0f, p.inputDb / 20.0f);
+            outGainT = std::pow (10.0f, p.outputDb / 20.0f);
             const float m = std::max (0.0f, std::min (1.0f, p.mix));
-            dryG = std::cos (m * (float) kPi * 0.5f); wetG = std::sin (m * (float) kPi * 0.5f);
-            if (m <= 0.0f) wetG = 0.0f;
-            if (m >= 1.0f) dryG = 0.0f;
+            dryGT = std::cos (m * (float) kPi * 0.5f); wetGT = std::sin (m * (float) kPi * 0.5f);
+            if (m <= 0.0f) wetGT = 0.0f;
+            if (m >= 1.0f) dryGT = 0.0f;
+            if (! smInit) { snapSmooth(); smInit = true; }
             // Rhythm の音量（くり返しの数と減り方から。全体の大きさがだいたい同じになるように）
             const int n = std::max (1, std::min (16, p.repeats));
             double s2 = 0;
@@ -644,7 +647,6 @@ namespace echo
             const double minT = prof->minMs;
             const double t1 = std::max (minT, q.prime ? primeMs (q.time1Ms) : q.time1Ms) * 0.001 * fs;
             const double t2 = std::max (minT, q.prime ? primeMs (q.time2Ms) : q.time2Ms) * 0.001 * fs;
-            const double feel = q.feelMs * 0.001 * fs;
             const double ms = 0.001 * fs;
             const Profile& P = *prof;
             const float fb = std::max (0.0f, std::min (1.25f, q.feedback));
@@ -652,9 +654,16 @@ namespace echo
             // 時間はなめらかに追う（テープのように音程が動く。参考を測って時定数 0.504 s の指数、全スタイル同じ）
             const double aT = 1.0 - std::exp (-1.0 / (0.504 * fs));
             const float xStep = (float) (1.0 / (0.02 * fs));
+            // つまみのなめらかさ: 音量は 20 ms。FEEL・GROOVE（エコーを読む位置）は TIME と同じ 0.504 s の指数で追う
+            // （位置が一気に跳ぶとプチッと鳴る。なめらかに動かすと、テープのように音程が少し動く）
+            const float aG = 1.0f - std::exp (-1.0f / (0.02f * (float) fs));
+            const double aF = aT;
 
             for (int i = 0; i < n; ++i)
             {
+                follow (inGain, inGainT, aG); follow (outGain, outGainT, aG); follow (dryG, dryGT, aG); follow (wetG, wetGT, aG);
+                follow (feelS, q.feelMs, aF); follow (grooveS, (double) q.groove, aF);
+                const double feel = feelS * ms;
                 const float inL = L[i] * inGain, inR = R[i] * inGain;
                 double mL, mR;
                 mod.tick (P, fs, q.wobble, mL, mR);
@@ -673,7 +682,7 @@ namespace echo
                         // 揺れは「B から A へ戻る所」と「出口のタップ」だけ（参考: 2 回目は 1 回目と同じ深さ、3 回目で T 離れた 2 つが重なる）
                         const float aEnd = readT (ts, [&] (double T) { return A[c].read (clampD (T - lat, maxD)); });
                         const float bEnd = readT (ts, [&] (double T) { return B[c].read (clampD (T - lat + md, maxD)); });
-                        const float tapA = readT (ts, [&] (double T) { return A[c].read (clampD (T - lat + md + oOdd + q.groove * T - outLat, maxD)); });
+                        const float tapA = readT (ts, [&] (double T) { return A[c].read (clampD (T - lat + md + oOdd + grooveS * T - outLat, maxD)); });
                         const float tapB = readT (ts, [&] (double T) { return B[c].read (clampD (T - lat + md + oEven - outLat, maxD)); });
                         const float in = c == 0 ? inL : inR;
                         A[c].write (pa[c].process (in + fb * bEnd));
@@ -752,6 +761,8 @@ namespace echo
 
     private:
         static inline double clampD (double d, double maxD) { return std::max (1.0, std::min (d, maxD)); }
+        template <class T> static inline void follow (T& v, T target, T a) { const T nv = v + (target - v) * a; v = (nv == v || std::abs (target - nv) < (T) 1.0e-7) ? target : nv; }
+        void snapSmooth() { inGain = inGainT; outGain = outGainT; dryG = dryGT; wetG = wetGT; feelS = q.feelMs; grooveS = q.groove; }
         double fs = 48000;
         Params q;
         const Profile* prof = nullptr;
@@ -786,6 +797,9 @@ namespace echo
             return t.xf > 0 ? v + t.xf * (f (t.old) - v) : v;
         }
         float inGain = 1, outGain = 1, dryG = 0.7f, wetG = 0.7f, duck = 1.0f;
+        float inGainT = 1, outGainT = 1, dryGT = 0.7f, wetGT = 0.7f;   // つまみの目標（inGain などがここへなめらかに追う）
+        double feelS = 0, grooveS = 0;                                  // なめらかにした FEEL（ms）・GROOVE
+        bool smInit = false;
         float rg[16] {}; int nRep = 8;
         std::vector<float> dryDelay;
     };

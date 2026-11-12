@@ -341,6 +341,8 @@ public:
         pre.init ((int) (0.55f * sr));
         echo.init ((int) (1.6f * sr));
         (void) sc;
+        boostA = 1.0f - std::exp (-1.0f / (0.02f * sr));
+        boostInit = false;
         reset();
     }
 
@@ -354,6 +356,7 @@ public:
         bloomLine.clear(); pre.clear(); echo.clear();
         echoLp.reset(); boostLp.reset(); boostLp2.reset();
         for (auto& b : boostLine) b.clear();
+        boostS = boostGain; boostRun = boostGain > 0;
     }
 
     // 調整用の定数（テストプログラムから変えて合わせ込む）
@@ -413,6 +416,7 @@ public:
         echoLp.setLP (p.echoRollHz, sr);
         // LOW BOOST：出だしに低音のふくらみを足す。WEIGHT はふくらみが続く長さ（Tight 約 50 ms → Heavy 約 250 ms）
         boostGain = p.lowBoostDb <= -99.0f ? 0.0f : std::pow (10.0f, p.lowBoostDb / 20.0f) * tune.boostGain;
+        if (! boostInit) { boostS = boostGain; boostRun = boostGain > 0; boostInit = true; }   // 最初の 1 回はなめらかにせず、その値から
         boostLp.lp (tune.boostHz, 0.7071, sr);
         boostLp2.lp (tune.boostHz, 0.7071, sr);
         {
@@ -443,9 +447,12 @@ public:
         echo.push (in);
         if (echoGain > 0) in += echoGain * echoLp.process (echo.frac (echoSamples));
 
+        // LOW BOOST の量は 20 ms でなめらかに追う（ブロックごとの段でジジッと鳴っていた）。0 へ下がりきるまでは処理を続ける
+        { const float nv = boostS + (boostGain - boostS) * boostA; boostS = (nv == boostS || std::abs (boostGain - nv) < 1.0e-7f) ? boostGain : nv; }
         float boostOut = 0;
-        if (boostGain > 0)
+        if (boostGain > 0 || boostS > 0)
         {
+            if (! boostRun) { boostLp.reset(); boostLp2.reset(); for (auto& b : boostLine) b.clear(); boostRun = true; }   // 止めていた間の古い音を残さない
             const float bIn = boostLp2.process (boostLp.process (in));
             float v[8];
             for (int i = 0; i < 8; ++i) v[i] = boostLine[i].at (boostLen[i] - 1);
@@ -457,6 +464,7 @@ public:
             const float nrm = 0.35355339f;
             for (int i = 0; i < 8; ++i) boostLine[i].push (v[i] * nrm * boostG[i] + (i & 1 ? -bIn : bIn));
         }
+        else boostRun = false;
         for (auto& d : inDiff) in = d.process (in);
         bloomLine.push (in);
 
@@ -506,7 +514,7 @@ public:
         }
 
         float o = (out * 0.25f + tune.earlyGain * early) * outGain;
-        o += boostGain * boostOut;
+        o += boostS * boostOut;
         return o;
     }
 
@@ -534,6 +542,7 @@ private:
     int tapPos[kTaps] {}; float tapGain[kTaps] {}, tapJitter[kTaps] {}, tapSign[kTaps] {};
     float preSamples = 0, echoSamples = 1, echoGain = 0, modSamples = 0, modInc = 0, undAmt = 0, undInc = 0, outGain = 1;
     float boostGain = 0, inGain = 1;
+    float boostS = 0, boostA = 0.001f; bool boostRun = false, boostInit = false;   // なめらかにした LOW BOOST の量
     Delay boostLine[8]; int boostLen[8] {}; float boostG[8] {};
     OnePole echoLp; Biquad boostLp, boostLp2;
 };
@@ -566,6 +575,7 @@ public:
         xf[0].init ((int) (0.11f * sr)); xf[1].init ((int) (0.11f * sr));
         erMod[0].init ((int) (0.01f * sr)); erMod[1].init ((int) (0.01f * sr));
         tmpL.assign ((size_t) maxBlock, 0); tmpR.assign ((size_t) maxBlock, 0);
+        smInit = false;
         reset();
     }
     void reset()
@@ -583,7 +593,9 @@ public:
         TailParams a = p; a.seed = 0; tail[0].setParams (a);
         a.seed = 1; tail[1].setParams (a);
         tp = p;
-        for (auto& r : roll) r.set (p.rolloffHz, p.rolloffSlope, sr);
+        // ROLL-OFF の周波数は目標だけ決め、process で 16 サンプルごとになめらかに追う（傾きの切り替えはそのまま）
+        rollLogT = std::log (std::max (20.0f, p.rolloffHz)); rollHzT = p.rolloffHz;
+        if (! smInit || p.rolloffSlope != rollSlope) { rollLog = rollLogT; rollSlope = p.rolloffSlope; for (auto& r : roll) r.set (rollHzT, rollSlope, sr); }   // 止まっている所は元の値ちょうど
         for (auto& c : lowCut) c.hp (p.lowCutHz, 0.7071, sr);
         xfGain = std::pow (10.0f, p.xfeedDb / 20.0f);
         xfSamples = std::clamp (p.xfeedMs * 0.001f * sr, 0.0f, 0.105f * sr);
@@ -592,7 +604,7 @@ public:
     void setMix (const MixParams& m)
     {
         mp = m;
-        erDepth = std::pow (std::clamp (m.erModDepth, 0.0f, 1.0f), 1.5f) * 0.0004f * sr;
+        erDepthT = std::pow (std::clamp (m.erModDepth, 0.0f, 1.0f), 1.5f) * 0.0004f * sr;
         erInc = 2.0f * (float) kPi * std::max (0.05f, m.erModRate) / sr;
         for (int c = 0; c < 2; ++c)
         {
@@ -616,12 +628,29 @@ public:
     // io: 入力（上書きで出力）、erL/erR: 反射の畳み込み結果
     void process (float* L, float* R, const float* erL, const float* erR, int n, float* erMono = nullptr, float* tailMono = nullptr)
     {
-        const float reflG = mixLaw (1.0f - mp.reflRev) * dbOrOff (mp.reflTrimDb);
-        const float revG = mixLaw (mp.reflRev) * dbOrOff (mp.revTrimDb);
-        const float wet = mixLaw (mp.dryWet) * std::pow (10.0f, (mp.masterDb + 0.8f) / 20.0f);   // +0.8 dB: 本物との音量合わせ
-        const float dry = mixLaw (1.0f - mp.dryWet);
+        // 混ぜる量・TRIM・OUTPUT・幅は 20 ms、反射の揺らぎの深さは 50 ms で、1 サンプルずつなめらかに追う（ブロックごとの段でジジッと鳴っていた）
+        const float reflGT = mixLaw (1.0f - mp.reflRev) * dbOrOff (mp.reflTrimDb);
+        const float revGT = mixLaw (mp.reflRev) * dbOrOff (mp.revTrimDb);
+        const float wetT = mixLaw (mp.dryWet) * std::pow (10.0f, (mp.masterDb + 0.8f) / 20.0f);   // +0.8 dB: 本物との音量合わせ
+        const float dryT = mixLaw (1.0f - mp.dryWet);
+        if (! smInit)
+        {
+            reflG = reflGT; revG = revGT; wet = wetT; dry = dryT; revW = mp.revWidth; reflW = mp.reflWidth; erDepth = erDepthT;
+            rollLog = rollLogT; rollSlope = tp.rolloffSlope; for (auto& r : roll) r.set (rollHzT, rollSlope, sr);
+            smInit = true;
+        }
+        const float a = 1.0f - std::exp (-1.0f / (0.02f * sr)), aD = 1.0f - std::exp (-1.0f / (0.05f * sr));
+        const float aR = 1.0f - std::exp (-16.0f / (0.03f * sr));
+        auto follow = [] (float& v, float t, float k) { const float nv = v + (t - v) * k; v = (nv == v || std::abs (t - nv) < 1.0e-7f) ? t : nv; };   // 丸めでもう進まないなら目標ちょうど
         for (int i = 0; i < n; ++i)
         {
+            follow (reflG, reflGT, a); follow (revG, revGT, a); follow (wet, wetT, a); follow (dry, dryT, a);
+            follow (revW, mp.revWidth, a); follow (reflW, mp.reflWidth, a); follow (erDepth, erDepthT, aD);
+            if ((i & 15) == 0 && rollLog != rollLogT)
+            {
+                { const float nv = rollLog + (rollLogT - rollLog) * aR; rollLog = (nv == rollLog || std::abs (rollLogT - nv) < 1.0e-4f) ? rollLogT : nv; }
+                for (auto& r : roll) r.set (rollLog == rollLogT ? rollHzT : std::exp (rollLog), rollSlope, sr);   // 着いたら元の値ちょうどに
+            }
             const float inL = L[i], inR = R[i];
             xf[0].push (inL); xf[1].push (inR);
             float fromL = xfSamples < 1 ? inL : xf[0].frac (xfSamples);
@@ -631,7 +660,7 @@ public:
             float rl = revEq[0].process (lowCut[0].process (roll[0].process (tl)));
             float rr = revEq[1].process (lowCut[1].process (roll[1].process (tr)));
             // テールの幅
-            { float mm = 0.5f * (rl + rr), ss = 0.5f * (rl - rr) * mp.revWidth; rl = mm + ss; rr = mm - ss; }
+            { float mm = 0.5f * (rl + rr), ss = 0.5f * (rl - rr) * revW; rl = mm + ss; rr = mm - ss; }
             float el = erL[i], er = erR[i];
             {   // 揺らぎ用の 1.5 ms の遅れ（反射の表はこの分だけ前倒しにしてある）
                 erMod[0].push (el); erMod[1].push (er);
@@ -641,7 +670,7 @@ public:
                 erPhase += erInc; if (erPhase > 2 * (float) kPi) erPhase -= 2 * (float) kPi;
                 el = erEq[0].process (el); er = erEq[1].process (er);
             }
-            { float mm = 0.5f * (el + er), ss = 0.5f * (el - er) * mp.reflWidth; el = mm + ss; er = mm - ss; }
+            { float mm = 0.5f * (el + er), ss = 0.5f * (el - er) * reflW; el = mm + ss; er = mm - ss; }
             float wl = reflG * el + revG * rl, wr = reflG * er + revG * rr;
             if (erMono != nullptr) erMono[i] = 0.5f * wet * reflG * (el + er);     // LIVE 表示用（EQ の前）
             if (tailMono != nullptr) tailMono[i] = 0.5f * wet * revG * (rl + rr);
@@ -663,7 +692,9 @@ private:
     TailParams tp; MixParams mp;
     Delay xf[2]; OnePole xfLp[2]; float xfGain = 0.7f, xfSamples = 0;
     Rolloff roll[2]; Biquad lowCut[2];
-    Delay erMod[2]; float erDepth = 0, erInc = 0, erPhase = 0;
+    Delay erMod[2]; float erDepth = 0, erDepthT = 0, erInc = 0, erPhase = 0;
+    // なめらかにした今の値（目標は mp・tp から）
+    float reflG = 0, revG = 0, wet = 0, dry = 1, revW = 1, reflW = 1, rollLog = 8.7f, rollLogT = 8.7f, rollHzT = 6000.0f; int rollSlope = 1; bool smInit = false;
     GraphicEQ revEq[2], erEq[2]; const float* lastRev = nullptr; const float* lastEr = nullptr;
     Biquad eq[2][4]; Rolloff eqRoll[2];
     std::vector<float> tmpL, tmpR;

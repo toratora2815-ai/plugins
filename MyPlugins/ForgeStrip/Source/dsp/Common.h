@@ -265,5 +265,16 @@ struct Delay
         if (++pos >= len) pos = 0;
         return y;
     }
+    // 小数の遅れ（直線補間）。遅れをなめらかに動かすとき用（d は 0 〜 len - 2）
+    inline float processFrac (float x, float d)
+    {
+        buf[(size_t) pos] = x;
+        const int di = (int) d; const float f = d - (float) di;
+        int r0 = pos - di; if (r0 < 0) r0 += len;
+        int r1 = r0 - 1; if (r1 < 0) r1 += len;
+        const float y = buf[(size_t) r0] + f * (buf[(size_t) r1] - buf[(size_t) r0]);
+        if (++pos >= len) pos = 0;
+        return y;
+    }
 };
 } // namespace fs

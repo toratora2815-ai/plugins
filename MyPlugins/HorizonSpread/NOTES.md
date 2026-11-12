@@ -12,3 +12,4 @@ SHIFT CLASSIC の L/R 選択、DYNAMIC（DYNAMICS タイル）。量のつまみ
 v1.3.0: Plugin Link で Fader Pilot がボーカルを上げている間 SPREAD を下げる（ID linkDuck、+6 dB・100% で半分。プリセットで変わらない）
 v1.3.1: FROM（相手選び）、Plugin Link v2
 - 1.4.0（2026-11-09）: AUTO GAIN の表示名を GAIN MATCH にして、ボタンをプリセット欄の左端に移した（ID autoGain と DSP はそのまま）
+- 1.4.1（2026-11-12）: GAIN MATCH（autoGain）が ON の間は OUTPUT で音量を変えない（ほかのプラグインの GAIN MATCH と同じ。健康診断の gainmatch で ON でも −1.8 dB 残っていた）。OFF の時の音は前と同じ

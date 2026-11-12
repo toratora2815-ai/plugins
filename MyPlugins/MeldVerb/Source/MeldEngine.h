@@ -180,11 +180,12 @@ public:
             }
             if (ord & 1) { if (high) sec[n++].hp1 (f, sr); else sec[n++].lp1 (f, sr); }
         };
+        // シェルフ・ベルは 0 dB でも区間として残す（0 dB ではちょうど平ら）。量をなめらかに動かしても並びが変わらず、プチッとしない
         if (s.lowShape == 1) addPass (true, s.lowFreq, s.lowSlope);
-        else if (std::abs (s.lowGain) > 0.01f) sec[n++].lowShelf (s.lowFreq, shelfQ (s.lowSlope), 2.0 * s.lowGain, sr);
-        if (std::abs (s.bellGain) > 0.01f) sec[n++].peak (s.bellFreq, 2.0 * std::max (0.2f, s.bellQ), s.bellGain, sr);
+        else sec[n++].lowShelf (s.lowFreq, shelfQ (s.lowSlope), 2.0 * s.lowGain, sr);
+        sec[n++].peak (s.bellFreq, 2.0 * std::max (0.2f, s.bellQ), s.bellGain, sr);
         if (s.highShape == 1) addPass (false, s.highFreq, s.highSlope);
-        else if (std::abs (s.highGain) > 0.01f) sec[n++].highShelf (s.highFreq, shelfQ (s.highSlope), 2.0 * s.highGain, sr);
+        else sec[n++].highShelf (s.highFreq, shelfQ (s.highSlope), 2.0 * s.highGain, sr);
     }
     inline float process (float x) { for (int i = 0; i < n; ++i) x = sec[i].process (x); return x; }
     void reset() { for (auto& b : sec) b.reset(); }
@@ -274,6 +275,8 @@ public:
     //  ・DIFFUSION 0 で 1 本ずつの鋭い音、100 でにじんだ音
     //  ・ANGLE は時間とともに大きくなるか小さくなるか（0 = 前が大きく後ろほど小さい／40 = 平ら／100 = 後ろほど大きい）と、
     //    同じ側と反対側の割合
+    // つまみの変化（2026-11-12）: 目標へ 4 サンプルごとに 30 ms で近づける。にじみ（オールパス）と小さな響きの長さは
+    // 小数のまま少しずつ動かし（一気に変えるとプチッと鳴る）、跳ね返りの並びは前の並びから 30 ms で混ぜ替える（途中で次が来たら、終わってから）
     struct Tune
     {
         float firstMs = 0.4f, firstDry = 3.0f, burstMs = 0.7f, burstPow = 1.0f, apG = 0.6f, apPow = 0.7f;
@@ -286,8 +289,12 @@ public:
     {
         sr = (float) sampleRate;
         for (auto& d : in) d.init ((int) (0.3f * sr));
-        for (auto& c : diff) for (auto& a : c) a.init ((int) (0.012f * 8.2f * sr));
+        for (auto& c : diff) for (auto& a : c) a.init ((int) (0.012f * 8.2f * sr) + 4);
         for (auto& d : rLine) d.init ((int) (0.014f * 3.0f * sr) + 8);
+        aSub = 1.0f - std::exp (-(float) kSub / (0.03f * sr));
+        aMix = 1.0f - std::exp (-1.0f / (0.01f * sr));
+        aLen = 1.0f - std::exp (-1.0f / (0.01f * sr));
+        fadeInc = 1.0f / (0.03f * sr);
         reset();
         built = false;
     }
@@ -299,57 +306,45 @@ public:
         for (auto& h : outHp) h.reset();
         for (auto& h : outSh) h.reset();
         for (auto& d : rLine) d.clear();
-        fade = 1.0f;
+        fade = 1.0f; tapsDirty = false; apMix = apOn ? 1.0f : 0.0f;
     }
-    void setParams (const EarlyParams& p)
+    // now = true: なめらかにせず、すぐその形にする（最初・開き直したとき・画面の表示用）
+    void setParams (const EarlyParams& p, bool now = false)
     {
-        if (built && p == params) return;
-        params = p;
-        const bool first = ! built;
-        old = cur; build (cur, p);
-        fade = first ? 1.0f : 0.0f;
-        fadeInc = 1.0f / (0.03f * sr);
-        built = true;
-        const float d = std::clamp (p.diffusion / 100.0f, 0.0f, 1.0f);
-        static const float apMs[5] = { 0.31f, 0.67f, 1.13f, 1.71f, 2.43f };
-        const float sc = tune.burstMs * std::pow (std::clamp (p.size, 4.0f, 40.0f) / 4.9f, tune.burstPow);
-        for (int c = 0; c < 2; ++c)
-            for (int i = 0; i < 5; ++i)
-                diff[c][i].set (std::max (1, (int) (apMs[i] * (c ? 1.09f : 1.0f) * sc * 0.001f * sr)), tune.apG * std::pow (d, tune.apPow));
-        // 反対側の高域を少しだけ下げる（頭の陰。測定では最大 -3 dB ほどのなだらかなシェルフ）
-        for (auto& l : crossLp) l.highShelf (std::min (p.lowpassHz * 1.5f, 0.45f * sr), 0.6, tune.shadowDb, sr);
-        for (auto& h : outHp) h.hp1 (tune.hpHz, sr);
-        { const float a = std::clamp (p.angle / 100.0f, 0.0f, 1.0f); const float db = 1.15f * (-0.5f - 4.0f * std::pow (a, 1.5f));
-          for (auto& h : outSh) h.highShelf (4000.0, 0.6, db, sr); }   // 角度が大きい（反対側から）ほど暗い
-        apOn = d > 0.001f;
-        // 残りの小さな響き（4 本の FDN）
-        static const float rMs[4] = { 7.3f, 9.1f, 11.7f, 13.9f };
-        const float szk = std::pow (std::clamp (p.size, 4.0f, 40.0f) / 4.9f, tune.tailPow);
-        const float rt = tune.tailRt * szk;
-        for (int i = 0; i < 4; ++i)
-        {
-            rLen[i] = std::max (8, (int) (rMs[i] * szk * 0.001f * sr));
-            rG[i] = std::pow (10.0f, -3.0f * (float) rLen[i] / sr / rt);
-        }
-        rGain = std::pow (10.0f, tune.tailDb / 20.0f) * std::sqrt (0.11f / rt) * 2.0f;
+        tgt = p;
+        if (! built || now) { cur = p; apply (true); built = true; }
     }
+    const EarlyParams& params() const { return cur; }
+
     inline void process (float inL, float inR, float& outL, float& outR)
     {
+        if (--subCount <= 0) { subCount = kSub; if (step()) apply (false); }
+        if (tapsDirty && fade >= 1.0f) { old = taps; build (taps, cur); fade = 0.0f; tapsDirty = false; }
         in[0].push (inL); in[1].push (inR);
         float own[2], cross[2];
-        tapSum (cur, own, cross);
+        tapSum (taps, own, cross);
         if (fade < 1.0f)
         {
             float o2[2], c2[2]; tapSum (old, o2, c2);
-            const float a = fade, b = 1.0f - fade;
+            const float a = fade * fade * (3.0f - 2.0f * fade), b = 1.0f - a;
             for (int c = 0; c < 2; ++c) { own[c] = a * own[c] + b * o2[c]; cross[c] = a * cross[c] + b * c2[c]; }
             fade = std::min (1.0f, fade + fadeInc);
         }
         float l = own[0] + crossLp[1].process (cross[1]);
         float r = own[1] + crossLp[0].process (cross[0]);
-        if (apOn) { for (auto& a : diff[0]) l = a.process (l); for (auto& a : diff[1]) r = a.process (r); }
+        // にじみ: いつも通しておき、DIFFUSION 0 ⇄ 0 より上の切り替えだけ 10 ms で混ぜる（0 のときは素通し。にじみが 0 でも遅れはあるため）
+        { const float t = apOn ? 1.0f : 0.0f, nv = apMix + (t - apMix) * aMix; apMix = (nv == apMix || std::abs (t - nv) < 1.0e-6f) ? t : nv; }
+        {
+            float dl = l, dr = r;
+            for (int i = 0; i < 5; ++i) { dl = diff[0][i].process (dl); dr = diff[1][i].process (dr); }
+            l += apMix * (dl - l); r += apMix * (dr - r);
+        }
         float v[4];
-        for (int i = 0; i < 4; ++i) v[i] = rLine[i].at (rLen[i] - 1) * rG[i];
+        for (int i = 0; i < 4; ++i)
+        {
+            if (rLenF[i] != rLenT[i]) { const float nv = rLenF[i] + (rLenT[i] - rLenF[i]) * aLen; rLenF[i] = (nv == rLenF[i] || std::abs (rLenT[i] - nv) < 1.0e-3f) ? rLenT[i] : nv; }
+            v[i] = rLenF[i] == rLenT[i] ? rLine[i].at ((int) rLenF[i] - 1) * rG[i] : rLine[i].frac (rLenF[i] - 1.0f) * rG[i];
+        }
         const float tl = v[0] + v[1], tr = v[2] - v[3];
         const float h0 = v[0] + v[1], h1 = v[0] - v[1], h2 = v[2] + v[3], h3 = v[2] - v[3];
         rLine[0].push (0.5f * (h0 + h2) + l); rLine[1].push (0.5f * (h1 + h3) - l);
@@ -360,7 +355,7 @@ public:
     struct View { int n = 0; float ms[24] {}; float db[24] {}; float side[24] {}; };
     View view() const
     {
-        View v; const auto& s = cur; float mx = 1e-9f;
+        View v; const auto& s = taps; float mx = 1e-9f;
         for (int k = 0; k < s.n; ++k) mx = std::max (mx, std::abs (s.own[k]) + std::abs (s.cross[k]));
         for (int k = 0; k < s.n && v.n < 24; ++k)
         {
@@ -374,7 +369,79 @@ public:
 
 private:
     static constexpr int K = 12;
+    static constexpr int kSub = 4;
     struct TapSet { int n = 0; int pos[K] {}, xpos[K] {}; float own[K] {}, cross[K] {}; };
+
+    // 長さを小数のまま動かせるオールパス。目標は前と同じ整数の長さで、そこへ 10 ms でなめらかに近づく
+    // （止まっていれば整数ちょうど = 前とまったく同じ音。動いている間だけ直線補間で読む）
+    struct FracAllpass
+    {
+        Delay d; float len = 1, lenT = 1, k = 0.002f, g = 0.5f;
+        void init (int maxLen) { d.init (maxLen + 4); }
+        inline float process (float x)
+        {
+            if (len != lenT) { const float nv = len + (lenT - len) * k; len = (nv == len || std::abs (lenT - nv) < 1.0e-3f) ? lenT : nv; }
+            const int i = (int) len; const float f = len - (float) i;
+            const float v = d.at (i - 1) + f * (d.at (i) - d.at (i - 1));
+            const float u = x + g * v;
+            d.push (u);
+            return v - g * u;
+        }
+        void clear() { d.clear(); }
+    };
+
+    // 目標へ 1 歩近づける（動いたら true）
+    bool step()
+    {
+        bool moved = false;
+        auto lin = [&] (float& v, float t, float eps) { if (v == t) return; const float nv = v + (t - v) * aSub; v = (nv == v || std::abs (t - nv) < eps) ? t : nv; moved = true; };
+        lin (cur.timeMs, tgt.timeMs, 1.0e-3f); lin (cur.size, tgt.size, 1.0e-4f); lin (cur.diffusion, tgt.diffusion, 1.0e-3f); lin (cur.angle, tgt.angle, 1.0e-3f);
+        if (cur.lowpassHz != tgt.lowpassHz)
+        {
+            const float lv = std::log (std::max (10.0f, cur.lowpassHz)), lt = std::log (std::max (10.0f, tgt.lowpassHz));
+            const float nl = lv + (lt - lv) * aSub; cur.lowpassHz = (nl == lv || std::abs (lt - nl) < 1.0e-4f) ? tgt.lowpassHz : std::exp (nl);
+            moved = true;
+        }
+        return moved;
+    }
+
+    // cur の値をにじみ・小さな響き・フィルターに入れる。跳ね返りの並びは now ならすぐ、そうでなければ混ぜ替えの予約
+    void apply (bool now)
+    {
+        const EarlyParams& p = cur;
+        const float d = std::clamp (p.diffusion / 100.0f, 0.0f, 1.0f);
+        static const float apMs[5] = { 0.31f, 0.67f, 1.13f, 1.71f, 2.43f };
+        const float sc = tune.burstMs * std::pow (std::clamp (p.size, 4.0f, 40.0f) / 4.9f, tune.burstPow);
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < 5; ++i)
+            {
+                auto& a = diff[c][i];
+                a.lenT = (float) std::clamp (std::max (1, (int) (apMs[i] * (c ? 1.09f : 1.0f) * sc * 0.001f * sr)), 1, (int) a.d.buf.size() - 6);
+                a.k = 1.0f - std::exp (-1.0f / (0.01f * sr));
+                if (now) a.len = a.lenT;
+                a.g = tune.apG * std::pow (d, tune.apPow);
+            }
+        // 反対側の高域を少しだけ下げる（頭の陰。測定では最大 -3 dB ほどのなだらかなシェルフ）
+        for (auto& l : crossLp) l.highShelf (std::min (p.lowpassHz * 1.5f, 0.45f * sr), 0.6, tune.shadowDb, sr);
+        for (auto& h : outHp) h.hp1 (tune.hpHz, sr);
+        { const float a = std::clamp (p.angle / 100.0f, 0.0f, 1.0f); const float db = 1.15f * (-0.5f - 4.0f * std::pow (a, 1.5f));
+          for (auto& h : outSh) h.highShelf (4000.0, 0.6, db, sr); }   // 角度が大きい（反対側から）ほど暗い
+        apOn = d > 0.001f;
+        // 残りの小さな響き（4 本の FDN）
+        static const float rMs[4] = { 7.3f, 9.1f, 11.7f, 13.9f };
+        const float szk = std::pow (std::clamp (p.size, 4.0f, 40.0f) / 4.9f, tune.tailPow);
+        const float rt = tune.tailRt * szk;
+        for (int i = 0; i < 4; ++i)
+        {
+            rLenT[i] = (float) std::clamp (std::max (8, (int) (rMs[i] * szk * 0.001f * sr)), 8, (int) rLine[i].buf.size() - 12);
+            if (now) rLenF[i] = rLenT[i];
+            rG[i] = std::pow (10.0f, -3.0f * rLenT[i] / sr / rt);
+        }
+        rGain = std::pow (10.0f, tune.tailDb / 20.0f) * std::sqrt (0.11f / rt) * 2.0f;
+        // 跳ね返りの並び（TIME・ANGLE・DIFFUSION で変わる）
+        if (now) { build (taps, p); old = taps; fade = 1.0f; tapsDirty = false; apMix = apOn ? 1.0f : 0.0f; tapsBuiltFor = p; }
+        else if (p.timeMs != tapsBuiltFor.timeMs || p.angle != tapsBuiltFor.angle || p.diffusion != tapsBuiltFor.diffusion) { tapsDirty = true; }
+    }
 
     inline void tapSum (const TapSet& s, float* own, float* cross) const
     {
@@ -388,6 +455,7 @@ private:
 
     void build (TapSet& s, const EarlyParams& p)
     {
+        tapsBuiltFor = p;
         // 並び（0..1）。1 本目は 0（いちばん最初に強い跳ね返り）
         static const float xs[K] = { 0.0f, 0.10f, 0.17f, 0.33f, 0.35f, 0.47f, 0.53f, 0.64f, 0.71f, 0.80f, 0.89f, 0.97f };
         static const float sg[K] = { 1, -1, 1, 1, -1, 1, -1, -1, 1, -1, 1, -1 };
@@ -431,14 +499,15 @@ private:
     }
 
     float sr = 48000;
-    EarlyParams params;
-    TapSet cur, old;
-    bool built = false, apOn = true;
-    float fade = 1, fadeInc = 0.001f;
+    EarlyParams tgt, cur, tapsBuiltFor;
+    TapSet taps, old;
+    bool built = false, apOn = true, tapsDirty = false;
+    float fade = 1, fadeInc = 0.001f, aSub = 0.01f, aMix = 0.002f, apMix = 1.0f, aLen = 0.002f;
+    int subCount = 0;
     Delay in[2];
-    Allpass diff[2][5];
+    FracAllpass diff[2][5];
     Biquad crossLp[2], outHp[2], outSh[2];
-    Delay rLine[4]; int rLen[4] { 8, 8, 8, 8 }; float rG[4] {}, rGain = 0;
+    Delay rLine[4]; float rLenF[4] { 8, 8, 8, 8 }, rLenT[4] { 8, 8, 8, 8 }; float rG[4] {}, rGain = 0;
 };
 
 //==============================================================================
@@ -534,6 +603,10 @@ public:
         for (int c = 0; c < 2; ++c) for (int i = 0; i < 4; ++i) { inDiff[c][i].init ((int) (difMs[i] * 3.0f * 0.001f * sr)); difLen[c][i] = difMs[i] * (c ? 1.09f : 1.0f); }
         for (int k = 0; k < kTaps; ++k) { tapJit[k] = r.uni(); tapSign[k] = r.next() > 0 ? 1.0f : -1.0f; }
         bloom[0].init ((int) (0.3f * sr)); bloom[1].init ((int) (0.3f * sr));
+        aStep = 1.0f - std::exp (-32.0f / (0.03f * sr));
+        aSmooth = 1.0f - std::exp (-1.0f / (0.02f * sr));
+        tFadeInc = 1.0f / (0.02f * sr);
+        applied = false; subCount = 0;
         reset();
         curLen = -1;
     }
@@ -546,9 +619,38 @@ public:
         for (auto& f : colLp) f.reset();
         for (auto& f : colSh) f.reset();
         inGain = 1;
+        modS = modSamples; incS = modInc; outGS = outGain; tFade = 1.0f; tPend = false;
     }
 
-    void setParams (const TankParams& p)
+    // つまみの目標（Engine から毎ブロック）。TIME・SIZE・LOWPASS などは process の中で 32 サンプルごとに 30 ms でなめらかに近づける
+    // （ブロックごとに一気に変えるとジジッと鳴っていた）。FREEZE・揺れの種類の切り替えはすぐ
+    // now = true: なめらかにせず、すぐその値にする（prepareToPlay・開き直したとき）
+    void setParams (const TankParams& p, bool now = false)
+    {
+        tgtP = p;
+        if (now && applied) { applied = false; tFade = 1.0f; tPend = false; }   // 跳ね返りの並びも、混ぜ替えずにすぐ
+        if (! applied) { curP = p; applyParams (curP); modS = modSamples; incS = modInc; outGS = outGain; applied = true; return; }
+        if (p.freeze != curP.freeze || p.modType != curP.modType) { curP.freeze = p.freeze; curP.modType = p.modType; applyParams (curP); }
+    }
+    const TankParams& params() const { return P; }
+
+private:
+    // 目標へ 1 歩（32 サンプルぶん）近づける。動いたら true
+    bool stepParams()
+    {
+        const float a = aStep;
+        bool moved = false;
+        auto lin = [&] (float& v, float t, float eps) { if (v == t) return; const float nv = v + (t - v) * a; v = (nv == v || std::abs (t - nv) < eps) ? t : nv; moved = true; };
+        auto lg = [&] (float& v, float t, float lo) { if (v == t) return; const float lv = std::log (std::max (lo, v)), lt = std::log (std::max (lo, t));
+                                                     const float nl = lv + (lt - lv) * a; v = (nl == lv || std::abs (lt - nl) < 1.0e-4f) ? t : std::exp (nl); moved = true; };
+        lg (curP.timeSec, tgtP.timeSec, 0.01f); lin (curP.size, tgtP.size, 1.0e-3f); lin (curP.diffusion, tgtP.diffusion, 1.0e-3f);
+        lin (curP.attackMs, tgtP.attackMs, 1.0e-3f); lg (curP.lowpassHz, tgtP.lowpassHz, 10.0f); lin (curP.damping, tgtP.damping, 1.0e-4f);
+        lin (curP.balance, tgtP.balance, 1.0e-5f); lg (curP.crossoverHz, tgtP.crossoverHz, 10.0f);
+        lg (curP.modRate, tgtP.modRate, 0.01f); lin (curP.modDepth, tgtP.modDepth, 1.0e-3f);
+        return moved;
+    }
+
+    void applyParams (const TankParams& p)
     {
         P = p;
         const float size = std::clamp (p.size, 4.0f, 40.0f);
@@ -588,18 +690,27 @@ public:
         const float d = std::clamp (p.diffusion / 100.0f, 0.0f, 1.0f);
         const float sc = std::pow (size / tune.sizeRef, 0.5f);
         for (int c = 0; c < 2; ++c) for (int i = 0; i < 4; ++i) inDiff[c][i].set ((int) (difLen[c][i] * sc * 0.001f * sr), tune.inDiffG * d);
-        // 立ち上がり（ATTACK）: 入力を少しずつずらしたタップで流し込む
+        // 立ち上がり（ATTACK）: 入力を少しずつずらしたタップで流し込む。
+        // タップの位置が変わったら、前の並びから 20 ms で混ぜ替える（混ぜ替えの途中で次が来たら、終わってから次へ）
         const float onset = tune.onsetMs + tune.onsetPerSize * size + tune.onsetPerAttack * std::clamp (p.attackMs, 0.0f, 250.0f);
+        Taps nt;
         double e = 0;
         for (int k = 0; k < kTaps; ++k)
         {
             const float x = k == 0 ? 0.0f : ((float) k + tapJit[k]) / (float) kTaps;
             const float span = std::clamp (p.attackMs, 0.0f, 250.0f) + tune.spanPerSize * size;
-            tapPos[k] = std::clamp ((int) ((onset + span * x) * 0.001f * sr), 0, (int) (0.29f * sr));
-            tapGain[k] = tapSign[k] * (tune.attackFloor + std::pow (x, tune.attackCurve));
-            e += tapGain[k] * tapGain[k];
+            nt.pos[k] = std::clamp ((int) ((onset + span * x) * 0.001f * sr), 0, (int) (0.29f * sr));
+            nt.gain[k] = tapSign[k] * (tune.attackFloor + std::pow (x, tune.attackCurve));
+            e += nt.gain[k] * nt.gain[k];
         }
-        for (auto& t : tapGain) t /= (float) std::sqrt (e);
+        for (auto& t : nt.gain) t /= (float) std::sqrt (e);
+        if (! applied) { tCur = nt; tFade = 1.0f; tPend = false; }
+        else if (! (nt == tCur))
+        {
+            if (tFade >= 1.0f) { tOld = tCur; tCur = nt; tFade = 0.0f; tPend = false; }
+            else { tNext = nt; tPend = true; }
+        }
+        else tPend = false;
         // 揺れ
         // 揺れの深さ（測定: 速さを上げると音程の揺れは速さの平方根くらいで増える）
         modSamples = std::clamp (p.modDepth / 100.0f, 0.0f, 1.0f) * tune.modMaxMs * 0.001f * sr / std::sqrt (std::clamp (p.modRate, 0.05f, 10.0f) / 0.48f);
@@ -617,8 +728,14 @@ public:
         for (auto& f : colSh) { if (std::abs (tune.shelfDb) > 0.01f) f.highShelf (tune.shelfHz, 0.6, tune.shelfDb, sr); else f.flat(); }
     }
 
+public:
     inline void process (float inL, float inR, float& outL, float& outR)
     {
+        if (--subCount <= 0) { subCount = 32; if (stepParams()) applyParams (curP); }
+        // 揺れの深さ・速さと音量は 1 サンプルずつ（深さが一気に変わると読む位置が跳んでプチッと鳴る）
+        modS += (modSamples - modS) * aSmooth; if (std::abs (modSamples - modS) < 1.0e-5f) modS = modSamples;
+        incS += (modInc - incS) * aSmooth; if (std::abs (modInc - incS) < 1.0e-9f) incS = modInc;
+        outGS += (outGain - outGS) * aSmooth; if (std::abs (outGain - outGS) < 1.0e-7f) outGS = outGain;
         inGain += ((P.freeze ? 0.0f : 1.0f) - inGain) * 0.001f;
         inL *= inGain; inR *= inGain;
         for (auto& a : inDiff[0]) inL = a.process (inL);
@@ -626,27 +743,39 @@ public:
         bloom[0].push (inL); bloom[1].push (inR);
         float feed[N] = {};
         float earlyL = 0, earlyR = 0, crossL = 0, crossR = 0;
-        for (int k = 0; k < kTaps; ++k)
+        auto addTaps = [&] (const Taps& t, float w)
         {
-            const float vl = bloom[0].at (tapPos[k]) * tapGain[k], vr = bloom[1].at (tapPos[k]) * tapGain[k];
-            const int i = k % N;
-            feed[i] += inSignL[i] * vl + inSignR[i] * vr;
-            earlyL += vl; earlyR += vr;
-            const float alt = (k & 1) ? 1.0f : -1.0f;   // 反対側は符号の並びを変えて、同じ側と似ないように
-            crossL += (tune.crossNeg > 0.5f ? -1.0f : alt) * vl; crossR += (tune.crossNeg > 0.5f ? -1.0f : alt) * vr;
+            for (int k = 0; k < kTaps; ++k)
+            {
+                const float gk = t.gain[k] * w;
+                const float vl = bloom[0].at (t.pos[k]) * gk, vr = bloom[1].at (t.pos[k]) * gk;
+                const int i = k % N;
+                feed[i] += inSignL[i] * vl + inSignR[i] * vr;
+                earlyL += vl; earlyR += vr;
+                const float alt = (k & 1) ? 1.0f : -1.0f;   // 反対側は符号の並びを変えて、同じ側と似ないように
+                crossL += (tune.crossNeg > 0.5f ? -1.0f : alt) * vl; crossR += (tune.crossNeg > 0.5f ? -1.0f : alt) * vr;
+            }
+        };
+        if (tFade < 1.0f)
+        {
+            const float w = tFade * tFade * (3.0f - 2.0f * tFade);
+            addTaps (tCur, w); addTaps (tOld, 1.0f - w);
+            tFade += tFadeInc;
+            if (tFade >= 1.0f) { tFade = 1.0f; if (tPend) { tOld = tCur; tCur = tNext; tFade = 0.0f; tPend = false; } }
         }
+        else addTaps (tCur, 1.0f);
         float y[N], u = 0, v = 0;
         const bool pitch = P.modType == 1;
         for (int i = 0; i < N; ++i)
         {
             len[i] += (lenT[i] - len[i]) * 0.0005f;
             float d = len[i];
-            if (modSamples > 0.0f)
+            if (modS > 0.0f || modSamples > 0.0f)
             {
                 float m;
-                if (pitch) { lfoPh[i] += modInc * lfoMul[i]; if (lfoPh[i] >= 1.0f) lfoPh[i] -= 1.0f; m = 0.5f + 0.5f * std::sin (2.0f * (float) kPi * lfoPh[i]); }
-                else m = 0.5f + 0.5f * rnd[i].next (modInc * lfoMul[i] * 2.0f);
-                d += modSamples * m;
+                if (pitch) { lfoPh[i] += incS * lfoMul[i]; if (lfoPh[i] >= 1.0f) lfoPh[i] -= 1.0f; m = 0.5f + 0.5f * std::sin (2.0f * (float) kPi * lfoPh[i]); }
+                else m = 0.5f + 0.5f * rnd[i].next (incS * lfoMul[i] * 2.0f);
+                d += modS * m;
             }
             d = std::max (2.0f, d);
             // オールパス補間（揺らしても高域が痩せない）
@@ -664,12 +793,22 @@ public:
                 for (int j = i; j < i + h; ++j) { float a = y[j], b = y[j + h]; y[j] = a + b; y[j + h] = a - b; }
         for (int i = 0; i < N; ++i) line[i].push (y[i] * 0.25f + feed[i]);
         u *= 0.25f; v *= 0.25f;
-        outL = colSh[0].process (colLp[0].process (colHp[0].process ((outA * u + outB * v + tune.sameSide * earlyL + tune.crossSide * crossR) * outGain)));
-        outR = colSh[1].process (colLp[1].process (colHp[1].process ((outA * u - outB * v + tune.sameSide * earlyR + tune.crossSide * crossL) * outGain)));
+        outL = colSh[0].process (colLp[0].process (colHp[0].process ((outA * u + outB * v + tune.sameSide * earlyL + tune.crossSide * crossR) * outGS)));
+        outR = colSh[1].process (colLp[1].process (colHp[1].process ((outA * u - outB * v + tune.sameSide * earlyR + tune.crossSide * crossL) * outGS)));
     }
 
 private:
     static constexpr int kTaps = 16;
+    struct Taps
+    {
+        int pos[kTaps] {}; float gain[kTaps] {};
+        bool operator== (const Taps& o) const
+        { for (int k = 0; k < kTaps; ++k) if (pos[k] != o.pos[k] || gain[k] != o.gain[k]) return false; return true; }
+    };
+    Taps tCur, tOld, tNext; float tFade = 1.0f, tFadeInc = 0.001f; bool tPend = false;
+    TankParams tgtP, curP; bool applied = false; int subCount = 0;
+    float aStep = 0.02f, aSmooth = 0.001f;                // 32 サンプルぶんの 30 ms・1 サンプルぶんの 20 ms
+    float modS = 0, incS = 0, outGS = 1;                  // なめらかにした揺れの深さ・速さ・音量
     int mode = 0;
     float sr = 48000;
     TankParams P;
@@ -680,7 +819,7 @@ private:
     Allpass inDiff[2][4]; float difLen[2][4] {};
     Delay bloom[2];
     Biquad colHp[2], colLp[2], colSh[2];
-    int tapPos[kTaps] {}; float tapGain[kTaps] {}, tapJit[kTaps] {}, tapSign[kTaps] {};
+    float tapJit[kTaps] {}, tapSign[kTaps] {};
     float modSamples = 0, modInc = 0, outGain = 1, outA = 1, outB = 0, inGain = 1;
     int curLen = -1;
 };
@@ -722,7 +861,8 @@ public:
     void prepare (double sampleRate)
     {
         sr = sampleRate;
-        early.prepare (sampleRate);
+        early.prepare (sampleRate); eBuilt = false;
+        aSub = (float) (1.0 - std::exp (-(double) kSubStep / (0.03 * sampleRate))); aOnOff = (float) (1.0 - std::exp (-1.0 / (0.02 * sampleRate)));
         plate.setMode (0); hall.setMode (1);
         plate.prepare (sampleRate, 1); hall.prepare (sampleRate, 2);
         smoother.prepare (sampleRate);
@@ -738,42 +878,83 @@ public:
         for (auto& e : revEqF) e.reset();
         for (auto& v : vf) for (auto& b : v) b.reset();
     }
+    // つまみの変化は、ブロックごとに一気に変えずになめらかに追う（2026-11-12、健康診断でオートメーションのジジッが出たため）:
+    //  ・響きごとの LOW CUT / HIGH CUT と PRE / REVERB EQ … 4 サンプルごとに 30 ms で近づける（周波数は対数）
+    //  ・EARLY … Early の中で近づける（にじみの長さは小数で少しずつ、跳ね返りの並びは 30 ms の混ぜ替え）
+    //  ・PLATE / HALL … Tank の中で 32 サンプルごとに近づける
     void set (const Params& p, bool force = false)
     {
-        const bool eqPre = force || p.preEq != params.preEq, eqRev = force || p.revEq != params.revEq;
-        bool voiceChanged[3];
-        for (int j = 0; j < 3; ++j) voiceChanged[j] = force || p.voice[j] != params.voice[j];
         params = p;
         for (int j = 0; j < 3; ++j)
         {
             const auto& v = p.voice[j];
-            if (voiceChanged[j])
-            {
-                hpOn[j] = v.lowCutHz > 20.5f; lpOn[j] = v.highCutHz < 19900.0f;
-                for (int c = 0; c < 2; ++c)
-                {
-                    if (hpOn[j]) vf[j][c].hp (v.lowCutHz, 0.7071, sr); else vf[j][c].flat();
-                    if (lpOn[j]) vf[j][c + 2].lp (v.highCutHz, 0.7071, sr); else vf[j][c + 2].flat();
-                }
-            }
+            vLcHz[j] = std::clamp (v.lowCutHz, 20.0f, 20000.0f); vHcHz[j] = std::clamp (v.highCutHz, 20.0f, 20000.0f);
+            vLcT[j] = std::log (vLcHz[j]);    // 20 Hz 以下 = OFF
+            vHcT[j] = std::log (vHcHz[j]);    // 19.9 kHz 以上 = OFF
+            if (force) { vLc[j] = vLcT[j]; vHc[j] = vHcT[j]; setVoiceFilters (j); }
             tgtVDelay[j] = (float) (std::clamp (v.delayMs, 0.0f, 500.0f) * 0.001 * sr);
             tgtWidth[j] = std::clamp (v.width, 0.0f, 200.0f) / 100.0f;
         }
-        early.setParams (p.early);
+        early.setParams (p.early, force || ! eBuilt); eBuilt = true;
         TankParams a = p.plate, b = p.hall;
         a.modRate = b.modRate = p.modRate; a.modDepth = b.modDepth = p.modDepth; a.modType = b.modType = p.modType;
         a.freeze = b.freeze = p.freeze;
-        plate.setParams (a); hall.setParams (b);
-        if (eqPre) for (auto& e : preEqF) e.setup (p.preEq, sr);
-        if (eqRev) for (auto& e : revEqF) e.setup (p.revEq, sr);
+        plate.setParams (a, force); hall.setParams (b, force);
+        for (int k = 0; k < 2; ++k)
+        {
+            const EqSettings& t = k == 0 ? p.preEq : p.revEq;
+            eqTgt[k] = t;
+            // 形が変わる所（ON / OFF、シェルフ⇄パス、パスの傾きの段）はすぐ切り替える
+            const bool jump = force || t.on != eqCur[k].on || t.lowShape != eqCur[k].lowShape || t.highShape != eqCur[k].highShape
+                           || (t.lowShape == 1 && TriEQ::passOrder (t.lowSlope) != TriEQ::passOrder (eqCur[k].lowSlope))
+                           || (t.highShape == 1 && TriEQ::passOrder (t.highSlope) != TriEQ::passOrder (eqCur[k].highSlope));
+            if (jump) { eqCur[k] = t; setupEq (k); }
+        }
         for (int i = 0; i < 3; ++i) tgtLevel[i] = p.levelDb[i] <= -69.9f ? 0.0f : std::pow (10.0f, p.levelDb[i] / 20.0f);
         tgtMix = std::clamp (p.mix / 100.0f, 0.0f, 1.0f);
         tgtOut = std::pow (10.0f, std::clamp (p.outputDb, -60.0f, 10.0f) / 20.0f);
         tgtPre = (float) (std::clamp (p.predelayMs, 0.0f, 1000.0f) * 0.001 * sr);
+        if (force) for (int i = 0; i < 3; ++i) { hpMix[i] = hpOn[i] ? 1.0f : 0.0f; lpMix[i] = lpOn[i] ? 1.0f : 0.0f; }
         if (force) { for (int i = 0; i < 3; ++i) { level[i] = tgtLevel[i]; vDelay[i] = tgtVDelay[i]; widthV[i] = tgtWidth[i]; } mixV = tgtMix; outV = tgtOut; preV = tgtPre; }
     }
     const Params& get() const { return params; }
     void setDuck (float gain) { tgtDuck = gain; }   // Plugin Link: 歌っている間の響きの倍率
+
+    void setVoiceFilters (int j)
+    {
+        hpOn[j] = vLc[j] > std::log (20.5f); lpOn[j] = vHc[j] < std::log (19900.0f);
+        for (int c = 0; c < 2; ++c)
+        {
+            // 着いたら目標の周波数そのもの（前とまったく同じ係数）
+            vf[j][c].hp (vLc[j] == vLcT[j] ? vLcHz[j] : std::exp (vLc[j]), 0.7071, sr);
+            vf[j][c + 2].lp (vHc[j] == vHcT[j] ? vHcHz[j] : std::exp (vHc[j]), 0.7071, sr);
+        }
+    }
+    void setupEq (int k) { for (auto& e : (k == 0 ? preEqF : revEqF)) e.setup (eqCur[k], sr); }
+    // kSubStep サンプルごとに、響きごとのカットと EQ を目標へ 1 歩近づける
+    void stepSmooth()
+    {
+        const float a = aSub;
+        for (int j = 0; j < 3; ++j)
+        {
+            if (vLc[j] == vLcT[j] && vHc[j] == vHcT[j]) continue;
+            { const float nv = vLc[j] + (vLcT[j] - vLc[j]) * a; vLc[j] = (nv == vLc[j] || std::abs (vLcT[j] - nv) < 1.0e-4f) ? vLcT[j] : nv; }
+            { const float nv = vHc[j] + (vHcT[j] - vHc[j]) * a; vHc[j] = (nv == vHc[j] || std::abs (vHcT[j] - nv) < 1.0e-4f) ? vHcT[j] : nv; }
+            setVoiceFilters (j);
+        }
+        for (int k = 0; k < 2; ++k)
+        {
+            EqSettings& c = eqCur[k]; const EqSettings& t = eqTgt[k];
+            if (c == t) continue;
+            auto lin = [&] (float& v, float tv, float eps) { const float nv = v + (tv - v) * a; v = (nv == v || std::abs (tv - nv) < eps) ? tv : nv; };
+            auto lg = [&] (float& v, float tv) { const float lv = std::log (std::max (1.0f, v)), lt = std::log (std::max (1.0f, tv));
+                                                 const float nl = lv + (lt - lv) * a; v = (nl == lv || std::abs (lt - nl) < 1.0e-4f) ? tv : std::exp (nl); };
+            lin (c.lowGain, t.lowGain, 1.0e-3f); lin (c.highGain, t.highGain, 1.0e-3f); lin (c.bellGain, t.bellGain, 1.0e-3f);
+            lg (c.lowFreq, t.lowFreq); lg (c.highFreq, t.highFreq); lg (c.bellFreq, t.bellFreq);
+            lin (c.lowSlope, t.lowSlope, 1.0e-4f); lin (c.highSlope, t.highSlope, 1.0e-4f); lin (c.bellQ, t.bellQ, 1.0e-4f);
+            setupEq (k);
+        }
+    }
 
     // 1 ブロック分。wetMono / dryMono は画面表示用（nullptr なら使わない）
     void process (float* L, float* R, int n, float* dryMono = nullptr, float* wetMono = nullptr)
@@ -781,6 +962,7 @@ public:
         const float k = 0.0015f;
         for (int i = 0; i < n; ++i)
         {
+            if (--subCount <= 0) { subCount = kSubStep; stepSmooth(); }
             for (int j = 0; j < 3; ++j)
             {
                 level[j] += (tgtLevel[j] - level[j]) * k;
@@ -811,8 +993,10 @@ public:
                 else if (j == 1) plate.process (il, ir, a, b);
                 else hall.process (il, ir, a, b);
                 // その響きだけの音色（LOW CUT / HIGH CUT、2 次）と広がり（M/S）
-                if (hpOn[j]) { a = vf[j][0].process (a); b = vf[j][1].process (b); }
-                if (lpOn[j]) { a = vf[j][2].process (a); b = vf[j][3].process (b); }
+                { const float t = hpOn[j] ? 1.0f : 0.0f, nv = hpMix[j] + (t - hpMix[j]) * aOnOff; hpMix[j] = (nv == hpMix[j] || std::abs (t - nv) < 1.0e-6f) ? t : nv; }
+                { const float t = lpOn[j] ? 1.0f : 0.0f, nv = lpMix[j] + (t - lpMix[j]) * aOnOff; lpMix[j] = (nv == lpMix[j] || std::abs (t - nv) < 1.0e-6f) ? t : nv; }
+                { const float ha = vf[j][0].process (a), hb = vf[j][1].process (b); a += hpMix[j] * (ha - a); b += hpMix[j] * (hb - b); }
+                { const float la = vf[j][2].process (a), lb = vf[j][3].process (b); a += lpMix[j] * (la - a); b += lpMix[j] * (lb - b); }
                 if (std::abs (widthV[j] - 1.0f) > 1e-4f)
                 {
                     const float m = 0.5f * (a + b), sd = 0.5f * (a - b) * widthV[j];
@@ -839,12 +1023,18 @@ private:
     double sr = 48000;
     Params params = defaultParams();
     Early early; Tank plate, hall;
+    bool eBuilt = false;
+    static constexpr int kSubStep = 4;   // カットと EQ を近づける間隔（サンプル）
+    float vLc[3] { 3.0f, 3.0f, 3.0f }, vLcT[3] { 3.0f, 3.0f, 3.0f }, vHc[3] { 9.9f, 9.9f, 9.9f }, vHcT[3] { 9.9f, 9.9f, 9.9f };   // 響きごとのカット（log Hz）
+    float vLcHz[3] { 20, 20, 20 }, vHcHz[3] { 20000, 20000, 20000 };   // その目標の周波数そのもの
+    EqSettings eqCur[2], eqTgt[2];       // PRE EQ / REVERB EQ の今の値と目標
+    float aSub = 0.01f; int subCount = 0;
     SendSmoother smoother;
     TriEQ preEqF[2], revEqF[2];
     Delay pre[2];
     float duckV = 1.0f, tgtDuck = 1.0f;
     Biquad vf[3][4];                     // 響きごと: [0,1] = LOW CUT の L/R、[2,3] = HIGH CUT の L/R
-    bool hpOn[3] {}, lpOn[3] {};
+    bool hpOn[3] {}, lpOn[3] {}; float hpMix[3] {}, lpMix[3] {}; float aOnOff = 1.0f - std::exp (-1.0f / (0.02f * 48000.0f));
     float vDelay[3] {}, tgtVDelay[3] {}, widthV[3] { 1, 1, 1 }, tgtWidth[3] { 1, 1, 1 };
     float level[3] {}, tgtLevel[3] {}, mixV = 0.5f, tgtMix = 0.5f, outV = 1, tgtOut = 1, preV = 0, tgtPre = 0;
 };

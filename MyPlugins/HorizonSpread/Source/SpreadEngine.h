@@ -415,7 +415,8 @@ namespace hs
                     const float target = juce::jlimit (0.5f, 2.0f, std::sqrt (agIn / agOut));
                     agGain = target + cAgGain * (agGain - target);
                 }
-                const float ag = 1.0f + sAutoGain.getNextValue() * (agGain - 1.0f);
+                const float agOn = sAutoGain.getNextValue();
+                const float ag = 1.0f + agOn * (agGain - 1.0f);
 
                 // 帯域ごとの広さメーター
                 {
@@ -430,7 +431,9 @@ namespace hs
                     }
                 }
 
-                const float g = sOut.getNextValue() * ag;
+                // GAIN MATCH が ON の間は、OUTPUT でも音量を変えない（ほかのプラグインの GAIN MATCH と同じ「入れても・つまみをいじっても音量が変わらない」。2026-11-12）
+                const float outV = sOut.getNextValue();
+                const float g = (outV + agOn * (1.0f - outV)) * ag;
                 float l = (mOutV + sOutV) * g;
                 float r = (mOutV - sOutV) * g;
                 const float solo = sSolo.getNextValue();

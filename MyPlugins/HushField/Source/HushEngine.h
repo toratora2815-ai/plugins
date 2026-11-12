@@ -194,7 +194,7 @@ namespace hf
             for (auto& r : inRing) r.assign ((size_t) ringLen * (size_t) mult, 0.0f);
             for (auto& r : scRing) r.assign ((size_t) ringLen * (size_t) mult, 0.0f);
             ringMask = ringLen * mult - 1;
-            configured = false;
+            configured = false; gainsInit = false;
             reset();
         }
 
@@ -203,6 +203,8 @@ namespace hf
             for (auto& r : inRing) std::fill (r.begin(), r.end(), 0.0f);
             for (auto& r : scRing) std::fill (r.begin(), r.end(), 0.0f);
             writePos = 0; hopCount = 0;
+            for (auto& r : convRing) std::fill (r.begin(), r.end(), 0.0f);
+            convPos = 0;
             for (auto& c : state) c.fill (0.0f);
             for (auto& o : outFifo) std::fill (o.begin(), o.end(), 0.0f);
             fifoPos = 0;
@@ -233,12 +235,23 @@ namespace hf
         {
             configure (s);
             const int chs = std::min (numCh, maxCh);
+            // MIX・WET TRIM・OUT TRIM は 1 サンプルずつ 20 ms でなめらかに追う（ブロックごとの段でジジッと鳴っていた）
+            const float mixT = std::clamp (s.mix, 0.0f, 1.0f);
+            if (! gainsInit) { mixS = mixT; wetGainS = wetGain; outGainS = outGain; gainsInit = true; }
+            const float aG = 1.0f - std::exp (-1.0f / (0.02f * (float) sr));
             for (int i = 0; i < n; ++i)
             {
+                auto follow = [aG] (float& v, float t) { const float nv = v + (t - v) * aG; v = (nv == v || std::abs (t - nv) < 1.0e-6f) ? t : nv; };   // 丸めでもう進まないなら目標ちょうど
+                follow (mixS, mixT); follow (wetGainS, wetGain); follow (outGainS, outGain);
                 // 入力を L/R か M/S にして輪っかへ
                 float a = io[0][i], b = chs > 1 ? io[1][i] : a;
                 if (s.midSide) { const float m = 0.5f * (a + b), d = 0.5f * (a - b); a = m; b = d; }
                 inRing[0][(size_t) writePos] = a; inRing[1][(size_t) writePos] = b;
+                if (lowLat)
+                {
+                    convRing[0][(size_t) convPos] = a; convRing[0][(size_t) (convPos + firLen)] = a;
+                    convRing[1][(size_t) convPos] = b; convRing[1][(size_t) (convPos + firLen)] = b;
+                }
                 if (sc != nullptr && numScCh > 0)
                 {
                     float sa = sc[0][i], sb = numScCh > 1 ? sc[1][i] : sa;
@@ -254,6 +267,7 @@ namespace hf
                     // その場で直接たたみこみ（遅延 0）
                     if (++hopCount >= hop) { hopCount = 0; analyse (s); }
                     w0 = directConv (0); w1 = directConv (1);
+                    if (++convPos >= firLen) convPos = 0;
                     xfadePos = std::min (xfadePos + 1, hop);
                 }
                 else
@@ -277,10 +291,10 @@ namespace hf
                 else if (s.bandSolo >= 0 && ! (s.sidechain && s.sidechainListen)) { o0 = w0; o1 = w1; }   // ソロはフィルター自体が帯域の形
                 else
                 {
-                    const float wet0 = w0 * wetGain, wet1 = w1 * wetGain;
-                    const float m0 = d0 + s.mix * (wet0 - d0), m1 = d1 + s.mix * (wet1 - d1);
+                    const float wet0 = w0 * wetGainS, wet1 = w1 * wetGainS;
+                    const float m0 = d0 + mixS * (wet0 - d0), m1 = d1 + mixS * (wet1 - d1);
                     if (s.delta) { o0 = d0 - m0; o1 = d1 - m1; } else { o0 = m0; o1 = m1; }
-                    o0 *= outGain; o1 *= outGain;
+                    o0 *= outGainS; o1 *= outGainS;
                 }
                 if (s.midSide) { const float l = o0 + o1, r = o0 - o1; o0 = l; o1 = r; }
                 io[0][i] = o0;
@@ -342,7 +356,14 @@ namespace hf
                 fir[c][0].assign ((size_t) firLen, 0.0f); fir[c][1].assign ((size_t) firLen, 0.0f);
                 fir[c][0][0] = fir[c][1][0] = 1.0f;
                 haveFilter[c] = false; cur[c] = 0;
+                if (lowLat)
+                {   // LOW LATENCY のたたみこみ用: 直近 firLen サンプルがいつも続けて並ぶ 2 倍の輪っかと、前後を逆にしたフィルター
+                    convRing[c].assign ((size_t) firLen * 2, 0.0f);
+                    firRev[c][0].assign ((size_t) firLen, 0.0f); firRev[c][1].assign ((size_t) firLen, 0.0f);
+                    firRev[c][0][(size_t) firLen - 1] = firRev[c][1][(size_t) firLen - 1] = 1.0f;
+                }
             }
+            convPos = 0;
             if (nConv > 0)
                 for (int c = 0; c < maxCh; ++c)
                     for (int j = 0; j < 2; ++j)
@@ -623,6 +644,7 @@ namespace hf
                 std::copy (f.begin(), f.end(), cbuf.begin());
                 fftConv.forward (cbuf.data(), filtRe[ch][next].data(), filtIm[ch][next].data());
             }
+            if (lowLat) std::reverse_copy (f.begin(), f.end(), firRev[ch][next].begin());
             cur[ch] = next;
             haveFilter[ch] = true;
             xfadePos = 0;
@@ -661,18 +683,14 @@ namespace hf
         }
 
         // ---------- LOW LATENCY: 直接たたみこみ ----------
+        // y = Σ f[m]·x[n−m]。直近 firLen サンプルを古い順に続けて読み、前後を逆にしたフィルターとの内積を vDSP でまとめて計算する
+        // （前は 1 タップずつの輪っかの読み出しで、LOW LATENCY ＋ 高い QUALITY だと 1 コアの 15〜17% を使っていた）
         float directConv (int ch)
         {
-            const auto& r = inRing[(size_t) ch];
-            const auto& fn = fir[ch][cur[ch]]; const auto& fo = fir[ch][1 - cur[ch]];
+            const float* x = convRing[(size_t) ch].data() + convPos + 1;
             float yn = 0.0f, yo = 0.0f;
-            int idx = (writePos - 1) & ringMask;
-            for (int m = 0; m < firLen; ++m)
-            {
-                const float x = r[(size_t) idx];
-                yn += fn[(size_t) m] * x; yo += fo[(size_t) m] * x;
-                idx = (idx - 1) & ringMask;
-            }
+            vDSP_dotpr (firRev[ch][cur[ch]].data(), 1, x, 1, &yn, (vDSP_Length) firLen);
+            vDSP_dotpr (firRev[ch][1 - cur[ch]].data(), 1, x, 1, &yo, (vDSP_Length) firLen);
             const float t = std::min (1.0f, (xfadePos + 0.5f) / hop);
             return yo + t * (yn - yo);
         }
@@ -686,6 +704,7 @@ namespace hf
         int latency = 2304, lookahead = 2048, anaDelay = 0;
         int ringMask = 0, writePos = 0, hopCount = 0, fifoPos = 0, xfadePos = 0;
         std::vector<float> inRing[maxCh], scRing[maxCh];
+        std::vector<float> convRing[maxCh], firRev[maxCh][2]; int convPos = 0;   // LOW LATENCY のたたみこみ用
         std::vector<float> window, frame, re, im, dbuf, dre, dim, cbuf, cre, cim, tmpA, tmpB;
         std::vector<float> convRe = std::vector<float> (16384 + 1), convIm = std::vector<float> (16384 + 1);
         float winPow = 1.0f;
@@ -704,7 +723,8 @@ namespace hf
         float work[6][K] {};
         std::vector<double> prefix = std::vector<double> (K + 1);
         std::vector<float> log2Rel, ptsPerOct;
-        float wetGain = 1.0f, outGain = 1.0f;
+        float wetGain = 1.0f, outGain = 1.0f;                       // 目標（つまみの値）
+        float mixS = 1.0f, wetGainS = 1.0f, outGainS = 1.0f; bool gainsInit = false;   // なめらかにした今の値
         std::array<std::atomic<float>, displayK> shownSpec {};
         std::array<std::array<std::atomic<float>, displayK>, maxCh> shownRed {};
     };

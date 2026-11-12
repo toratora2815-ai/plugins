@@ -87,8 +87,11 @@ public:
         limiter.prepare (s);
         const int maxLat = std::max ({ sculptor.latency(), density.latency(), phase.latency() }) + 8;
         for (int m = 0; m < numModules; ++m) for (int c = 0; c < 2; ++c) dryDelay[m][c].prepare (maxLat);
-        for (int c = 0; c < 2; ++c) { chDelay[c].prepare ((int) (0.1 * s) + 4); scRing[c].assign ((size_t) (maxLat * 3 + maxBlock * 2), 0.0f); }
+        for (int c = 0; c < 2; ++c) { chDelay[c].prepare ((int) (0.1 * s) + 8); scRing[c].assign ((size_t) (maxLat * 3 + maxBlock * 2), 0.0f); }
         scW = 0;
+        aG = (float) (1.0 - std::exp (-1.0 / (0.02 * s)));    // 音量・パン・幅・MIX は 20 ms
+        aD = (float) (1.0 - std::exp (-1.0 / (0.05 * s))); aD2 = (float) (1.0 - std::exp (-1.0 / (0.025 * s)));    // DELAY L / R は 25 ms × 2 段（読む位置を一気に跳ばさない。double で追い、目標の整数にちょうど着く）
+        smInit = false;
         reset();
     }
     void reset()
@@ -156,15 +159,18 @@ private:
     {
         const auto& g = cfg.global;
         if (g.bypass) return;
-        // 入口
-        const float ig = dbToGain (g.inGain);
-        const int dL = (int) std::round (g.delayL * 0.001 * sr), dR = (int) std::round (g.delayR * 0.001 * sr);
+        // 入口。INPUT・DELAY L / R は 1 サンプルずつなめらかに追う（ブロックごとの段でジジッ・プチッと鳴っていた）
+        const float igT = dbToGain (g.inGain);
+        const float dmax = (float) (0.1 * sr);
+        const float dLT = clampv ((float) std::round (g.delayL * 0.001 * sr), 0.0f, dmax), dRT = clampv ((float) std::round (g.delayR * 0.001 * sr), 0.0f, dmax);   // 目標は前と同じ整数
+        if (! smInit) snapSmooth (igT, dLT, dRT);
         for (int i = 0; i < n; ++i)
         {
-            float l = L[i] * ig, r = R[i] * ig;
+            follow (igS, igT, aG); followD (dL1, (double) dLT, (double) aD2); followD (dLS, dL1, (double) aD2); followD (dR1, (double) dRT, (double) aD2); followD (dRS, dR1, (double) aD2);
+            float l = L[i] * igS, r = R[i] * igS;
             if (g.invert) { l = -l; r = -r; }
             if (g.swap) std::swap (l, r);
-            l = chDelay[0].process (l, dL); r = chDelay[1].process (r, dR);
+            l = chDelay[0].processFrac (l, (float) dLS); r = chDelay[1].processFrac (r, (float) dRS);
             L[i] = l; R[i] = r;
         }
         // サイドチェーン（主信号と同じだけ遅らせて使う: 前のモジュールの遅れ分）
@@ -182,11 +188,11 @@ private:
             const int m = cfg.order[k];
             if (! cfg.on[m]) { wasOn[m] = false; continue; }
             if (! wasOn[m]) { resetModule (m); wasOn[m] = true; }
-            const float mix = clampv (cfg.mix[m], 0.0f, 1.0f);
+            const float mixT = clampv (cfg.mix[m], 0.0f, 1.0f);
             const int lat = moduleLatency (m);
-            const bool needDry = mix < 0.999f;
-            if (needDry)
-                for (int i = 0; i < n; ++i) { dry[0][i] = dryDelay[m][0].process (L[i], lat); dry[1][i] = dryDelay[m][1].process (R[i], lat); }
+            const bool needDry = mixT < 0.999f || mixS[m] < 0.999f;
+            // ドライの遅れ線はいつも通しておく（MIX 100% から戻したとき、古い音・空の線が出ないように）
+            for (int i = 0; i < n; ++i) { dry[0][i] = dryDelay[m][0].process (L[i], lat); dry[1][i] = dryDelay[m][1].process (R[i], lat); }
             // サイドチェーンをここまでの遅れに合わせる
             float scl[maxBlock], scr[maxBlock];
             const float* a = nullptr; const float* b = nullptr;
@@ -215,17 +221,24 @@ private:
                 default: break;
             }
             if (needDry)
-                for (int i = 0; i < n; ++i) { L[i] = mix * L[i] + (1.0f - mix) * dry[0][i]; R[i] = mix * R[i] + (1.0f - mix) * dry[1][i]; }
+                for (int i = 0; i < n; ++i)
+                {
+                    follow (mixS[m], mixT, aG);   // モジュールの MIX も 20 ms でなめらかに
+                    L[i] = mixS[m] * L[i] + (1.0f - mixS[m]) * dry[0][i]; R[i] = mixS[m] * R[i] + (1.0f - mixS[m]) * dry[1][i];
+                }
+            else mixS[m] = mixT;
             latSoFar += lat;
         }
-        // 出口: パン・幅・モノラル・出力
-        const float og = dbToGain (g.outGain);
-        const float side = clampv (1.0f + g.width / 100.0f, 0.0f, 2.0f);
-        const float pl = g.pan > 0 ? 1.0f - g.pan : 1.0f, pr = g.pan < 0 ? 1.0f + g.pan : 1.0f;
+        // 出口: パン・幅・モノラル・出力（どれも 20 ms でなめらかに。MONO の切り替えも 20 ms で）
+        const float ogT = dbToGain (g.outGain);
+        const float sideT = g.mono ? 0.0f : clampv (1.0f + g.width / 100.0f, 0.0f, 2.0f);
+        const float plT = g.pan > 0 ? 1.0f - g.pan : 1.0f, prT = g.pan < 0 ? 1.0f + g.pan : 1.0f;
+        if (! smInit) { ogS = ogT; sideS = sideT; plS = plT; prS = prT; smInit = true; }
         for (int i = 0; i < n; ++i)
         {
-            float mid = 0.5f * (L[i] + R[i]), sd = 0.5f * (L[i] - R[i]) * (g.mono ? 0.0f : side);
-            float l = (mid + sd) * pl * og, r = (mid - sd) * pr * og;
+            follow (ogS, ogT, aG); follow (sideS, sideT, aG); follow (plS, plT, aG); follow (prS, prT, aG);
+            float mid = 0.5f * (L[i] + R[i]), sd = 0.5f * (L[i] - R[i]) * sideS;
+            float l = (mid + sd) * plS * ogS, r = (mid - sd) * prS * ogS;
             L[i] = l; R[i] = r;
         }
         if (cfg.limiterOn) limiter.process (L, R, n);
@@ -242,6 +255,16 @@ private:
         }
         for (int c = 0; c < 2; ++c) dryDelay[m][c].reset();
     }
+
+    static inline void followD (double& v, double t, double a) { v += (t - v) * a; if (std::abs (t - v) < 1.0e-6) v = t; }
+    static inline void follow (float& v, float t, float a) { const float nv = v + (t - v) * a; v = (nv == v || std::abs (t - nv) < 1.0e-6f) ? t : nv; }   // 丸めでもう進まないなら目標ちょうど
+    void snapSmooth (float ig, float dl, float dr)
+    {
+        igS = ig; dLS = dl; dRS = dr; dL1 = dl; dR1 = dr;
+        for (int m = 0; m < numModules; ++m) mixS[m] = clampv (cfg.mix[m], 0.0f, 1.0f);
+    }
+    double dLS = 0, dRS = 0, dL1 = 0, dR1 = 0; float aD2 = 0.001f; float igS = 1, ogS = 1, plS = 1, prS = 1, sideS = 1, mixS[numModules] {}, aG = 0.001f, aD = 0.0005f;
+    bool smInit = false;
 
     StripSettings cfg;
     EqModule eq; CompModule comp[2]; ExciterModule exciter; TransientModule transient; GateModule gate; DensityModule density;

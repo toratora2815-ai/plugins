@@ -98,3 +98,7 @@
 - 96k / 192k で 11 Hz の HPF の極が float で 1 に丸まり直流がさまよった → Shelf1 / Biquad を double に
 - STYLE 切り替えは前の色付けと 15 ms 重ねる、SHAPE・RHYTHM・パターン・形の変更は 10 ms のつなぎ、INPUT / OUTPUT・LOW KEEP の ON/OFF は 20 ms でならす（LR4 は OFF でも回す）
 - パターン・形の受け渡しは SpinLock（オーディオ側は tryLock）。SMOOTH / MODE はオーディオ側で形を作り直す
+
+## 1.1.1（2026-11-12）
+- DEPTH MOD を 20 ms でなめらかに（depthModS。ほかのつまみと同じ smC）。健康診断の click で Depth Mod +42 が出ていた。止まっている時の音は前と同じ（起動直後の 20 ms だけ、ほかのつまみと同じく近づく）。
+  AIO Guitar・My Filter・My Crystal・Retro Retro も同じヘッダーを include しているが、DEPTH MOD を使わない（0 のまま）ので音は同じ

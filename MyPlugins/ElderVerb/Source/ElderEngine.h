@@ -215,7 +215,7 @@ public:
         for (int set = 0; set < 2; ++set)
             for (int k = 0; k < kGateTaps; ++k) { gJit[set][k] = rnd(); gAmp[set][k] = (0.5f + rnd()) * (rnd() < 0.5f ? -1.0f : 1.0f); }
         reset();
-        dirty = true;
+        dirty = true; cutInit = false;
     }
 
     void reset()
@@ -243,8 +243,18 @@ public:
     {
         if (dirty) update();
         const bool gate = profiles[p.mode].kind == 1;
+        const float aOn = 1.0f - std::exp (-1.0f / (0.02f * fs));    // ON ⇄ OFF の混ぜ替え 20 ms
+        const float aHz = 1.0f - std::exp (-16.0f / (0.03f * fs));   // 周波数（対数）は 30 ms で追う。係数は 16 サンプルごと
         for (int i = 0; i < n; ++i)
         {
+            if ((i & 15) == 0 && (hcLog != hcLogT || lcLog != lcLogT))
+            {
+                { const float nv = hcLog + (hcLogT - hcLog) * aHz; hcLog = (nv == hcLog || std::abs (hcLogT - nv) < 1.0e-4f) ? hcLogT : nv; }   // 丸めでもう進まないなら目標ちょうど
+                { const float nv = lcLog + (lcLogT - lcLog) * aHz; lcLog = (nv == lcLog || std::abs (lcLogT - nv) < 1.0e-4f) ? lcLogT : nv; }
+                setCuts();
+            }
+            { const float nv = hcOn + (hcOnT - hcOn) * aOn; hcOn = (nv == hcOn || std::abs (hcOnT - nv) < 1.0e-6f) ? hcOnT : nv; }
+            { const float nv = lcOn + (lcOnT - lcOn) * aOn; lcOn = (nv == lcOn || std::abs (lcOnT - nv) < 1.0e-6f) ? lcOnT : nv; }
             const float x[2] = { inL[i], inR[i] };
             float s[2];
             for (int c = 0; c < 2; ++c)
@@ -263,8 +273,8 @@ public:
             {
                 float v = w[c];
                 for (auto& q : tone[c]) v = q.process (v);
-                if (useHc) v = hc[c].lp (v);
-                if (useLc) v = v - lc[c].lp (v);
+                const float hl = hc[c].lp (v); v += hcOn * (hl - v);
+                const float ll = lc[c].lp (v); v -= lcOn * ll;
                 if (vintage) for (int k = 0; k < vintN; ++k) v = vint[c][k].process (v);
                 w[c] = v;
             }
@@ -307,7 +317,11 @@ private:
     Delay pre[2], spread[2], clusterOut[2], crossOut[2], tankOut[2];
     Allpass inAp[2][4];
     Branch br[kBranches]; Lfo lfo[kBranches]; float fb[kBranches] {};
-    OnePole hc[2], lc[2]; bool useHc = true, useLc = false; Biquad tone[2][3]; SosD vint[2][6]; int vintN = 0; bool vintage = false;
+    OnePole hc[2], lc[2]; Biquad tone[2][3];
+    // HIGH CUT / LOW CUT のなめらかさ: 周波数は対数で追い、ON / OFF は混ぜる量（0〜1）で切り替える
+    float hcLog = 9.9f, hcLogT = 9.9f, lcLog = 3.0f, lcLogT = 3.0f, hcOn = 1, hcOnT = 1, lcOn = 0, lcOnT = 0; bool cutInit = false;
+    float hcHzT = 20000.0f, lcHzT = 20.0f;   // 目標の周波数そのもの（着いたらこれを使う = 前とまったく同じ係数）
+    void setCuts() { for (int c = 0; c < 2; ++c) { hc[c].set (hcLog == hcLogT ? hcHzT : std::exp (hcLog), fs); lc[c].set (lcLog == lcLogT ? lcHzT : std::exp (lcLog), fs); } } SosD vint[2][6]; int vintN = 0; bool vintage = false;
     float preSamp = 0, inG = 0.7f, lateG = 0.55f, dryG = 0, wetG = 1, modAmp = 0;
     float clusterG = 1, crossG = 0.7f, tankG = 1, wetGain = 1;
     int earlyS = 0, crossS = 0, tankS = 0;
@@ -407,12 +421,16 @@ private:
             tone[c][0].shelf (false, 250, pr.lowDb, fs);
             tone[c][1].peak (1500, 0.7f, pr.midDb, fs);
             tone[c][2].shelf (true, 5000, pr.highDb, fs);
-            useHc = p.highCut < 0.999f && Maps::highCutHz (p.highCut) < fs * 0.49f;
-            useLc = p.lowCut > 0.002f;
-            hc[c].set (Maps::highCutHz (p.highCut), fs);
-            lc[c].set (Maps::lowCutHz (p.lowCut), fs);
             setupVintage (vint[c]);
         }
+        // HIGH CUT / LOW CUT は目標だけ決め、process で 16 サンプルごとになめらかに追う（ブロックごとの段でジジッと鳴らないように）。
+        // OFF ⇄ ON は「フィルターを通した音」と「通さない音」を 20 ms で混ぜ替える（周波数は聞こえていない間にだけ一気に合わせる）
+        hcOnT = (p.highCut < 0.999f && Maps::highCutHz (p.highCut) < fs * 0.49f) ? 1.0f : 0.0f;
+        lcOnT = p.lowCut > 0.002f ? 1.0f : 0.0f;
+        if (hcOnT > 0.0f) { hcHzT = Maps::highCutHz (p.highCut); hcLogT = std::log (hcHzT); if (hcOn <= 0.0f) hcLog = hcLogT; }
+        if (lcOnT > 0.0f) { lcHzT = Maps::lowCutHz (p.lowCut); lcLogT = std::log (lcHzT); if (lcOn <= 0.0f) lcLog = lcLogT; }
+        if (! cutInit) { hcLog = hcLogT; lcLog = lcLogT; hcOn = hcOnT; lcOn = lcOnT; cutInit = true; }
+        setCuts();
         vintage = p.color == 0 && vintN > 0;
         const float m = std::clamp (p.mix, 0.0f, 1.0f);
         dryG = std::cos (m * kPi / 2); wetG = std::sin (m * kPi / 2);

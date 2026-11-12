@@ -62,3 +62,5 @@ Shortwave / Tube Reel の SATURATION 12 dB、Diffused、Squawk〔参考は 125% 
   にじみをループの外へ（左右別の形、時間に関係なく一定、Splattered の最短 213 ms）、時間を変えたときの動きを 0.504 s に
 - 1.0.0（2026-11-06）: 最初の版。31 スタイル、4 モード、テンポ同期、PRIME、WOBBLE、内蔵プリセット 12、Plugin Link（Fader Pilot → VOCAL DUCK）
 - 1.3.0（2026-11-09）: GAIN MATCH を追加（Shared/GainMatch.h、ID gainMatch、既定 OFF、状態に gainMatchDb を保存）。ボタンはプリセット欄の左端。MIX 99.5% 以上は効かない。applyPreset の初期化から gainMatch を外した。下の欄を 2 段（footerH 72）に
+- 1.3.1（2026-11-12）: オートメーションのジジッを直した（健康診断の click で Feel +67・Groove +64・Output +52・Mix +42）。INPUT / OUTPUT / MIX は 20 ms、FEEL・GROOVE（エコーを読む位置）は TIME と同じ 0.504 s で 1 サンプルずつ追う（EchoEngine.h の follow / snapSmooth）。止まっている時の音は前とビット単位で同じ
+  DSP 検査係: 追う式を「丸めでもう進まないなら目標ちょうど」に（192 kHz で目標の直前で止まり、係数を作り直し続ける所があった）
