@@ -36,7 +36,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`, `Myfl`, `Mycr`, `Nzot`, `Twtk`, `Rtrt`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`, `Myfl`, `Mycr`, `Nzot`, `Twtk`, `Rtrt`, `Hbkt`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -57,7 +57,7 @@
     3 秒でほぼ決まり、10 秒たまったら固定」（追いかけ続けない＝コンプにならない。オートメーションの再生・Logic 側の操作では測り直さない。開き直しても固定した値のまま）。上げるのは +12 dB まで。
     amount: MIX 90〜100%（センド使い）は少しずつ 0 へ、DELTA・ソロ・BYPASS など比べる元がない間は 0。最後にリミッターがあるなら ON の間 `limitBoost (0)`。
     内蔵プリセットで全部を初期値に戻す処理からは `gainMatch` を外す。数値テストは build/gmtest/main.cpp（コミットしない）。
-    付けないもの: 音を変えない測定器（Balance Scope）、音量を変えるのが仕事のもの（Gain Stage・Fader Pilot）、音源（Sample Sculptor・AIO Guitar・Vox Chop）。
+    付けないもの: 音を変えない測定器（Balance Scope）、音量を変えるのが仕事のもの（Gain Stage・Fader Pilot）、音源（Sample Sculptor・AIO Guitar・Vox Chop・Hybrid Kit）。
     前からある Horizon Spread `autoGain`・Fire Box `unity`・Mod Host `autoGain` は ID はそのまま、表示を GAIN MATCH にして同じ場所に置いた（2026-11-12: HS・Fire Box も ON の間は OUTPUT / IN で音量を変えないようにそろえた）
   - 画面のいちばん下に「LINK 欄＋GAIN MATCH・プリセット・取り消し欄」（1 段 40 px か 2 段 72 px。GAIN MATCH が入ってプリセット欄が約 550 px になったので、LINK 欄に追加のつまみがあって幅 1200 未満なら 2 段）
 
@@ -92,6 +92,8 @@
 - 古っぽくする（Lo-Fi）: ノイズ・揺れ・歪み・ビット落とし・響き・劣化・エコーをまとめて = Retro Retro（歪みだけは Deca Satu、揺らすだけは My Tremolo）。Lo-Fi の新機能は Retro Retro に足す
 - エコー: 普通のエコー（テープ・BBD など）= Echo Drift / 逆再生・音程が変わるエコー・シマー = My Crystal
 - 声: Vox Chop = 声を別の声に変える・声を切って鍵盤で弾く（ボーカルチョップ） / Sample Sculptor = 1 つの音を整える。声の加工の新機能は Vox Chop に足す
+- ドラム: Drummer の生ドラムに 808・クラップを重ねて鳴らす = Hybrid Kit（生だけなら Logic の Drum Kit Designer のまま）/ 1 発のサンプルを作る・整える = Sample Sculptor / 手元のサンプルを口マネで探す = Sound Sketch / 太く = Fire Box、突っ込んでもアタックを残す = Drum Transient。
+  Hybrid Kit に入れるのはキットの中のこと（部品の VOLUME / TUNE / LENGTH・EDM の層・マイクの混ぜ具合）まで。コンプ・歪み・リバーブは作らない。ドラム音源の新機能は Hybrid Kit に足す（別のドラム音源は作らない。2026-11-12 整理係）
 - 鼻歌: Idea Catcher だけ（録ってから解析 → きれいな MIDI → Logic へドラッグ）。口ドラムは本人が「いらない」ので作らない
 - リミッター: 普通のリミッター（2 ミックス・マスター）は本人の Pro-L2 / ドラムは Drum Transient / Forge Strip・Fire Box の最後のリミッターはそれぞれの中だけ
 - 抑える: 雑音（サーッ・ファン）・ハム・部屋鳴りを取る = Noise Out / キツい響き・サ行 = Hush Field（Noise Out に De-ess は入れない）
@@ -158,6 +160,13 @@
   NOISE（計算で作る 10 種類）/ WOBBLE / DISTORT 9 種類 / DIGITAL / SPACE 10 種類（FDN）/ LOSS（MAGNETIC・CODEC）/ ECHO ＋ MASTER（VARISPEED・EQ・COMPRESS・WIDTH）、MAGNITUDE で全部の量に掛け算。
   表（MAIN）はモジュールごとに大きいつまみ 1 本＋種類、全部のつまみは DETAIL。相手の録音データ（ノイズ素材・IR・プリセット）は使っていない。
   4 倍は My Tremolo の Source を include（変えたら Retro Retro もビルド）。遅れ 283（48 kHz）。Plugin Link は Fader Pilot の歌でノイズを下げる（Kind 26 は未登録）。測定の道具は build/rclab
+
+- Hybrid Kit（HybridKit）0.1.0 … 生ドラム＋EDM のドラム音源（AU 音源 aumu Hbkt。2026-11-12 本人「EZdrummer・Superior Drummer のようなものを。生と EDM を混ぜたい、でも生の輪郭は欲しい」。
+  ミックスエンジニア係「EZdrummer 風の画面だけなら DKD＋Drummer・MODO DRUM で足りる。生＋EDM を部品ごとに重ねて自動でそろえる形なら価値あり」→ 本人がその形・Logic の録音を使う・先に WAV で聴き比べを選んで「OK」）。
+  生ドラムはこの Mac の Logic の Drum Kit Designer の Producer Kit 8 個（Brushes・Rods は録音の並びが違うのでまだ）の録音を直接読む（mmap・叩いた瞬間だけメモリ、先読み。音のファイルはリポジトリに入れない）。
+  中は 44.1 kHz、ホストのレートへは sinc の変換（48 kHz で遅れ 35 を申告）。Drummer と同じノートの割り当て（確かめるため開いてから 10 分だけ届いた MIDI を記録。確かめたら外す）。
+  部品 5 組の VOLUME / TUNE / LENGTH、ミキサー CLOSE / OH / ROOM / BLEED、キックの 808 サブ（低音を LR4 で入れ替え、遅れ・極性・大きさは自動）・スネアの EDM の層（Clap など、ゴーストとサイドスティックには付けない）、内蔵プリセット 7 個。
+  次の版はマルチアウト（キック・スネアだけに「キック迫力」など）を最初に。Plugin Link は LINK 欄だけ（Kind 27 は未登録）。試作・テストは tools/render.cpp・tools/test_inspect.cpp（DSP 検査係）
 
 ### 単体 Mac アプリ（.app）
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作

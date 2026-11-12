@@ -3,7 +3,7 @@
 Mac の Logic Pro で使う、自作のプラグイン（AU）と Mac アプリ（.app）です。
 GitHub に push すると自動でビルドされ、Releases の「latest」に置かれます。くわしい使い方は、各フォルダの README を見てください。
 
-## プラグイン（AU。Logic の「Audio Units → MyPlugins」、Sample Sculptor・AIO Guitar・Vox Chop は音源の欄）
+## プラグイン（AU。Logic の「Audio Units → MyPlugins」、Sample Sculptor・AIO Guitar・Vox Chop・Hybrid Kit は音源の欄）
 | 名前 | フォルダ | 何用か |
 |---|---|---|
 | Wool Fuzz | WoolFuzz | ビッグマフ系の太いファズ |
@@ -31,6 +31,7 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 | Sample Sculptor | SampleSculptor | サンプルを落として加工し、ドラッグで Logic に戻す（AU 音源） |
 | AIO Guitar | AIOGuitar | 自分のエレキを録った音で鳴らす全部入りギター音源（AU 音源＋単体アプリ） |
 | Vox Chop | VoxChop | 自分の声を別の声（女性・男性・中性・子ども・ささやき・ロボット…）に変えて、切って鍵盤で弾く（AU 音源） |
+| Hybrid Kit | HybridKit | 生ドラム（Logic の Drum Kit Designer の録音）に EDM の音（808 のサブ・クラップ）を部品ごとに重ねるドラム音源。Drummer トラックでそのまま鳴る（AU 音源） |
 
 ## アプリ（.app）
 | 名前 | フォルダ | 何用か |
@@ -69,12 +70,14 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 - **サンプル・声の編集**
   - Sample Sculptor … 1 つの音を整える（切る・形・響き・逆再生）
   - Vox Chop … 声を別の声に変える・声を切って鍵盤で弾く（ボーカルチョップ）
+- **ドラム**
+  - Hybrid Kit … Drummer の生ドラムに 808・クラップを重ねる（生だけなら Logic の Drum Kit Designer のまま）。太さ・アタックは後ろに Fire Box・Drum Transient
 
 ## Plugin Link・GAIN MATCH・プリセット（プラグイン共通）
 - 画面のいちばん下の **LINK**（OFF / 1〜4）を同じ番号にしたプラグイン同士が、裏で情報をやりとりします（例: Balance Scope → Hush Field、Fader Pilot → リバーブ、Gain Stage → Wool Fuzz / Porch Drive）
 - その横の帯で、自分のプリセットの保存（SAVE）と、つまみの取り消し・やり直し（UNDO / REDO）ができます
 - その帯の左端の **GAIN MATCH** を ON にすると、そのプラグインを入れても・つまみをいじっても音量が変わりません（音色だけで比べられる）。最初は OFF。
-  付いていないのは、音を変えない Balance Scope、音量を変えるのが仕事の Gain Stage・Fader Pilot、音源の Sample Sculptor・AIO Guitar・Vox Chop
+  付いていないのは、音を変えない Balance Scope、音量を変えるのが仕事の Gain Stage・Fader Pilot、音源の Sample Sculptor・AIO Guitar・Vox Chop・Hybrid Kit
 
 ## 入れ方
 ### プラグイン（Logic）
