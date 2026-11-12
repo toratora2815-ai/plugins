@@ -29,6 +29,8 @@ public:
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 2.0; }   // HUM の細いノッチは止めた後もしばらく鳴き残る
+    // DETAIL（折りたたみ）に入っているパラメーターと、その段（0 HUM / 1 NOISE / 2 ROOM / 3 VOICE）
+    static const std::vector<std::pair<juce::String, int>>& detailParams();
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -70,7 +72,9 @@ private:
     void saveExtraState (juce::ValueTree& st);
     void loadExtraState (const juce::ValueTree& st);
 
-    enum { pHumOn, pHumFreq, pHumRed, pHumHarm, pNoiseOn, pNoiseMode, pNoiseRed, pNoiseThr, pRoomOn, pRoomRed, pRoomTail, pOut, pDelta, pNum };
+    enum { pHumOn, pHumFreq, pHumRed, pHumHarm, pNoiseOn, pNoiseMode, pNoiseRed, pNoiseThr, pRoomOn, pRoomRed, pRoomTail, pOut, pDelta,
+           pNoiseOpt, pNoiseGentle, pRoomB0, pRoomB1, pRoomB2, pRoomB3, pHumWidth,
+           pMouthOn, pMouthSens, pMouthSkew, pBreathOn, pBreathRed, pBreathSens, pPlosOn, pPlosStr, pPlosSens, pPlosFreq, pNum };
     std::atomic<float>* p[pNum] {};
     std::atomic<bool> needReset { false };
     std::atomic<int> learnStartSeq { 0 }, learnStopSeq { 0 };

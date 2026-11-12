@@ -21,12 +21,20 @@ static bool setTuning (const std::string& key, float v)
         { "nTrkMs", &t.nTrkMs }, { "nUpDbs", &t.nUpDbs }, { "nUpProp", &t.nUpProp }, { "nDownMs", &t.nDownMs },
         { "nBiasA", &t.nBiasA }, { "nBiasL", &t.nBiasL }, { "nSlope", &t.nSlope }, { "nKnee", &t.nKnee },
         { "nGainOct", &t.nGainOct }, { "nGAttMs", &t.nGAttMs }, { "nGRelMs", &t.nGRelMs }, { "nThrScale", &t.nThrScale },
-        { "nLowBias", &t.nLowBias }, { "nHfW1", &t.nHfW1 }, { "nHfW3", &t.nHfW3 }, { "nHfW2", &t.nHfW2 },
+        { "nLowBias", &t.nLowBias },
+        { "nMusBias", &t.nMusBias }, { "nMusSlope", &t.nMusSlope }, { "nMusKnee", &t.nMusKnee }, { "nMusUp", &t.nMusUp }, { "nMusRel", &t.nMusRel }, { "nMusLow", &t.nMusLow }, { "nGenOct", &t.nGenOct }, { "nGenBias", &t.nGenBias }, { "nGenHf", &t.nGenHf }, { "nGenRel", &t.nGenRel }, { "nHfW1", &t.nHfW1 }, { "nHfW3", &t.nHfW3 }, { "nHfW2", &t.nHfW2 },
         { "rSmMs", &t.rSmMs }, { "rTdMs", &t.rTdMs }, { "rRate", &t.rRate }, { "rRateP", &t.rRateP },
         { "rWinA", &t.rWinA }, { "rWinB", &t.rWinB }, { "rDryK", &t.rDryK }, { "rEnvDbs", &t.rEnvDbs },
         { "rMu0", &t.rMu0 }, { "rQ0", &t.rQ0 }, { "rMuP", &t.rMuP }, { "rA", &t.rA }, { "rGamma", &t.rGamma }, { "rMaxDb", &t.rMaxDb }, { "rBoostK", &t.rBoostK },
         { "rGAttMs", &t.rGAttMs }, { "rGRelMs", &t.rGRelMs }, { "rGainOct", &t.rGainOct },
-        { "hQ", &t.hQ }, { "hDcHz", &t.hDcHz } };
+        { "rSrcMix", &t.rSrcMix }, { "rAP", &t.rAP }, { "rX1", &t.rX1 }, { "rX2", &t.rX2 }, { "rX3", &t.rX3 }, { "rXW", &t.rXW }, { "rBandP", &t.rBandP }, { "rSmK", &t.rSmK },
+        { "rEst", &t.rEst }, { "rHc", &t.rHc }, { "rHk", &t.rHk }, { "rLaw", &t.rLaw }, { "rLc", &t.rLc }, { "rLk", &t.rLk },
+        { "hDcHz", &t.hDcHz },
+        { "mFcBase", &t.mFcBase }, { "mThr0", &t.mThr0 }, { "mThrMin", &t.mThrMin }, { "mThrP", &t.mThrP }, { "mMaxMs", &t.mMaxMs }, { "mBaseMs", &t.mBaseMs }, { "mMargMs", &t.mMargMs }, { "mDepth", &t.mDepth }, { "mRepHz", &t.mRepHz }, { "mEndDb", &t.mEndDb },
+        { "bFlat", &t.bFlat }, { "bSensK", &t.bSensK }, { "bCmin", &t.bCmin }, { "bCmax", &t.bCmax }, { "bLoRatio", &t.bLoRatio }, { "bDv", &t.bDv }, { "bDf", &t.bDf },
+        { "bMinMs", &t.bMinMs }, { "bAttMs", &t.bAttMs }, { "bRelMs", &t.bRelMs }, { "bSat", &t.bSat },
+        { "pThr", &t.pThr }, { "pSensK", &t.pSensK }, { "pRatioDb", &t.pRatioDb }, { "pSlope", &t.pSlope }, { "pMaxDb", &t.pMaxDb }, { "pBaseMs", &t.pBaseMs },
+        { "pRelMs", &t.pRelMs }, { "pAhead", &t.pAhead }, { "pWidth", &t.pWidth }, { "pStrP", &t.pStrP } };
     auto it = m.find (key);
     if (it == m.end()) return false;
     *it->second = v;
@@ -57,9 +65,14 @@ int main (int argc, char** argv)
             if (key.rfind ("T.", 0) == 0) { if (! setTuning (key.substr (2), v)) { fprintf (stderr, "unknown tuning %s\n", key.c_str()); return 3; } continue; }
             if (key == "hum") k.humOn = v > 0.5f; else if (key == "humf") k.humFreq = (int) v; else if (key == "humd") k.humDepthDb = v;
             else if (key == "harm") k.humHarm = (int) v; else if (key == "noise") k.noiseOn = v > 0.5f; else if (key == "mode") k.noiseMode = (int) v;
-            else if (key == "red") k.noiseRedDb = v; else if (key == "thr") k.noiseThrDb = v; else if (key == "room") k.roomOn = v > 0.5f;
-            else if (key == "rred") k.roomRedDb = v; else if (key == "tail") k.roomTail = v; else if (key == "out") k.outDb = v;
-            else if (key == "delta") k.delta = v > 0.5f; else if (key == "mono") mono = v > 0.5f; else if (key == "comp") comp = v > 0.5f;
+            else if (key == "red") k.noiseRedDb = v; else if (key == "music") k.noiseMusic = v > 0.5f; else if (key == "gentle") k.noiseGentle = v > 0.5f; else if (key == "thr") k.noiseThrDb = v; else if (key == "room") k.roomOn = v > 0.5f;
+            else if (key == "rred") k.roomRedDb = v; else if (key == "tail") k.roomTail = v; else if (key == "rsm") k.roomSmooth = v;
+            else if (key == "rb0") k.roomBand[0] = v; else if (key == "rb1") k.roomBand[1] = v; else if (key == "rb2") k.roomBand[2] = v; else if (key == "rb3") k.roomBand[3] = v; else if (key == "out") k.outDb = v;
+            else if (key == "delta") k.delta = v > 0.5f;
+            else if (key == "mouth") k.mouthOn = v > 0.5f; else if (key == "msens") k.mouthSens = v; else if (key == "mskew") k.mouthSkew = v;
+            else if (key == "breath") k.breathOn = v > 0.5f; else if (key == "bgain") k.breathGainDb = v; else if (key == "bsens") k.breathSens = v;
+            else if (key == "plosive") k.plosiveOn = v > 0.5f; else if (key == "pstr") k.plosiveStrength = v; else if (key == "psens") k.plosiveSens = v; else if (key == "pfreq") k.plosiveFreqHz = v;
+            else if (key == "hwidth") k.humWidthQ = v; else if (key == "mono") mono = v > 0.5f; else if (key == "comp") comp = v > 0.5f;
             else if (key == "sr") sr = v;
             else if (key == "learn" || key == "freeze")
             {

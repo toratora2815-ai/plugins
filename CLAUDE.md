@@ -96,7 +96,7 @@
   Hybrid Kit に入れるのはキットの中のこと（部品の VOLUME / TUNE / LENGTH・EDM の層・マイクの混ぜ具合）まで。コンプ・歪み・リバーブは作らない。ドラム音源の新機能は Hybrid Kit に足す（別のドラム音源は作らない。2026-11-12 整理係）
 - 鼻歌: Idea Catcher だけ（録ってから解析 → きれいな MIDI → Logic へドラッグ）。口ドラムは本人が「いらない」ので作らない
 - リミッター: 普通のリミッター（2 ミックス・マスター）は本人の Pro-L2 / ドラムは Drum Transient / Forge Strip・Fire Box の最後のリミッターはそれぞれの中だけ
-- 抑える: 雑音（サーッ・ファン）・ハム・部屋鳴りを取る = Noise Out / キツい響き・サ行 = Hush Field（Noise Out に De-ess は入れない）
+- 抑える: 雑音（サーッ・ファン）・ハム・部屋鳴り・口のピチャ音・息・吹かれを取る = Noise Out / キツい響き・サ行 = Hush Field（Noise Out に De-ess は入れない）
 - ダブル・広げる: 1 本のまま広げる（モノにすると元に戻る）= Horizon Spread / 1 本録りの歌・ギターを 2 本録りに（音ごとにずれる別テイク。モノでも厚みが残る）= Twin Take /
   いつも同じずれの加工っぽい厚み = Echo Drift の Chorus Doubler・My Crystal の Detune Double。ダブルの新機能は Twin Take に足す（Horizon Spread の DOUBLE・SHIFT はこれ以上ダブル寄りにしない。歌・ギター用プリセットは本人が使っているので残す、2026-11-12）
 - 参照曲まわりの新機能は Reference Monitor にだけ足す（Balance Scope の REF と二重にしない）。Mod Host は「中のプラグインのつまみを動かす」役。帯域・歪み・自動ゲインはこれ以上足さない（Forge Strip の仕事）
@@ -146,10 +146,11 @@
   PITCH ±3 oct（半音で止まる、shift でセント）/ SPLICE / DELAY（SYNC で音符）/ RECYCLE / REVERSE / ANALOG、GATE⇄DUCK、TWEAK（PITCH・SPLICE・DELAY OFFSET、SMOOTHING、LOW / HIGH CUT は輪の中、ATTACK / RELEASE、DUCK MODE、Mixed / Dual / Ping-Pong）、内蔵プリセット 15 個。
   センドで使う飛び道具。遅れなし。色付け・4 倍は My Tremolo の Source を include（変えたら My Crystal もビルド）。Plugin Link は Fader Pilot の歌でウェットを下げる（Kind 23 は未登録）。測定の道具は build/crylab
 
-- Noise Out（NoiseOut）1.0.0 … 録った音の雑音・ハム・部屋鳴りを取る（本人の Mac の iZotope RX 12 試用版を約 830 通り測って合わせ込み）。並び固定 HUM → NOISE → ROOM。
+- Noise Out（NoiseOut）1.1.0 … 録った音の雑音・ハム・部屋鳴り・口のピチャ音・息・吹かれを取る（本人の Mac の iZotope RX 12 試用版を約 1,500 通り測って合わせ込み）。並び固定 HUM → MOUTH → NOISE・ROOM・息・吹かれ。
   HUM = RX 12 De-hum の Static と同じ形（RBJ ピーキング Q 1000 を倍音に並べる＋1.5 Hz の直流カット。波形の差 −80 dB）、AUTO は 50 / 60 Hz ±0.3 Hz を自分で探す（楽器の音程を拾わない）/
-  NOISE = Voice De-noise（Dialogue / Surgical）に合わせた STFT のノイズ除去、ADAPTIVE / LEARNED（LEARN は 3 秒で自動終了）/ ROOM = De-reverb に寄せた響きの予想と引き算。
-  遅れ 2048（48 kHz）。DELTA。Plugin Link は Fader Pilot が歌っている間 ADAPTIVE の推定を止める（Kind 24 は未登録）。測定の道具は build/noiselab
+  NOISE = Voice De-noise に合わせた STFT のノイズ除去（MUSIC（初期）/ DIALOGUE、1.0 の曲は DIALOGUE で開く）、ADAPTIVE / LEARNED（LEARN は 3 秒で自動終了）/ ROOM = De-reverb に寄せた後期残響の予想（Habets 型）/
+  VOICE FIX = Mouth De-click・Breath Control・De-plosive に合成の素材で寄せた（初期 OFF）。細かいつまみ（GENTLE・帯域 4 本・WIDTH など）は各段の DETAIL（2026-11-12 本人「全部できる限り本物に近づけて」）。
+  遅れ 6144（48 kHz、息・吹かれの先読み）。DELTA。Plugin Link は Fader Pilot が歌っている間 ADAPTIVE の推定を止める（Kind 24 は未登録）。測定の道具は build/noiselab
 
 - Twin Take（TwinTake）1.1.0 … 1 本録りの歌・ギターを「2 回録って重ねた」ように聞かせるダブラー（2026-11-11。提案の Double Take は実在製品名なので改名）。
   音の頭ごとに各ダブルの遅れ・音程（±2〜9 セント）・音色・音量を選び直す。VOCAL（遅れ 0、ダブル 1/2/4 本、子音・息はダブルしない）/ GUITAR（原音を左・ダブルを右、40 ms の遅れを申告）。

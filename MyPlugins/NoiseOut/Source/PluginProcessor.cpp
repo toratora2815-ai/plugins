@@ -4,7 +4,11 @@
 namespace
 {
     const char* kIds[] = { "humOn", "humFreq", "humReduction", "humHarmonics", "noiseOn", "noiseMode", "noiseReduction", "noiseThreshold",
-                           "roomOn", "roomReduction", "roomTail", "output", "delta" };
+                           "roomOn", "roomReduction", "roomTail", "output", "delta",
+                           "noiseOptimize", "noiseGentle", "roomBandLow", "roomBandLowMid", "roomBandHighMid", "roomBandHigh", "humWidth",
+                           "mouthOn", "mouthSens", "mouthSkew", "breathOn", "breathReduction", "breathSens",
+                           "plosiveOn", "plosiveStrength", "plosiveSens", "plosiveFreq" };
+    const char* kVersionProp = "noiseOutVersion";   // 状態の版（2 = 1.1.0 から。ない = 1.0.0 で保存した曲）
     const char* kProfileProp = "noiseProfile";   // LEARN で覚えた形（23.4375 Hz おき 1025 点の dB をカンマ区切り）
     const char* kHumProp = "humF0";              // AUTO で最後に見つけたハムの周波数
 }
@@ -51,9 +55,42 @@ juce::AudioProcessorValueTreeState::ParameterLayout NoiseOutProcessor::createLay
     ps.push_back (std::make_unique<F> (juce::ParameterID { "output", 1 }, "Output", juce::NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f,
                                        A().withLabel ("dB").withStringFromValueFunction (db1)));
     ps.push_back (std::make_unique<B> (juce::ParameterID { "delta", 1 }, "Delta (removed only)", false));
+    // ---- 1.1.0 で足したもの（版のヒント 2。Logic のパラメーター番号をずらさない）----
+    auto zeroTen = [] (float v, int) { return juce::String (v, 1); };
+    ps.push_back (std::make_unique<C> (juce::ParameterID { "noiseOptimize", 2 }, "Noise Optimize For", juce::StringArray { "Dialogue", "Music" }, 1));
+    ps.push_back (std::make_unique<B> (juce::ParameterID { "noiseGentle", 2 }, "Noise Gentle Filter", false));
+    for (auto [id, nm] : { std::pair<const char*, const char*> { "roomBandLow", "Room Band Low" }, { "roomBandLowMid", "Room Band Low-Mid" },
+                           { "roomBandHighMid", "Room Band High-Mid" }, { "roomBandHigh", "Room Band High" } })
+        ps.push_back (std::make_unique<F> (juce::ParameterID { id, 2 }, nm, juce::NormalisableRange<float> (0.0f, 10.0f, 0.1f), 6.0f, A().withStringFromValueFunction (zeroTen)));
+    // WIDTH（Q）は 300〜2000 に絞る（測定: Q 100 で倍音の間の音楽が −20 dB、Q 300 で −6 dB。Q 3000 はハムが −53 dB までしか効かず、止めた後に鳴き残る）。真ん中 = 初期値 1000
+    auto widthRange = juce::NormalisableRange<float> (300.0f, 2000.0f, 1.0f);
+    widthRange.setSkewForCentre (1000.0f);
+    ps.push_back (std::make_unique<F> (juce::ParameterID { "humWidth", 2 }, "Hum Width (Q)", widthRange, 1000.0f,
+                                       A().withLabel ("Q").withStringFromValueFunction ([] (float v, int) { return "Q " + juce::String (juce::roundToInt (v)); })));
+    ps.push_back (std::make_unique<B> (juce::ParameterID { "mouthOn", 2 }, "Mouth Click On", false));
+    ps.push_back (std::make_unique<F> (juce::ParameterID { "mouthSens", 2 }, "Mouth Click Sensitivity", juce::NormalisableRange<float> (0.0f, 10.0f, 0.1f), 4.0f, A().withStringFromValueFunction (zeroTen)));
+    ps.push_back (std::make_unique<F> (juce::ParameterID { "mouthSkew", 2 }, "Mouth Click Frequency Skew", juce::NormalisableRange<float> (-10.0f, 10.0f, 0.1f), 0.0f, A().withStringFromValueFunction (zeroTen)));
+    ps.push_back (std::make_unique<B> (juce::ParameterID { "breathOn", 2 }, "Breath On", false));
+    ps.push_back (std::make_unique<F> (juce::ParameterID { "breathReduction", 2 }, "Breath Reduction", juce::NormalisableRange<float> (0.0f, 40.0f, 0.1f), 12.0f,
+                                       A().withLabel ("dB").withStringFromValueFunction (red)));
+    ps.push_back (std::make_unique<F> (juce::ParameterID { "breathSens", 2 }, "Breath Sensitivity", juce::NormalisableRange<float> (0.0f, 10.0f, 0.1f), 5.0f, A().withStringFromValueFunction (zeroTen)));
+    ps.push_back (std::make_unique<B> (juce::ParameterID { "plosiveOn", 2 }, "Plosive On", false));
+    ps.push_back (std::make_unique<F> (juce::ParameterID { "plosiveStrength", 2 }, "Plosive Strength", juce::NormalisableRange<float> (0.0f, 10.0f, 0.1f), 5.0f, A().withStringFromValueFunction (zeroTen)));
+    ps.push_back (std::make_unique<F> (juce::ParameterID { "plosiveSens", 2 }, "Plosive Sensitivity", juce::NormalisableRange<float> (0.0f, 10.0f, 0.1f), 5.0f, A().withStringFromValueFunction (zeroTen)));
+    ps.push_back (std::make_unique<F> (juce::ParameterID { "plosiveFreq", 2 }, "Plosive Frequency Limit", juce::NormalisableRange<float> (50.0f, 500.0f, 1.0f, 0.6f), 200.0f,
+                                       A().withLabel ("Hz").withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)) + " Hz"; })));
     ps.push_back (myp::GainMatch::makeParameter());
     ps.push_back (plink::makeGroupParameter (1));
     return { ps.begin(), ps.end() };
+}
+
+const std::vector<std::pair<juce::String, int>>& NoiseOutProcessor::detailParams()
+{
+    static const std::vector<std::pair<juce::String, int>> v {
+        { "humWidth", 0 }, { "noiseGentle", 1 },
+        { "roomBandLow", 2 }, { "roomBandLowMid", 2 }, { "roomBandHighMid", 2 }, { "roomBandHigh", 2 },
+        { "mouthSkew", 3 }, { "breathSens", 3 }, { "plosiveSens", 3 }, { "plosiveFreq", 3 } };
+    return v;
 }
 
 bool NoiseOutProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -95,6 +132,13 @@ nzo::Knobs NoiseOutProcessor::currentKnobs() const
     k.roomTail = p[pRoomTail]->load();
     k.outDb = p[pOut]->load();
     k.delta = p[pDelta]->load() > 0.5f;
+    k.noiseMusic = p[pNoiseOpt]->load() > 0.5f;
+    k.noiseGentle = p[pNoiseGentle]->load() > 0.5f;
+    k.roomBand[0] = p[pRoomB0]->load(); k.roomBand[1] = p[pRoomB1]->load(); k.roomBand[2] = p[pRoomB2]->load(); k.roomBand[3] = p[pRoomB3]->load();
+    k.humWidthQ = p[pHumWidth]->load();
+    k.mouthOn = p[pMouthOn]->load() > 0.5f; k.mouthSens = p[pMouthSens]->load(); k.mouthSkew = p[pMouthSkew]->load();
+    k.breathOn = p[pBreathOn]->load() > 0.5f; k.breathGainDb = -p[pBreathRed]->load(); k.breathSens = p[pBreathSens]->load();
+    k.plosiveOn = p[pPlosOn]->load() > 0.5f; k.plosiveStrength = p[pPlosStr]->load(); k.plosiveSens = p[pPlosSens]->load(); k.plosiveFreqHz = p[pPlosFreq]->load();
     k.learnStart = learnStartSeq.load();
     k.learnStop = learnStopSeq.load();
     return k;
@@ -198,6 +242,7 @@ void NoiseOutProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     const juce::ScopedLock sl (stateLock);
     auto st = apvts.copyState();
+    st.setProperty (kVersionProp, 2, nullptr);
     saveExtraState (st);
     gainMatch.saveTo (st);
     if (auto xml = st.createXml())
@@ -210,7 +255,11 @@ void NoiseOutProcessor::setStateInformation (const void* data, int sizeInBytes)
         if (xml->hasTagName (apvts.state.getType()))
         {
             const juce::ScopedLock sl (stateLock);
+            const bool fromV1 = ! xml->hasAttribute (kVersionProp);
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            // 1.0.0 で保存した曲: NOISE は DIALOGUE のまま（新しく挿したときの初期値 MUSIC にすると音が変わるため）
+            if (fromV1)
+                if (auto* r = apvts.getParameter ("noiseOptimize")) r->setValueNotifyingHost (r->convertTo0to1 (0.0f));
             if (! apvts.state.hasProperty (kProfileProp)) engine.clearProfile();
             loadExtraState (apvts.state);
             gainMatch.loadFrom (apvts.state);
@@ -226,11 +275,17 @@ namespace
         { "Init (noise only, like the defaults)",  "" },
         { "Home Vocal + Air Conditioner",          "noiseOn=1,noiseMode=0,noiseReduction=14,noiseThreshold=0" },
         { "Home Vocal - Room Echo",                "noiseOn=1,noiseReduction=10,roomOn=1,roomReduction=8,roomTail=0.8" },
-        { "Narration / Podcast",                   "noiseOn=1,noiseReduction=18,noiseThreshold=2,roomOn=1,roomReduction=6,roomTail=0.7" },
+        { "Narration / Podcast",                   "noiseOn=1,noiseOptimize=0,noiseReduction=18,noiseThreshold=2,roomOn=1,roomReduction=6,roomTail=0.7,"
+                                                   "mouthOn=1,mouthSens=4,breathOn=1,breathReduction=10,plosiveOn=1,plosiveStrength=5" },
         { "Guitar / Bass Line - Hum",              "humOn=1,humFreq=0,humReduction=60,humHarmonics=12,noiseOn=1,noiseReduction=8,noiseThreshold=-4" },
         { "Amp Buzz (many harmonics)",             "humOn=1,humFreq=0,humReduction=60,humHarmonics=16,noiseOn=0" },
-        { "Gentle (just a little)",                "noiseOn=1,noiseReduction=6,noiseThreshold=-4" },
+        { "Gentle (just a little)",                "noiseOn=1,noiseReduction=6,noiseThreshold=-4,noiseGentle=1" },
         { "Big Room - Dry It Up",                  "noiseOn=0,roomOn=1,roomReduction=14,roomTail=2.0" },
+        // 1.1.0 から（DETAIL の値も入れる）
+        { "Small Boxy Room (muddy)",               "noiseOn=0,roomOn=1,roomReduction=10,roomTail=0.5,roomBandLowMid=8,roomBandHigh=5" },
+        { "Bright Bathroom-like Echo",             "noiseOn=0,roomOn=1,roomReduction=12,roomTail=1.2,roomBandLow=4,roomBandHighMid=7,roomBandHigh=8" },
+        { "Vocal Clean-up: Clicks + Breaths",      "noiseOn=1,noiseReduction=8,mouthOn=1,mouthSens=5,breathOn=1,breathReduction=8" },
+        { "Plosive Fix (p / b pops)",              "noiseOn=0,plosiveOn=1,plosiveStrength=6" },
     };
 }
 
