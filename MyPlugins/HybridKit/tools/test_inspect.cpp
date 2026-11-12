@@ -5,7 +5,7 @@
 //   processBlock のイベントの置き方・サンプルレート変換・モノ出力 / キットの受け渡し（pendingKit・toRetire・retiredKit）/ Loader::run
 //
 // ビルド: clang++ -std=c++17 -O2 -o test_inspect test_inspect.cpp
-// 使い方: test_inspect <rates|clicks|handoff|loader|prefetch|zones|edm|cpu|extreme|all>
+// 使い方: test_inspect <rates|clicks|handoff|loader|prefetch|zones|edm|cpu|extreme|multi|all>
 //   rates    … 44.1 / 48 / 88.2 / 96 / 32 / 176.4 / 192 kHz × ブロック 1 / 37 / 512 / 4096 / 8192、モノ。NaN・大きさ・遅れの申告・ブロックで変わらないか・メモリ確保
 //   clicks   … つまみの急な変化（ブロックの頭にイベントがあると 1 サンプルで変わる）、LENGTH 99→100、SOUND の切り替え、キットの切り替え
 //   handoff  … キットを A→B→C・合成キット 12 個を続けて替えたとき、消し忘れ・急に切れる音・先読みの途中で消さないか（写し）
@@ -14,6 +14,7 @@
 //   zones    … 全キットの録音の終わり（切れ目のプチ）と、頭 → 尾のつなぎ目の山・谷・二度鳴り（refineSplices の前 → 後）
 //   edm      … 全キットでサブ・EDM スネアの自動の大きさの範囲、サイドスティックにクラップ、BLEND 50 % の低音
 //   cpu      … 声を多くした重い設定での CPU（44.1 / 48 / 96 / 192 kHz）
+//   multi    … マルチアウト（0.2.0）: 出口の和 = Stereo・つながっていない出口・モノの Main・出口の数の変化・出口の切り替え・リセット・CPU
 //   extreme  … つまみを全部端、無音、キットなし、prepare のやり直し
 #include "../Source/KitEngine.h"
 #include "../Source/Resampler.h"
@@ -134,19 +135,45 @@ static std::vector<TEv> denseGroove (int bars = 8)
 }
 
 //==============================================================================
-// 写し: HybridKitProcessor::processBlock の「イベント → 鳴らす → サンプルレート変換 → 出力」
+// 写し: HybridKitProcessor::processBlock の「イベント → 出口の割り当て → 鳴らす → 出口ごとのサンプルレート変換 → 出口」（0.2.0 マルチアウト）
 struct HEv { int offset; uint8_t st, d1, d2; };
 
 struct HostSim
 {
+    static constexpr int K = Engine::maxOuts;
     Engine engine;
-    StreamResampler rs;
+    std::array<StreamResampler, K> resamplers;
+    std::array<std::vector<float>, 2 * K> ibuf;
     std::vector<float> tmpL, tmpR;
-    HostSim() { tmpL.assign ((size_t) Engine::maxBlock, 0.0f); tmpR.assign ((size_t) Engine::maxBlock, 0.0f); engine.prepare (44100.0); rs.setup (44100.0, 44100.0); }
-    void prepare (double sr) { engine.prepare (44100.0); rs.setup (44100.0, sr); }   // prepareToPlay
-    int latency() const { return rs.latencyOut(); }
+    // ホスト（Logic）が決めるバスの形: getBusCount (false)、各バスの isEnabled・getNumberOfChannels
+    int busCount = 1;
+    std::array<bool, K> enabled {};
+    std::array<int, K> chans {};
+    std::array<bool, 6> sep {};   // sepKick / sepSnare / sepToms / sepHiHat / sepCym / sepRoom
+    int connected = 0;            // connectedOutCount
 
-    void process (float* outL, float* outR, int n, const HEv* ev, int ne)
+    HostSim()
+    {
+        tmpL.assign ((size_t) Engine::maxBlock, 0.0f); tmpR.assign ((size_t) Engine::maxBlock, 0.0f);
+        for (auto& b : ibuf) b.assign ((size_t) Engine::maxBlock, 0.0f);
+        engine.prepare (44100.0);
+        for (auto& r : resamplers) r.setup (44100.0, 44100.0);
+        setLayout (1, false);
+    }
+    void prepare (double sr) { engine.prepare (44100.0); for (auto& r : resamplers) r.setup (44100.0, sr); }   // prepareToPlay
+    int latency() const { return resamplers[0].latencyOut(); }
+    // バスの形（Logic の Stereo = 1 本、Multi Output = 7 本）。mainMono = Main がモノ、off = 無効にするバスの番号
+    void setLayout (int count, bool mainMono, const std::vector<int>& off = {})
+    {
+        busCount = std::clamp (count, 1, K);
+        for (int b = 0; b < K; ++b) { enabled[(size_t) b] = b < busCount; chans[(size_t) b] = b < busCount ? 2 : 0; }
+        if (mainMono) chans[0] = 1;
+        for (int b : off) if (b > 0 && b < K) { enabled[(size_t) b] = false; chans[(size_t) b] = 0; }
+    }
+    // 写し: reset() → 次の processBlock の頭（resetRequested）
+    void hostReset() { engine.hardReset(); for (auto& r : resamplers) r.reset(); }
+
+    void process (float* const* buf, int bufChans, int n, const HEv* ev, int ne)
     {
         auto apply = [this] (const HEv& e)
         {
@@ -154,7 +181,47 @@ struct HostSim
             if (st == 0x90 && e.d2 > 0) engine.noteOn (e.d1, e.d2);
             else if (st == 0xb0) engine.controller (e.d1, e.d2);
         };
-        if (rs.isBypass())
+        // ---- 出口（つながっている出口だけ書く） ----
+        std::array<float*, 2 * K> host {};
+        int conn = 0;
+        const int numBuses = std::min (K, busCount);
+        for (int b = 0; b < numBuses; ++b)
+        {
+            if (! enabled[(size_t) b] || chans[(size_t) b] < 1) continue;
+            int ch0 = 0;   // getChannelIndexInProcessBlockBuffer（前の有効なバスのチャンネル数の合計）
+            for (int q = 0; q < b; ++q) if (enabled[(size_t) q]) ch0 += chans[(size_t) q];
+            if (ch0 < 0 || ch0 >= bufChans) continue;
+            host[(size_t) (2 * b)] = buf[ch0];
+            host[(size_t) (2 * b + 1)] = chans[(size_t) b] > 1 && ch0 + 1 < bufChans ? buf[ch0 + 1] : nullptr;
+            ++conn;
+        }
+        connected = conn;
+        {
+            auto has = [&] (int o) { return o < numBuses && host[(size_t) (2 * o)] != nullptr; };
+            static constexpr int groupOut[] = { Engine::OutKick, Engine::OutSnare, Engine::OutToms, Engine::OutHiHat, Engine::OutCymbals };
+            std::array<int, NumPieces> direct {}, room {};
+            const bool roomOwn = sep[5] && has (Engine::OutRoom);
+            for (int p = 0; p < NumPieces; ++p)
+            {
+                const int g = groupOf (p);
+                const int o = groupOut[g];
+                direct[(size_t) p] = sep[(size_t) g] && has (o) ? o : (int) Engine::OutMain;
+                room[(size_t) p] = roomOwn ? (int) Engine::OutRoom : direct[(size_t) p];
+            }
+            engine.setRouting (direct, room);
+        }
+        std::array<float*, 2 * K> iptr {};
+        for (size_t k = 0; k < iptr.size(); ++k) iptr[k] = ibuf[k].data();
+        auto writeHost = [&] (int b, int pos, const float* l, const float* r, int c)
+        {
+            float* hl = host[(size_t) (2 * b)];
+            float* hr = host[(size_t) (2 * b + 1)];
+            if (hl == nullptr) return;
+            if (hr != nullptr) { std::copy (l, l + c, hl + pos); std::copy (r, r + c, hr + pos); }
+            else for (int i = 0; i < c; ++i) hl[pos + i] = 0.5f * (l[i] + r[i]);
+        };
+        auto& rs0 = resamplers[0];
+        if (rs0.isBypass())
         {
             int pos = 0, idx = 0;
             while (pos < n)
@@ -162,40 +229,50 @@ struct HostSim
                 while (idx < ne && ev[idx].offset <= pos) apply (ev[idx++]);
                 const int end = idx < ne ? std::min (n, ev[idx].offset) : n;
                 const int c = std::max (1, std::min (end - pos, Engine::maxBlock));
-                engine.render (tmpL.data(), tmpR.data(), c);
-                for (int i = 0; i < c; ++i)
-                {
-                    if (outR != nullptr) { outL[pos + i] = tmpL[(size_t) i]; outR[pos + i] = tmpR[(size_t) i]; }
-                    else outL[pos + i] = 0.5f * (tmpL[(size_t) i] + tmpR[(size_t) i]);
-                }
+                engine.render (iptr.data(), K, c);
+                for (int b = 0; b < numBuses; ++b) writeHost (b, pos, iptr[(size_t) (2 * b)], iptr[(size_t) (2 * b + 1)], c);
                 pos += c;
             }
             while (idx < ne) apply (ev[idx++]);
         }
         else
         {
-            const int64_t base = rs.outputPos();
-            const int64_t need = rs.needInputUpTo (n);
+            const int64_t base = rs0.outputPos();
+            const int64_t need = rs0.needInputUpTo (n);
             int idx = 0;
-            while (rs.inputWritten() < need)
+            while (rs0.inputWritten() < need)
             {
-                while (idx < ne && rs.eventIndexFor (base + ev[idx].offset) <= rs.inputWritten()) apply (ev[idx++]);
+                while (idx < ne && rs0.eventIndexFor (base + ev[idx].offset) <= rs0.inputWritten()) apply (ev[idx++]);
                 int64_t until = need;
-                if (idx < ne) until = std::min (until, rs.eventIndexFor (base + ev[idx].offset));
-                const int c = (int) std::max<int64_t> (1, std::min<int64_t> (Engine::maxBlock, until - rs.inputWritten()));
-                engine.render (tmpL.data(), tmpR.data(), c);
-                rs.push (tmpL.data(), tmpR.data(), c);
+                if (idx < ne) until = std::min (until, rs0.eventIndexFor (base + ev[idx].offset));
+                const int c = (int) std::max<int64_t> (1, std::min<int64_t> (Engine::maxBlock, until - rs0.inputWritten()));
+                engine.render (iptr.data(), K, c);
+                for (int k = 0; k < K; ++k) resamplers[(size_t) k].push (iptr[(size_t) (2 * k)], iptr[(size_t) (2 * k + 1)], c);
             }
             while (idx < ne) apply (ev[idx++]);
-            if (outR != nullptr) rs.produce (outL, outR, n);
-            else
-                for (int pos = 0; pos < n; pos += Engine::maxBlock)
-                {
-                    const int c = std::min (Engine::maxBlock, n - pos);
-                    rs.produce (tmpL.data(), tmpR.data(), c);
-                    for (int i = 0; i < c; ++i) outL[pos + i] = 0.5f * (tmpL[(size_t) i] + tmpR[(size_t) i]);
-                }
+            for (int k = 0; k < K; ++k)
+            {
+                auto& rs = resamplers[(size_t) k];
+                float* hl = k < numBuses ? host[(size_t) (2 * k)] : nullptr;
+                float* hr = k < numBuses ? host[(size_t) (2 * k + 1)] : nullptr;
+                if (hl == nullptr) { rs.skip (n); continue; }
+                if (hr != nullptr) rs.produce (hl, hr, n);
+                else
+                    for (int pos = 0; pos < n; pos += Engine::maxBlock)
+                    {
+                        const int c = std::min (Engine::maxBlock, n - pos);
+                        rs.produce (tmpL.data(), tmpR.data(), c);
+                        for (int i = 0; i < c; ++i) hl[pos + i] = 0.5f * (tmpL[(size_t) i] + tmpR[(size_t) i]);
+                    }
+            }
         }
+    }
+    // 出口 1 本（Stereo かモノ）で鳴らす（前からのテスト用）
+    void process (float* outL, float* outR, int n, const HEv* ev, int ne)
+    {
+        setLayout (1, outR == nullptr);
+        float* b[2] = { outL, outR };
+        process (b, outR == nullptr ? 1 : 2, n, ev, ne);
     }
 };
 
@@ -1238,6 +1315,204 @@ static void testZones()
 }
 
 //==============================================================================
+// multi: マルチアウト（0.2.0）。出口ごとの和 = Stereo、つながっていない出口・モノの Main、出口の数の変化、切り替えのプチ、リセット、CPU
+// 出口を 2*K 本のチャンネルとして持つ（バス b → [2b] [2b+1]。モノの Main は [0] だけ。無効なバスは 0 のまま）
+static void runHostMulti (HostSim& h, const std::vector<TEv>& ev, double sr, int block, double totalSec, const Settings& base,
+                          std::vector<std::vector<float>>& ch, const BlockHook& hook = {})
+{
+    constexpr int K = HostSim::K;
+    const size_t N = (size_t) (totalSec * sr);
+    ch.assign (2 * K, std::vector<float> (N, 0.0f));
+    size_t k = 0;
+    std::vector<HEv> be; be.reserve (4096);
+    for (size_t pos = 0; pos < N; pos += (size_t) block)
+    {
+        const int n = (int) std::min<size_t> ((size_t) block, N - pos);
+        be.clear();
+        while (k < ev.size() && (size_t) std::llround (ev[k].sec * sr) < pos + (size_t) n)
+        {
+            const int64_t at = std::llround (ev[k].sec * sr);
+            be.push_back ({ (int) std::clamp<int64_t> (at - (int64_t) pos, 0, n - 1), ev[k].st, ev[k].d1, ev[k].d2 });
+            ++k;
+        }
+        if (hook) hook ((int64_t) pos, n);
+        h.engine.setSettings (base);
+        std::array<float*, 2 * K> buf {};
+        int bc = 0;
+        for (int b = 0; b < h.busCount; ++b)
+            if (h.enabled[(size_t) b])
+                for (int c = 0; c < h.chans[(size_t) b]; ++c) buf[(size_t) bc++] = ch[(size_t) (2 * b + c)].data() + pos;
+        gCountAllocs = gMeasureAllocs;
+        h.process (buf.data(), bc, n, be.data(), (int) be.size());
+        gCountAllocs = false;
+    }
+}
+
+static double maxStep (const std::vector<float>& x, size_t from, size_t to)
+{
+    double m = 0; for (size_t i = std::max<size_t> (1, from); i < std::min (to, x.size()); ++i) m = std::max (m, (double) std::abs (x[i] - x[i - 1]));
+    return m;
+}
+
+static void testMulti (Kit& kit)
+{
+    constexpr int K = HostSim::K;
+    static const char* outN[] = { "Main", "Kick", "Snare", "Room", "Toms", "Hi-Hat", "Cym" };
+    printf ("\n== マルチアウト（0.2.0、processBlock の写し）: 出口の和 = Stereo・つながっていない出口・モノの Main・出口の数の変化・切り替え・リセット・CPU ==\n");
+    const auto ev = popGroove();
+    Settings st; st.kickBlend = 1; st.snareBlend = 1;
+    analyzeEdm (kit, st);
+    const double total = ev.back().sec + 2.0;
+
+    // (1) 出口の和 = Stereo（1 本）。ブロックの大きさは同じにして比べる（変換ありだとブロックの頭のイベントが中の 1 サンプルずれうるため）
+    struct Case { const char* name; std::array<bool, 6> sep; std::vector<int> off; bool mono; int block; };
+    const Case cases[] = {
+        { "スイッチ全部 OFF（7 本つなぐ）", { 0, 0, 0, 0, 0, 0 }, {}, false, 256 },
+        { "キックだけ分ける", { 1, 0, 0, 0, 0, 0 }, {}, false, 37 },
+        { "ルームだけ分ける", { 0, 0, 0, 0, 0, 1 }, {}, false, 512 },
+        { "全部分ける（5 組＋ルーム）", { 1, 1, 1, 1, 1, 1 }, {}, false, 4096 },
+        { "全部分ける・Snare と Hi-Hat の出口が無効", { 1, 1, 1, 1, 1, 1 }, { 2, 5 }, false, 256 },
+        { "全部分ける・Main がモノ", { 1, 1, 1, 1, 1, 1 }, {}, true, 256 },
+    };
+    for (double sr : { 44100.0, 48000.0 })
+        for (auto& c : cases)
+        {
+            std::vector<float> rL, rR;
+            { auto h = std::make_unique<HostSim>(); h->prepare (sr); h->engine.setKit (&kit); runHost (*h, ev, sr, c.block, total, st, rL, rR); }
+            auto h = std::make_unique<HostSim>(); h->prepare (sr); h->engine.setKit (&kit);
+            h->setLayout (K, c.mono, c.off);
+            h->sep = c.sep;
+            std::vector<std::vector<float>> o;
+            gAllocs = 0; gMeasureAllocs = true;
+            runHostMulti (*h, ev, sr, c.block, total, st, o);
+            gMeasureAllocs = false;
+            const long allocs = gAllocs.load();
+            double maxDiff = 0; bool fin = true;
+            for (size_t i = 0; i < rL.size(); ++i)
+            {
+                if (c.mono)
+                {
+                    double m = o[0][i]; for (int b = 1; b < K; ++b) m += 0.5 * ((double) o[(size_t) (2 * b)][i] + o[(size_t) (2 * b + 1)][i]);
+                    maxDiff = std::max (maxDiff, std::abs (m - 0.5 * ((double) rL[i] + rR[i])));
+                }
+                else
+                {
+                    double sl = 0, sr2 = 0; for (int b = 0; b < K; ++b) { sl += o[(size_t) (2 * b)][i]; sr2 += o[(size_t) (2 * b + 1)][i]; }
+                    maxDiff = std::max ({ maxDiff, std::abs (sl - rL[i]), std::abs (sr2 - rR[i]) });
+                }
+                for (int q = 0; q < 2 * K; ++q) fin = fin && std::isfinite (o[(size_t) q][i]);
+            }
+            std::string pk;
+            for (int b = 0; b < K; ++b)
+            {
+                const float p = peakOf (o[(size_t) (2 * b)], o[(size_t) (2 * b + 1)]);
+                char t[48]; snprintf (t, sizeof t, "%s %s ", outN[b], p > 0 ? std::to_string ((int) std::lround (dB (p))).c_str() : "無音"); pk += t;
+            }
+            printf ("     %.1f kHz・ブロック %4d・%s: 出口の和と Stereo の差の最大 %.1e、つながった出口 %d、確保 %ld 回 | ピーク dBFS: %s\n", sr / 1000, c.block, c.name, maxDiff, h->connected, allocs, pk.c_str());
+            check (fin && maxDiff < 1e-5 && allocs == 0, std::string ("  ") + c.name + ": 出口の和が Stereo と同じ（二重・抜けなし）・NaN なし・確保なし");
+            if (c.sep[0] && c.sep[1] && c.sep[2] && c.sep[3] && c.sep[4] && c.sep[5] && c.off.empty() && ! c.mono)
+                check (peakOf (o[0], o[1]) == 0.0f, "  全部分けたら Main は無音");
+        }
+
+    // (2) 出口の数が変わる（Logic の Stereo ⇄ Multi Output。Logic は止めて初期化し直す＝prepare）: 1 本 → 7 本（全部分ける）→ 1 本
+    for (double sr : { 44100.0, 48000.0 })
+    {
+        auto h = std::make_unique<HostSim>(); h->prepare (sr); h->engine.setKit (&kit);
+        auto r = std::make_unique<HostSim>(); r->prepare (sr); r->engine.setKit (&kit);   // 同じ所で prepare する Stereo（比べる用）
+        h->sep = { 1, 1, 1, 1, 1, 1 };
+        const int64_t t1 = (int64_t) (5.0 * sr), t2 = (int64_t) (11.0 * sr);
+        bool d1 = false, d2 = false;
+        int connA = 0, connB = 0, connC = 0;
+        auto hookH = [&] (int64_t pos, int)
+        {
+            if (! d1 && pos >= t1) { d1 = true; connA = h->connected; h->setLayout (K, false); h->prepare (sr); }
+            if (! d2 && pos >= t2) { d2 = true; connB = h->connected; h->setLayout (1, false); h->prepare (sr); }
+        };
+        std::vector<std::vector<float>> o;
+        runHostMulti (*h, ev, sr, 256, total, st, o, [&] (int64_t pos, int n) { hookH (pos, n); });
+        connC = h->connected;
+        bool r1 = false, r2 = false;
+        std::vector<std::vector<float>> ro;
+        runHostMulti (*r, ev, sr, 256, total, st, ro, [&] (int64_t pos, int) { if (! r1 && pos >= t1) { r1 = true; r->prepare (sr); } if (! r2 && pos >= t2) { r2 = true; r->prepare (sr); } });
+        double maxDiff = 0; bool fin = true;
+        for (size_t i = 0; i < o[0].size(); ++i)
+        {
+            double sl = 0, sr2 = 0; for (int b = 0; b < K; ++b) { sl += o[(size_t) (2 * b)][i]; sr2 += o[(size_t) (2 * b + 1)][i]; }
+            maxDiff = std::max ({ maxDiff, std::abs (sl - ro[0][i]), std::abs (sr2 - ro[1][i]) });
+            for (int q = 0; q < 2 * K; ++q) fin = fin && std::isfinite (o[(size_t) q][i]);
+        }
+        const float kickPk = peakOf (std::vector<float> (o[2].begin() + t1, o[2].begin() + t2), std::vector<float> (o[3].begin() + t1, o[3].begin() + t2));
+        printf ("     %.1f kHz: 1 本 → 7 本（5 秒）→ 1 本（11 秒）、それぞれ prepare し直し: 出口の和と Stereo の差の最大 %.1e、7 本の間の Kick の出口 %.1f dBFS、最後のつながった出口 %d（%d→%d→%d）\n",
+                sr / 1000, maxDiff, dB (kickPk), connC, connA, connB, connC);
+        check (fin && maxDiff < 1e-5 && kickPk > 0, "  出口の数が 1 ↔ 7 に変わっても、和は Stereo と同じ・NaN なし");
+    }
+
+    // (3) 出口のスイッチを鳴っている途中で替える（低い正弦波のサブだけ＝段差が見えやすい。808 Long、マイクは全部 −inf）
+    for (double sr : { 44100.0, 48000.0 })
+        for (int variant = 0; variant < 2; ++variant)
+        {
+            Settings s2; s2.kickBlend = 1; s2.kickSound = 1; s2.close = s2.oh = s2.room = s2.bleed = 0;
+            analyzeEdm (kit, s2);
+            std::vector<TEv> one { { 0.05, 0x90, 36, 120 } };
+            const int block = 128;
+            const int64_t tOn = (int64_t) std::llround (0.25 * sr / block) * block;
+            const int64_t tOff = variant == 0 ? (int64_t) std::llround (0.50 * sr / block) * block : tOn + 2 * block;   // 1: 15 ms 以内にもう一度
+            auto h = std::make_unique<HostSim>(); h->prepare (sr); h->engine.setKit (&kit);
+            h->setLayout (K, false);
+            std::vector<std::vector<float>> o;
+            runHostMulti (*h, one, sr, block, 0.8, s2, o, [&] (int64_t pos, int) { h->sep[0] = pos >= tOn && pos < tOff; });
+            std::vector<float> rL, rR;
+            { auto r = std::make_unique<HostSim>(); r->prepare (sr); r->engine.setKit (&kit); runHost (*r, one, sr, block, 0.8, s2, rL, rR); }
+            double maxDiff = 0; for (size_t i = 0; i < rL.size(); ++i) maxDiff = std::max (maxDiff, (double) std::abs (o[0][i] + o[2][i] - rL[i]));
+            const size_t lat = (size_t) h->latency();
+            const double normal = maxStep (rL, (size_t) tOn - 2000, (size_t) tOn);
+            const double stepMainOn = maxStep (o[0], (size_t) tOn + lat - 4, (size_t) tOn + lat + 800), stepKickOn = maxStep (o[2], (size_t) tOn + lat - 4, (size_t) tOn + lat + 800);
+            const double stepMainOff = maxStep (o[0], (size_t) tOff + lat - 4, (size_t) tOff + lat + 800), stepKickOff = maxStep (o[2], (size_t) tOff + lat - 4, (size_t) tOff + lat + 800);
+            printf ("     %.1f kHz・%s: Main / Kick の出口の 1 サンプルの段差 ON の所 %.4f / %.4f、OFF の所 %.4f / %.4f（ふだんの最大 %.4f）、Main＋Kick と Stereo の差 %.1e\n",
+                    sr / 1000, variant == 0 ? "キックの出口を ON → 0.25 秒後に OFF" : "ON → 5.8 ms 後に OFF（15 ms の移しの途中）", stepMainOn, stepKickOn, stepMainOff, stepKickOff, normal, maxDiff);
+            if (variant == 0) check (std::max ({ stepMainOn, stepKickOn, stepMainOff, stepKickOff }) < normal * 3.0 && maxDiff < 1e-5, "  出口を替えても、それぞれの出口にプチが出ない（15 ms で移す）");
+            else check (std::max ({ stepMainOff, stepKickOff }) < normal * 3.0, "  移している途中でもう一度替えても、出口にプチが出ない");
+        }
+
+    // (4) Logic のリセット（reset → hardReset）の直後の一打: キックを分けているのに、頭が Main に出ないか
+    for (double sr : { 44100.0, 48000.0 })
+    {
+        std::vector<TEv> evs { { 0.05, 0x90, 36, 120 }, { 1.0 + 0.0, 0x90, 36, 120 } };   // 2 打目はリセットの直後（ブロックの頭）
+        const int block = 256;
+        const int64_t tReset = (int64_t) std::llround (1.0 * sr / block) * block;
+        evs[1].sec = (double) tReset / sr;
+        for (int doReset = 0; doReset < 2; ++doReset)
+        {
+            auto h = std::make_unique<HostSim>(); h->prepare (sr); h->engine.setKit (&kit);
+            h->setLayout (K, false); h->sep = { 1, 0, 0, 0, 0, 0 };
+            std::vector<std::vector<float>> o;
+            runHostMulti (*h, evs, sr, block, 1.5, st, o, [&] (int64_t pos, int) { if (doReset && pos == tReset) h->hostReset(); });
+            const size_t a = (size_t) tReset + (size_t) h->latency(), b = a + (size_t) (0.02 * sr);
+            const double main = rms (o[0], a, b) + rms (o[1], a, b), kick = rms (o[2], a, b) + rms (o[3], a, b);
+            printf ("     %.1f kHz・%s: 2 打目の最初の 20 ms、Main %.1f dBFS / Kick の出口 %.1f dBFS（Main に漏れた分 %+.1f dB）\n",
+                    sr / 1000, doReset ? "リセットの直後" : "リセットなし", dB (main / 2), dB (kick / 2), dB (main) - dB (kick));
+            if (doReset) check (dB (main) - dB (kick) < -40.0, "  リセットの直後でも、分けた部品の頭が Main に漏れない");
+        }
+    }
+
+    // (5) CPU: 重い譜面、7 本つないで全部分ける vs 1 本
+    {
+        Settings s3; s3.kickBlend = 1; s3.snareBlend = 1; for (auto& t : s3.tune) t = 0.5f; for (auto& l : s3.length) l = 0.6f;
+        analyzeEdm (kit, s3);
+        const auto dev = denseGroove (8);
+        const double tot = dev.back().sec + 2.0;
+        for (double sr : { 44100.0, 48000.0, 96000.0, 192000.0 })
+        {
+            double ms1 = 0, ms7 = 0;
+            { auto h = std::make_unique<HostSim>(); h->prepare (sr); h->engine.setKit (&kit); std::vector<float> L, R; const auto t0 = Clock::now(); runHost (*h, dev, sr, 256, tot, s3, L, R); ms1 = msSince (t0); }
+            { auto h = std::make_unique<HostSim>(); h->prepare (sr); h->engine.setKit (&kit); h->setLayout (K, false); h->sep = { 1, 1, 1, 1, 1, 1 };
+              std::vector<std::vector<float>> o; const auto t0 = Clock::now(); runHostMulti (*h, dev, sr, 256, tot, s3, o); ms7 = msSince (t0); }
+            printf ("     CPU %.1f kHz: 1 本 %.1f %% / 7 本全部分ける %.1f %%（1 コアに対して、%.1f 秒の音）\n", sr / 1000, 100.0 * ms1 / (tot * 1000), 100.0 * ms7 / (tot * 1000), tot);
+        }
+    }
+}
+
+//==============================================================================
 // edm: 自動の大きさ
 static void testEdm()
 {
@@ -1401,6 +1676,7 @@ int main (int argc, char** argv)
     else if (what == "zones") testZones();
     else if (what == "edm") testEdm();
     else if (what == "cpu") testCpu();
+    else if (what == "multi") { auto kit = loadKit ("Studio Kit"); if (kit) testMulti (*kit); }
     else
     {
         auto kit = loadKit ("Studio Kit");
@@ -1413,7 +1689,7 @@ int main (int argc, char** argv)
             auto b = loadKit ("Modern Maple Kit"), c = loadKit ("Stadium Kit");
             if (b && c) testHandoff (*kit, *b, *c);
         }
-        if (what == "all") { testLoader (false); testZones(); testEdm(); testCpu(); testPrefetch(); }
+        if (what == "all") { testMulti (*kit); testLoader (false); testZones(); testEdm(); testCpu(); testPrefetch(); }
     }
     printf (gFails ? "\n%d 個 NG\n" : "\n全部 OK\n", gFails);
     return gFails ? 1 : 0;

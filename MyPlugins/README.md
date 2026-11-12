@@ -31,7 +31,7 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 | Sample Sculptor | SampleSculptor | サンプルを落として加工し、ドラッグで Logic に戻す（AU 音源） |
 | AIO Guitar | AIOGuitar | 自分のエレキを録った音で鳴らす全部入りギター音源（AU 音源＋単体アプリ） |
 | Vox Chop | VoxChop | 自分の声を別の声（女性・男性・中性・子ども・ささやき・ロボット…）に変えて、切って鍵盤で弾く（AU 音源） |
-| Hybrid Kit | HybridKit | 生ドラム（Logic の Drum Kit Designer の録音）に EDM の音（808 のサブ・クラップ）を部品ごとに重ねるドラム音源。Drummer トラックでそのまま鳴る（AU 音源） |
+| Hybrid Kit | HybridKit | 生ドラム（Logic の Drum Kit Designer の録音）に EDM の音（808 のサブ・クラップ）を部品ごとに重ねるドラム音源。Drummer トラックでそのまま鳴る。キック・スネアなどを別の出口へ（マルチアウト）（AU 音源） |
 
 ## アプリ（.app）
 | 名前 | フォルダ | 何用か |

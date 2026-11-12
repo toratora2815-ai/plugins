@@ -60,6 +60,23 @@
   強さ 45 以下は鳴らさない（70 で全部）。大きさは生スネアの全マイクと同じ帯域（Clap 系 400 Hz〜8 kHz、909 は 150 Hz〜8 kHz）・150 ms のエネルギーに合わせる（BLEND 100 % で同じ）
 - 録音がない（キットが読めない）ときも EDM の層だけは鳴る
 
+## マルチアウト（0.2.0）
+- 出口は 7 本のステレオ、並びは固定（Logic の Multi Output の番号・保存した曲の配線になるので変えない。足すなら後ろ）:
+  0 Main / 1 Kick / 2 Snare / 3 Room / 4 Toms / 5 Hi-Hat / 6 Cymbals（hk::Engine::OutIndex と PluginProcessor::outName）。
+  Logic の「＋」は番号順に 1 本ずつ作るので、よく分ける Kick・Snare・Room を前に（ミックスエンジニア係 2026-11-12）。EDM だけ・OH だけの出口は作らない
+  （808 はキックと合わせてあるので別々に加工すると打ち消す / OH を 1 本にすると加工したキックと加工していないキックが混ざってくし形の打ち消し）
+- 部品の出口には、その部品の近いマイク・OH・かぶり・ルームを全部入れる（出口どうしに同じ音が混ざらない＝何を挿しても位相が崩れない。録ったドラムや DKD のマイク別マルチアウトにない利点）。
+  サブはキックの出口、スネアの EDM の層はスネアの出口。ROOM を分けると全部の部品のルーム 2 本を Room の出口へ（キックのルームにも LR4 の別の組 kickSplitRoom を通すので、BLEND の入れ替えはそのまま）
+- スイッチ sepKick / sepSnare / sepToms / sepHiHat / sepCym / sepRoom（既定 OFF）。ON で、その出口がつながっているときだけ分ける（つながっていなければ Main）。
+  曲の配線なので myPresets.exclude と applyPreset（"sep" の ID は初期値に戻さない）でプリセット・UNDO から外した
+- 出口を替えたら 15 ms の直線で前の出口から移す（Route の cur / prev / left）。全部の出口の和はいつも 1 本と同じ（render.cpp のテスト、差 8.9e-8）
+- BusesProperties は Main だけ有効（JUCE の AU は enableAllBuses する）。canAddBus / canRemoveBus / canApplyBusCountChange（足すときは決まった名前・ステレオ）で、Logic が出口の数を変えられる。
+  Logic の Stereo 版で出口の数を 1 にしてくるかは未確認（してこないと、Stereo 版でスイッチを ON にした部品は聞こえない。README に書いた）
+- 変換（44.1 kHz 以外）は出口ごとの StreamResampler 7 個を同じ位置で進める（つながっていない出口は skip で位置だけ進める）。遅れは 0 番で申告（全部同じ）
+- 画面: ミキサーの下にボタン（番号付き）と、つながっている出口の数（connectedOutCount）
+- Logic 側の注意（README）: プラグインのレイテンシー補正を All に、ドラムバスは全部の出口をまとめた Aux に、Bounce in Place は Include Instrument Multi-Outputs。
+  本人のチャンネルストリップ設定「kick back」（Track）を Aux でも選べるように ~/Music/Audio Music Apps/Channel Strip Settings/Bus/ に写した（2026-11-12）
+
 ## プロセッサー（Source/PluginProcessor.cpp）
 - パラメーター（すべて版 1）: kit（選択 9 個、並びは保存された曲の番号なので変えない・足すなら後ろ）、close / oh / room / bleed（−60〜+12 dB、−60 = 切る）、output、
   <組>Vol / <組>Tune / <組>Len（組 = kick / snare / toms / hihat / cym）、kickBlend / kickSound / kickNote / snareBlend / snareSound / snareEdmTune、linkGroup
@@ -81,5 +98,6 @@
   DSP 検査係 1 回目「危ない」（A→B→A で止まる・Rods の二度鳴り・消したキットを先読みが触って落ちる ほか 11 個）→ 全部直して 2 回目「渡してよい」
   （残りの小さい 3 つ＝つなぎ方の計算の途中で選び直したら続きを計算・列が満杯のときだけ止める・空のキットはコンストラクターで用意、も直した。
   test_inspect all は OK 82。キットを読んだ直後の数秒はつなぎ方が前のまま＝書き出しの頭に出うる、EDM の自動の大きさは SOUND / NOTE を替えて 0.2〜0.35 秒で追いつく）
-- 次の版でやること（整理係・ミックスエンジニア係）: マルチアウト（キック・スネアだけに「キック迫力」など）を最初に。出口の並びは最初に決めて後から変えない。
-  Drummer の割り当てを midi-log で確かめて直したら記録を外す。ミックスの処理（コンプ・歪み）は中に作らない（Fire Box・Drum Transient を後ろに）
+- 0.2.0（2026-11-12）: マルチアウト（7 出口、部品ごとに全マイク、ROOM はまとめて別に、スイッチはプリセットで変えない）。本人「マルチアウト作って」
+- 次にやること: Drummer の割り当てを midi-log で確かめて直したら記録を外す。Logic の Stereo 版で出口の数がどうなるか確かめる。
+  ミックスの処理（コンプ・歪み）は中に作らない（Fire Box・Drum Transient を後ろに）

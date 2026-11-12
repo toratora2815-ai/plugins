@@ -7,7 +7,14 @@ namespace
 }
 
 HybridKitProcessor::HybridKitProcessor()
-    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (BusesProperties()
+                        .withOutput (outName (0), juce::AudioChannelSet::stereo(), true)
+                        .withOutput (outName (1), juce::AudioChannelSet::stereo(), false)
+                        .withOutput (outName (2), juce::AudioChannelSet::stereo(), false)
+                        .withOutput (outName (3), juce::AudioChannelSet::stereo(), false)
+                        .withOutput (outName (4), juce::AudioChannelSet::stereo(), false)
+                        .withOutput (outName (5), juce::AudioChannelSet::stereo(), false)
+                        .withOutput (outName (6), juce::AudioChannelSet::stereo(), false)),
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
     pKit = apvts.getRawParameterValue ("kit");
@@ -29,12 +36,19 @@ HybridKitProcessor::HybridKitProcessor()
     pSnareBlend = apvts.getRawParameterValue ("snareBlend");
     pSnareSound = apvts.getRawParameterValue ("snareSound");
     pSnareEdmTune = apvts.getRawParameterValue ("snareEdmTune");
+    static const char* sepIds[] = { "sepKick", "sepSnare", "sepToms", "sepHiHat", "sepCym", "sepRoom" };
+    for (size_t i = 0; i < pSep.size(); ++i)
+    {
+        pSep[i] = apvts.getRawParameterValue (sepIds[i]);
+        myPresets.exclude (sepIds[i]);   // 出口は曲の配線なので、自分のプリセット・取り消しでは変えない
+    }
 
     tmpL.assign ((size_t) hk::Engine::maxBlock, 0.0f);
     tmpR.assign ((size_t) hk::Engine::maxBlock, 0.0f);
+    for (auto& b : ibuf) b.assign ((size_t) hk::Engine::maxBlock, 0.0f);
     engine.setPrefetcher (&prefetcher);
     engine.prepare (internalRate);
-    resampler.setup (internalRate, 44100.0);
+    for (auto& r : resamplers) r.setup (internalRate, 44100.0);
     prefetcher.start();
     loader.startThread (juce::Thread::Priority::low);
     lastKitParam = juce::roundToInt (pKit->load());
@@ -51,6 +65,28 @@ HybridKitProcessor::~HybridKitProcessor()
     loader.stopThread (8000);
     prefetcher.stop();
     logStream.reset();
+}
+
+const char* HybridKitProcessor::outName (int i)
+{
+    static const char* n[] = { "Main", "Kick", "Snare", "Room", "Toms", "Hi-Hat", "Cymbals" };   // hk::Engine::OutIndex と同じ並び
+    return n[juce::jlimit (0, hk::Engine::maxOuts - 1, i)];
+}
+
+// Logic が出口を足すときも、決まった名前・ステレオで（JUCE の初期は「Output #N」になる）
+bool HybridKitProcessor::canApplyBusCountChange (bool isInput, bool isAdding, BusProperties& out)
+{
+    if (isInput) return false;
+    const int n = getBusCount (false);
+    if (isAdding)
+    {
+        if (n >= hk::Engine::maxOuts) return false;
+        out.busName = outName (n);
+        out.defaultLayout = juce::AudioChannelSet::stereo();
+        out.isActivatedByDefault = true;
+        return true;
+    }
+    return n > 1;
 }
 
 const char* HybridKitProcessor::groupId (int g)
@@ -107,6 +143,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout HybridKitProcessor::createLa
     v.push_back (std::make_unique<F> (juce::ParameterID { "snareBlend", 1 }, "Snare EDM Blend", juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 0.0f, A().withStringFromValueFunction (pct)));
     v.push_back (std::make_unique<C> (juce::ParameterID { "snareSound", 1 }, "Snare EDM Sound", snareSounds, 0));
     v.push_back (std::make_unique<F> (juce::ParameterID { "snareEdmTune", 1 }, "Snare EDM Tune", juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f, A().withStringFromValueFunction (semis)));
+    // マルチアウト: 部品ごとに「別の出口へ」（Logic で Multi Output 版を使ったときだけ効く。Stereo 版なら Main のまま）
+    v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "sepKick", 1 }, "Kick To Own Out", false));
+    v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "sepSnare", 1 }, "Snare To Own Out", false));
+    v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "sepToms", 1 }, "Toms To Own Out", false));
+    v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "sepHiHat", 1 }, "Hi-Hat To Own Out", false));
+    v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "sepCym", 1 }, "Cymbals To Own Out", false));
+    v.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "sepRoom", 1 }, "Room To Own Out", false));
     v.push_back (plink::makeGroupParameter (1));
     return { v.begin(), v.end() };
 }
@@ -136,16 +179,25 @@ hk::Settings HybridKitProcessor::readSettings() const
 
 bool HybridKitProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    const auto out = layouts.getMainOutputChannelSet();
-    return out == juce::AudioChannelSet::stereo() || out == juce::AudioChannelSet::mono();
+    if (! layouts.inputBuses.isEmpty()) return false;
+    const int n = layouts.outputBuses.size();
+    if (n < 1 || n > hk::Engine::maxOuts) return false;
+    const auto main = layouts.outputBuses.getReference (0);
+    if (main != juce::AudioChannelSet::stereo() && main != juce::AudioChannelSet::mono()) return false;
+    for (int i = 1; i < n; ++i)
+    {
+        const auto b = layouts.outputBuses.getReference (i);
+        if (! b.isDisabled() && b != juce::AudioChannelSet::stereo()) return false;
+    }
+    return true;
 }
 
 void HybridKitProcessor::prepareToPlay (double sampleRate, int)
 {
     hostRate = sampleRate > 0 ? sampleRate : 44100.0;
     engine.prepare (internalRate);
-    resampler.setup (internalRate, hostRate);
-    setLatencySamples (resampler.latencyOut());
+    for (auto& r : resamplers) r.setup (internalRate, hostRate);
+    setLatencySamples (resamplers[0].latencyOut());
 }
 
 void HybridKitProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -170,7 +222,7 @@ void HybridKitProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (resetRequested.exchange (false))
     {
         engine.hardReset();
-        resampler.reset();
+        for (auto& r : resamplers) r.reset();
     }
 
     if (auto* k = pendingKit.exchange (nullptr)) engine.setKit (k);
@@ -238,9 +290,49 @@ void HybridKitProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         else if (st == 0xb0) engine.controller (e.d1, e.d2);
     };
 
-    float* outL = buffer.getWritePointer (0);
-    float* outR = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
-    if (resampler.isBypass())
+    // ---- 出口（Logic がつないでいる出口だけ書く。つないでいない出口に分けた部品は Main に出す） ----
+    constexpr int K = hk::Engine::maxOuts;
+    std::array<float*, 2 * K> host {};
+    int connected = 0;
+    const int numBuses = juce::jmin (K, getBusCount (false));
+    for (int b = 0; b < numBuses; ++b)
+    {
+        auto* bus = getBus (false, b);
+        if (bus == nullptr || ! bus->isEnabled() || bus->getNumberOfChannels() < 1) continue;
+        const int ch0 = getChannelIndexInProcessBlockBuffer (false, b, 0);
+        if (ch0 < 0 || ch0 >= buffer.getNumChannels()) continue;
+        host[(size_t) (2 * b)] = buffer.getWritePointer (ch0);
+        host[(size_t) (2 * b + 1)] = bus->getNumberOfChannels() > 1 && ch0 + 1 < buffer.getNumChannels() ? buffer.getWritePointer (ch0 + 1) : nullptr;
+        ++connected;
+    }
+    connectedOutCount.store (connected);
+    {
+        auto has = [&] (int o) { return o < numBuses && host[(size_t) (2 * o)] != nullptr; };
+        static constexpr int groupOut[] = { hk::Engine::OutKick, hk::Engine::OutSnare, hk::Engine::OutToms, hk::Engine::OutHiHat, hk::Engine::OutCymbals };
+        std::array<int, hk::NumPieces> direct {}, room {};
+        const bool roomOwn = pSep[5]->load() > 0.5f && has (hk::Engine::OutRoom);
+        for (int p = 0; p < hk::NumPieces; ++p)
+        {
+            const int g = hk::groupOf (p);
+            const int o = groupOut[g];
+            direct[(size_t) p] = pSep[(size_t) g]->load() > 0.5f && has (o) ? o : hk::Engine::OutMain;
+            room[(size_t) p] = roomOwn ? (int) hk::Engine::OutRoom : direct[(size_t) p];
+        }
+        engine.setRouting (direct, room);
+    }
+    std::array<float*, 2 * K> iptr {};
+    for (size_t k = 0; k < iptr.size(); ++k) iptr[k] = ibuf[k].data();
+    auto writeHost = [&] (int b, int pos, const float* l, const float* r, int c)   // 中の音 → ホストの出口（モノなら平均）
+    {
+        float* hl = host[(size_t) (2 * b)];
+        float* hr = host[(size_t) (2 * b + 1)];
+        if (hl == nullptr) return;
+        if (hr != nullptr) { std::copy (l, l + c, hl + pos); std::copy (r, r + c, hr + pos); }
+        else for (int i = 0; i < c; ++i) hl[pos + i] = 0.5f * (l[i] + r[i]);
+    };
+
+    auto& rs0 = resamplers[0];
+    if (rs0.isBypass())
     {
         int pos = 0, idx = 0;
         while (pos < n)
@@ -248,41 +340,43 @@ void HybridKitProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             while (idx < ne && events[(size_t) idx].offset <= pos) apply (events[(size_t) idx++]);
             const int end = idx < ne ? juce::jmin (n, events[(size_t) idx].offset) : n;
             const int c = juce::jmax (1, juce::jmin (end - pos, hk::Engine::maxBlock));
-            engine.render (tmpL.data(), tmpR.data(), c);
-            for (int i = 0; i < c; ++i)
-            {
-                if (outR != nullptr) { outL[pos + i] = tmpL[(size_t) i]; outR[pos + i] = tmpR[(size_t) i]; }
-                else outL[pos + i] = 0.5f * (tmpL[(size_t) i] + tmpR[(size_t) i]);
-            }
+            engine.render (iptr.data(), K, c);
+            for (int b = 0; b < numBuses; ++b) writeHost (b, pos, iptr[(size_t) (2 * b)], iptr[(size_t) (2 * b + 1)], c);
             pos += c;
         }
         while (idx < ne) apply (events[(size_t) idx++]);
     }
     else
     {
-        const int64_t base = resampler.outputPos();
-        const int64_t need = resampler.needInputUpTo (n);
+        const int64_t base = rs0.outputPos();
+        const int64_t need = rs0.needInputUpTo (n);
         int idx = 0;
-        while (resampler.inputWritten() < need)
+        while (rs0.inputWritten() < need)
         {
-            while (idx < ne && resampler.eventIndexFor (base + events[(size_t) idx].offset) <= resampler.inputWritten()) apply (events[(size_t) idx++]);
+            while (idx < ne && rs0.eventIndexFor (base + events[(size_t) idx].offset) <= rs0.inputWritten()) apply (events[(size_t) idx++]);
             int64_t until = need;
-            if (idx < ne) until = juce::jmin (until, resampler.eventIndexFor (base + events[(size_t) idx].offset));
-            const int c = (int) juce::jmax<int64_t> (1, juce::jmin<int64_t> (hk::Engine::maxBlock, until - resampler.inputWritten()));
-            engine.render (tmpL.data(), tmpR.data(), c);
-            resampler.push (tmpL.data(), tmpR.data(), c);
+            if (idx < ne) until = juce::jmin (until, rs0.eventIndexFor (base + events[(size_t) idx].offset));
+            const int c = (int) juce::jmax<int64_t> (1, juce::jmin<int64_t> (hk::Engine::maxBlock, until - rs0.inputWritten()));
+            engine.render (iptr.data(), K, c);
+            for (int k = 0; k < K; ++k) resamplers[(size_t) k].push (iptr[(size_t) (2 * k)], iptr[(size_t) (2 * k + 1)], c);   // 全部の出口を同じ位置で進める
         }
         while (idx < ne) apply (events[(size_t) idx++]);
-        if (outR != nullptr) resampler.produce (outL, outR, n);
-        else
-            for (int pos = 0; pos < n; pos += hk::Engine::maxBlock)
-            {
-                const int c = juce::jmin (hk::Engine::maxBlock, n - pos);
-                resampler.produce (tmpL.data(), tmpR.data(), c);
-                for (int i = 0; i < c; ++i) outL[pos + i] = 0.5f * (tmpL[(size_t) i] + tmpR[(size_t) i]);
-            }
+        for (int k = 0; k < K; ++k)
+        {
+            auto& rs = resamplers[(size_t) k];
+            float* hl = k < numBuses ? host[(size_t) (2 * k)] : nullptr;
+            float* hr = k < numBuses ? host[(size_t) (2 * k + 1)] : nullptr;
+            if (hl == nullptr) { rs.skip (n); continue; }   // つながっていない出口は計算しない（位置だけ進める）
+            if (hr != nullptr) rs.produce (hl, hr, n);
+            else
+                for (int pos = 0; pos < n; pos += hk::Engine::maxBlock)
+                {
+                    const int c = juce::jmin (hk::Engine::maxBlock, n - pos);
+                    rs.produce (tmpL.data(), tmpR.data(), c);
+                    for (int i = 0; i < c; ++i) hl[pos + i] = 0.5f * (tmpL[(size_t) i] + tmpR[(size_t) i]);
+                }
+        }
     }
-    for (int ch = 2; ch < buffer.getNumChannels(); ++ch) buffer.clear (ch, 0, n);
     samplesSeen += n;
 }
 
@@ -481,10 +575,10 @@ void HybridKitProcessor::applyPreset (int index)
     {
         if (auto* p = apvts.getParameter (id)) p->setValueNotifyingHost (p->convertTo0to1 (value));
     };
-    // まず全部を初期値に（LINK の番号は変えない）
+    // まず全部を初期値に（LINK の番号と出口のスイッチは変えない。出口は曲の配線なので、プリセットを選んだだけでキックが Main に戻らないように）
     for (auto* p : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (p))
-            if (r->getParameterID() != "linkGroup")
+            if (r->getParameterID() != "linkGroup" && ! r->getParameterID().startsWith ("sep"))
                 r->setValueNotifyingHost (r->getDefaultValue());
     auto kit = [&] (const char* name) { set ("kit", (float) kitNames().indexOf (name)); };
     switch (index)

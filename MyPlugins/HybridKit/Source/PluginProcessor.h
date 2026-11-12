@@ -22,6 +22,14 @@ public:
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     void reset() override { resetRequested.store (true); }   // 次の processBlock で全部止める
 
+    // マルチアウト: 出口は Main / Kick / Snare / Toms / Hi-Hat / Cymbals / Room（この並びは変えない）。
+    // Logic の「Stereo」は出口 1 本、「Multi Output」は 7 本。数は Logic が決める（減らす・増やすを受ける）
+    static const char* outName (int i);
+    bool canAddBus (bool isInput) const override { return ! isInput && getBusCount (false) < hk::Engine::maxOuts; }
+    bool canRemoveBus (bool isInput) const override { return ! isInput && getBusCount (false) > 1; }
+    bool canApplyBusCountChange (bool isInput, bool isAdding, BusProperties& out) override;
+    int connectedOuts() const { return connectedOutCount.load(); }   // 画面の表示用（出口が何本つながっているか）
+
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
@@ -110,7 +118,9 @@ private:
 
     // ---- 音 ----
     hk::Engine engine;
-    hk::StreamResampler resampler;
+    std::array<hk::StreamResampler, hk::Engine::maxOuts> resamplers;   // 出口ごと（同じ位置で進める。0 番が基準）
+    std::array<std::vector<float>, 2 * hk::Engine::maxOuts> ibuf;       // 中の 44.1 kHz の出口ごとの音（maxBlock）
+    std::atomic<int> connectedOutCount { 1 };
     hk::Prefetcher prefetcher;
     static constexpr double internalRate = 44100.0;   // Drum Kit Designer の録音
     std::vector<float> tmpL, tmpR;
@@ -145,6 +155,7 @@ private:
     std::atomic<float>* pSnareBlend = nullptr;
     std::atomic<float>* pSnareSound = nullptr;
     std::atomic<float>* pSnareEdmTune = nullptr;
+    std::array<std::atomic<float>*, 6> pSep {};   // kick / snare / toms / hihat / cym / room を別の出口へ
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HybridKitProcessor)
 };

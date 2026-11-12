@@ -391,6 +391,9 @@ class Engine
 {
 public:
     static constexpr int maxBlock = 512;
+    // 出口（並びは保存した曲・Logic の Multi Output の番号になるので変えない。Logic の「＋」は番号順に 1 本ずつ作るので、
+    // よく分ける Kick・Snare・Room を前に。ミックスエンジニア係 2026-11-12）
+    enum OutIndex { OutMain, OutKick, OutSnare, OutRoom, OutToms, OutHiHat, OutCymbals, maxOuts };
     static constexpr float outputTrim = 0.63095734f;   // −4 dB（全部の部品を 127 で同時に叩いても 0 dBFS を越えにくく。DSP 検査係 2026-11-12）
     std::array<std::atomic<float>, NumPieces> hitFlash {};   // 画面の光（叩いた強さ 0..1）
 
@@ -403,7 +406,7 @@ public:
     {
         fs = internalRate;
         hardReset();
-        kickSplit[0].setup (fs, next.xover); kickSplit[1].setup (fs, next.xover); subLp.setup (fs, next.xover);
+        setupSplits (next.xover);
         first = true;
     }
 
@@ -412,7 +415,15 @@ public:
     {
         for (auto& v : voices) v.active = false;
         for (auto& b : bus) std::fill (b.begin(), b.end(), 0.0f);
-        kickSplit[0].reset(); kickSplit[1].reset(); subLp.reset();
+        for (auto& b : busRoom) std::fill (b.begin(), b.end(), 0.0f);
+        for (auto& k : kickSplit) k.reset();
+        for (auto& k : kickSplitRoom) k.reset();
+        subLp.reset();
+        for (int p = 0; p < NumPieces; ++p)   // 出口は今の割り当てのまま始める（Main から移すと、リセット直後の一打の頭が Main に漏れる。DSP 検査係）
+        {
+            rDirect[(size_t) p] = { wantDirect[(size_t) p], wantDirect[(size_t) p], 0 };
+            rRoom[(size_t) p] = { wantRoom[(size_t) p], wantRoom[(size_t) p], 0 };
+        }
         subs[0].active = subs[1].active = false;
         for (auto& c : snares) c.active = false;
     }
@@ -461,6 +472,10 @@ public:
     }
 
     void setSettings (const Settings& s) { next = s; }
+
+    // 部品ごとの出口（オーディオスレッドから毎ブロック）。direct = 近い・OH・かぶり、room = ルーム 2 本。
+    // 変わったら 15 ms で前の出口から移す（プチッとさせない）。出口の数より大きい番号は Main に出す
+    void setRouting (const std::array<int, NumPieces>& direct, const std::array<int, NumPieces>& room) { wantDirect = direct; wantRoom = room; }
 
     void allSoundOff()
     {
@@ -541,48 +556,89 @@ public:
             startSnare ((float) L.onset / (float) ratio + (float) (0.0015 * fs), f.edmGain.load(), amp, vel);
     }
 
-    // n サンプルぶん（中のサンプルレート）作る。n ≤ maxBlock
-    void render (float* outL, float* outR, int n)
+    // n サンプルぶん（中のサンプルレート）作る。n ≤ maxBlock。outs は numOuts 組のステレオ（L0, R0, L1, R1, …）。中は 0 から作る
+    void render (float* const* outs, int numOuts, int n)
     {
         n = std::max (0, std::min (n, maxBlock));
+        numOuts = std::clamp (numOuts, 1, (int) maxOuts);
         applySettingsNow();
         cur = next;
         const int ramp = (int) (0.015 * fs);
         if (std::abs (cur.xover - xoverNow) > 0.01f)
         {
             xoverNow = cur.xover;
-            kickSplit[0].setup (fs, xoverNow); kickSplit[1].setup (fs, xoverNow); subLp.setup (fs, xoverNow);
+            setupSplits (xoverNow);
         }
         // つまみは時間で一定の速さ（15 ms）で動かす（ブロックがノートで細かく切られても途切れない）
         setTargets (ramp);
         for (int i = 0; i < n; ++i)
             for (int k = 0; k < kNumSmooth; ++k) ramps[(size_t) k][(size_t) i] = sm[(size_t) k].next();
+        for (int p = 0; p < NumPieces; ++p)
+        {
+            updateRoute (rDirect[(size_t) p], wantDirect[(size_t) p], wDirect[(size_t) p].data(), n);
+            updateRoute (rRoom[(size_t) p], wantRoom[(size_t) p], wRoom[(size_t) p].data(), n);
+        }
 
-        for (int p = 0; p < NumPieces; ++p) std::fill (bus[(size_t) p].begin(), bus[(size_t) p].begin() + 2 * n, 0.0f);
+        for (int p = 0; p < NumPieces; ++p)
+        {
+            std::fill (bus[(size_t) p].begin(), bus[(size_t) p].begin() + 2 * n, 0.0f);
+            std::fill (busRoom[(size_t) p].begin(), busRoom[(size_t) p].begin() + 2 * n, 0.0f);
+        }
         for (auto& v : voices)
             if (v.active) renderVoice (v, n);
 
-        for (int i = 0; i < n; ++i) { outL[i] = 0; outR[i] = 0; }
+        for (int k = 0; k < 2 * numOuts; ++k) std::fill (outs[k], outs[k] + n, 0.0f);
+        auto outOf = [numOuts] (int d) { return d >= 0 && d < numOuts ? d : 0; };
+        auto mixTo = [&] (const float* b, const Route& r, const float* w)   // b はインターリーブのステレオ
+        {
+            const int c = outOf (r.cur), q = outOf (r.prev);
+            float* cl = outs[2 * c]; float* cr = outs[2 * c + 1];
+            float* ql = outs[2 * q]; float* qr = outs[2 * q + 1];
+            for (int i = 0; i < n; ++i)
+            {
+                const float x = b[2 * i], y = b[2 * i + 1], ww = w[i];
+                cl[i] += x * ww; cr[i] += y * ww;
+                if (ww < 1.0f) { ql[i] += x * (1.0f - ww); qr[i] += y * (1.0f - ww); }
+            }
+        };
         for (int p = 0; p < NumPieces; ++p)
         {
             float* b = bus[(size_t) p].data();
-            if (p == Kick)
+            float* br = busRoom[(size_t) p].data();
+            if (p == Kick)   // 低音をサブに任せる分は、ルームに入ったキックの低音も同じ所で切る
             {
                 const float* bl = ramps[sKickBlend].data();
                 for (int i = 0; i < n; ++i)
                 {
                     const float keepLow = std::cos (std::clamp (bl[i], 0.0f, 1.0f) * kPi * 0.5f);
                     float lo, hi;
-                    kickSplit[0].run (b[2 * i], lo, hi);     b[2 * i] = hi + keepLow * lo;
-                    kickSplit[1].run (b[2 * i + 1], lo, hi); b[2 * i + 1] = hi + keepLow * lo;
+                    kickSplit[0].run (b[2 * i], lo, hi);          b[2 * i] = hi + keepLow * lo;
+                    kickSplit[1].run (b[2 * i + 1], lo, hi);      b[2 * i + 1] = hi + keepLow * lo;
+                    kickSplitRoom[0].run (br[2 * i], lo, hi);     br[2 * i] = hi + keepLow * lo;
+                    kickSplitRoom[1].run (br[2 * i + 1], lo, hi); br[2 * i + 1] = hi + keepLow * lo;
                 }
             }
-            for (int i = 0; i < n; ++i) { outL[i] += b[2 * i]; outR[i] += b[2 * i + 1]; }
+            mixTo (b, rDirect[(size_t) p], wDirect[(size_t) p].data());
+            mixTo (br, rRoom[(size_t) p], wRoom[(size_t) p].data());
         }
-        renderSubs (outL, outR, n);
-        renderSnares (outL, outR, n);
+        // EDM の層は、その部品（近いマイクの側）と同じ出口へ
+        renderSubs (edmBuf.data(), n);
+        mixTo (edmBuf.data(), rDirect[Kick], wDirect[Kick].data());
+        renderSnares (edmBuf.data(), n);
+        mixTo (edmBuf.data(), rDirect[Snare], wDirect[Snare].data());
         const float* og = ramps[sOutput].data();
-        for (int i = 0; i < n; ++i) { const float g = og[i] * outputTrim; outL[i] *= g; outR[i] *= g; }
+        for (int k = 0; k < numOuts; ++k)
+        {
+            float* l = outs[2 * k]; float* r = outs[2 * k + 1];
+            for (int i = 0; i < n; ++i) { const float g = og[i] * outputTrim; l[i] *= g; r[i] *= g; }
+        }
+    }
+
+    // ステレオ 1 組だけ（試作・テスト用。全部 Main）
+    void render (float* outL, float* outR, int n)
+    {
+        float* o[2] = { outL, outR };
+        render (o, 1, n);
     }
 
     int activeVoices() const { int c = 0; for (auto& v : voices) c += v.active ? 1 : 0; return c; }
@@ -636,7 +692,14 @@ private:
     std::array<Smoother, kNumSmooth> sm {};
     std::array<std::array<float, maxBlock>, kNumSmooth> ramps {};
     std::array<Voice, 128> voices {};
-    std::array<std::array<float, 2 * maxBlock>, NumPieces> bus {};
+    std::array<std::array<float, 2 * maxBlock>, NumPieces> bus {}, busRoom {};   // 部品ごと: 近い・OH・かぶり / ルーム
+    std::array<float, 2 * maxBlock> edmBuf {};
+    struct Route { int cur = 0, prev = 0, left = 0; };
+    static constexpr int routeFade = 662;   // 出口を替えたら 15 ms で移す
+    std::array<Route, NumPieces> rDirect {}, rRoom {};
+    std::array<int, NumPieces> wantDirect {}, wantRoom {};
+    std::array<std::array<float, maxBlock>, NumPieces> wDirect {}, wRoom {};
+    LR4 kickSplitRoom[2];
     std::array<NoteTarget, 128> noteMap {};
     std::array<uint32_t, 128> rr {};
     std::array<const Artic*, NumPieces> lastArtic {};
@@ -663,6 +726,28 @@ private:
         sm[sSnareBlend].setTarget (s.snareBlend, ramp);
     }
 
+    void setupSplits (double f)
+    {
+        for (auto& k : kickSplit) k.setup (fs, f);
+        for (auto& k : kickSplitRoom) k.setup (fs, f);
+        subLp.setup (fs, f);
+    }
+
+    static void updateRoute (Route& r, int want, float* w, int n)
+    {
+        if (want != r.cur)
+        {
+            if (r.left == 0) { r.prev = r.cur; r.cur = want; r.left = routeFade; }
+            else if (want == r.prev) { std::swap (r.cur, r.prev); r.left = routeFade - r.left; }   // 移している途中で元に戻した: 向きを逆にして続ける
+            // 移している途中で別の出口にした: 今の移しが終わってから（次のブロックで）移す（前の前の出口の分を 1 サンプルで消さない）
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            if (r.left > 0) { w[i] = 1.0f - (float) r.left / (float) routeFade; --r.left; }
+            else w[i] = 1.0f;
+        }
+    }
+
     // 最初（prepare の後）は、ならさずにその時のつまみから始める
     void applySettingsNow()
     {
@@ -671,7 +756,12 @@ private:
         setTargets (1);
         for (auto& x : sm) x.snap (x.target);
         xoverNow = cur.xover;
-        kickSplit[0].setup (fs, xoverNow); kickSplit[1].setup (fs, xoverNow); subLp.setup (fs, xoverNow);
+        setupSplits (xoverNow);
+        for (int p = 0; p < NumPieces; ++p)   // 最初の出口は移さずにそこから
+        {
+            rDirect[(size_t) p] = { wantDirect[(size_t) p], wantDirect[(size_t) p], 0 };
+            rRoom[(size_t) p] = { wantRoom[(size_t) p], wantRoom[(size_t) p], 0 };
+        }
     }
 
     static int maxVoices (int piece)
@@ -741,6 +831,7 @@ private:
     void renderVoice (Voice& v, int n)
     {
         float* b = bus[(size_t) v.piece].data();
+        float* br = busRoom[(size_t) v.piece].data();
         const Layer& L = *v.layer;
         const auto pn = v.kit->pan[(size_t) v.piece];
         const float dt = (float) (1.0 / fs);
@@ -753,7 +844,7 @@ private:
             const float env = lengthEnv (lenR[i], v.t);
             if (env < 1.0e-4f) { v.active = false; return; }
             bool any = false;
-            float sl = 0, sr = 0;
+            float sl = 0, sr = 0, rl = 0, rr2 = 0;
             for (int m = 0; m < NumMics; ++m)
             {
                 if (! L.has[(size_t) m]) continue;
@@ -786,12 +877,14 @@ private:
                 }
                 any = true;
                 const float g = part.gain * ramps[(size_t) micSmooth (m)][(size_t) i];
-                if (part.channels == 1 && m != RoomB) { sl += l * g * pn[0]; sr += r * g * pn[1]; }
+                if (m == RoomA || m == RoomB) { rl += l * g; rr2 += r * g; }   // ルーム B はモノ（真ん中）
+                else if (part.channels == 1) { sl += l * g * pn[0]; sr += r * g * pn[1]; }
                 else { sl += l * g; sr += r * g; }
             }
             if (! any) { v.active = false; return; }
             const float a = v.amp * v.fade * env * volR[i];
             b[2 * i] += sl * a; b[2 * i + 1] += sr * a;
+            br[2 * i] += rl * a; br[2 * i + 1] += rr2 * a;
             v.pos += v.step;
             v.t += dt;
         }
@@ -811,7 +904,7 @@ private:
         slot->gain = matchedGain * amp * std::pow (10.0f, slot->sound.levelDb / 20.0f);
     }
 
-    void renderSubs (float* outL, float* outR, int n)
+    void renderSubs (float* dst, int n)   // dst はインターリーブのステレオ（0 から作る）
     {
         const float* bl = ramps[sKickBlend].data();
         const float* vol = ramps[(size_t) (sVol0 + GKick)].data();
@@ -828,7 +921,7 @@ private:
                 if (s.osc.t > s.sound.decay * 1.3f) s.active = false;
             }
             float lo, hi; subLp.run (x * take, lo, hi);
-            outL[i] += lo; outR[i] += lo;
+            dst[2 * i] = lo; dst[2 * i + 1] = lo;
         }
     }
 
@@ -848,8 +941,9 @@ private:
         slot->gain = matchedGain * amp * vf;
     }
 
-    void renderSnares (float* outL, float* outR, int n)
+    void renderSnares (float* dst, int n)   // dst はインターリーブのステレオ（0 から作る）
     {
+        std::fill (dst, dst + 2 * n, 0.0f);
         const float* blr = ramps[sSnareBlend].data();
         const float* vol = ramps[(size_t) (sVol0 + GSnare)].data();
         for (auto& c : snares)
@@ -860,7 +954,7 @@ private:
                 if (c.delay > 0) { --c.delay; continue; }
                 float l, r; c.osc.sample (fs, l, r);
                 const float g = c.gain * std::clamp (blr[i], 0.0f, 1.0f) * vol[i] * c.fade;
-                outL[i] += l * g; outR[i] += r * g;
+                dst[2 * i] += l * g; dst[2 * i + 1] += r * g;
                 if (c.fadeStep > 0) { c.fade -= c.fadeStep; if (c.fade <= 0) { c.active = false; break; } }
                 if (c.osc.t > c.osc.length()) { c.active = false; break; }
             }

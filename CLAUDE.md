@@ -162,12 +162,13 @@
   表（MAIN）はモジュールごとに大きいつまみ 1 本＋種類、全部のつまみは DETAIL。相手の録音データ（ノイズ素材・IR・プリセット）は使っていない。
   4 倍は My Tremolo の Source を include（変えたら Retro Retro もビルド）。遅れ 283（48 kHz）。Plugin Link は Fader Pilot の歌でノイズを下げる（Kind 26 は未登録）。測定の道具は build/rclab
 
-- Hybrid Kit（HybridKit）0.1.0 … 生ドラム＋EDM のドラム音源（AU 音源 aumu Hbkt。2026-11-12 本人「EZdrummer・Superior Drummer のようなものを。生と EDM を混ぜたい、でも生の輪郭は欲しい」。
+- Hybrid Kit（HybridKit）0.2.0 … 生ドラム＋EDM のドラム音源（AU 音源 aumu Hbkt。2026-11-12 本人「EZdrummer・Superior Drummer のようなものを。生と EDM を混ぜたい、でも生の輪郭は欲しい」。
   ミックスエンジニア係「EZdrummer 風の画面だけなら DKD＋Drummer・MODO DRUM で足りる。生＋EDM を部品ごとに重ねて自動でそろえる形なら価値あり」→ 本人がその形・Logic の録音を使う・先に WAV で聴き比べを選んで「OK」）。
   生ドラムはこの Mac の Logic の Drum Kit Designer の Producer Kit 8 個（Brushes・Rods は録音の並びが違うのでまだ）の録音を直接読む（mmap・叩いた瞬間だけメモリ、先読み。音のファイルはリポジトリに入れない）。
   中は 44.1 kHz、ホストのレートへは sinc の変換（48 kHz で遅れ 35 を申告）。Drummer と同じノートの割り当て（確かめるため開いてから 10 分だけ届いた MIDI を記録。確かめたら外す）。
   部品 5 組の VOLUME / TUNE / LENGTH、ミキサー CLOSE / OH / ROOM / BLEED、キックの 808 サブ（低音を LR4 で入れ替え、遅れ・極性・大きさは自動）・スネアの EDM の層（Clap など、ゴーストとサイドスティックには付けない）、内蔵プリセット 7 個。
-  次の版はマルチアウト（キック・スネアだけに「キック迫力」など）を最初に。Plugin Link は LINK 欄だけ（Kind 27 は未登録）。試作・テストは tools/render.cpp・tools/test_inspect.cpp（DSP 検査係）
+  0.2.0 でマルチアウト（7 出口 1 Main / 2 Kick / 3 Snare / 4 Room / 5 Toms / 6 Hi-Hat / 7 Cymbals、並びは固定。部品の出口にはその部品の全マイク＋EDM の層、
+  ROOM は全部の部品のルームをまとめて、スイッチは曲の配線なのでプリセットで変えない。本人「マルチアウト作って」）。Plugin Link は LINK 欄だけ（Kind 27 は未登録）。試作・テストは tools/render.cpp・tools/test_inspect.cpp（DSP 検査係）
 
 ### 単体 Mac アプリ（.app）
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作

@@ -215,6 +215,25 @@ HybridKitEditor::HybridKitEditor (HybridKitProcessor& p)
     bleedF.slider.setTooltip ("Bleed: each drum leaking into the other close mics");
     outF.slider.setTooltip ("Output level");
 
+    // 出口の番号の順（Logic の「＋」はこの順に 1 本ずつ作る）
+    static const char* sepNames[] = { "2 KICK", "3 SNARE", "4 ROOM", "5 TOMS", "6 HI-HAT", "7 CYMBALS" };
+    static const char* sepIds[] = { "sepKick", "sepSnare", "sepRoom", "sepToms", "sepHiHat", "sepCym" };
+    for (size_t i = 0; i < sepBtn.size(); ++i)
+    {
+        auto& b = sepBtn[i];
+        b.setButtonText (sepNames[i]);
+        b.setClickingTogglesState (true);
+        b.setColour (juce::TextButton::buttonColourId, panel.brighter (0.15f));
+        b.setColour (juce::TextButton::buttonOnColourId, wood);
+        b.setColour (juce::TextButton::textColourOffId, text);
+        b.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+        b.setTooltip (i != 2 ? juce::String ("Send this piece (with its overheads, bleed, room and EDM layer) to output ") + juce::String (sepNames[i]).upToFirstOccurrenceOf (" ", false, false)
+                                   + ". Needs \"Multi Output\" in Logic and that many outputs added with + on the channel strip"
+                             : juce::String ("Send the room mics of every piece to output 4 (Room), for crushing the room in parallel. The kick's low end in the room still follows BLEND"));
+        addAndMakeVisible (b);
+        sepAtt[i] = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, sepIds[i], b);
+    }
+
     addAndMakeVisible (linkBar);
     addAndMakeVisible (presetBar);
     linkBar.status = [this] (bool& lit) -> juce::String { lit = processor.link.on(); return lit ? juce::String ("on this LINK") : juce::String ("Plugin Link OFF"); };
@@ -290,6 +309,7 @@ void HybridKitEditor::timerCallback()
         repaint (statusArea);
         kitView.repaint();
     }
+    if (processor.connectedOuts() != shownOuts) { shownOuts = processor.connectedOuts(); repaint (outsArea); }
 }
 
 void HybridKitEditor::paint (juce::Graphics& g)
@@ -336,10 +356,19 @@ void HybridKitEditor::paint (juce::Graphics& g)
     panelBox (piecePanel, juce::String (HybridKitProcessor::groupName (group)) + "  (live)");
     panelBox (edmPanel, "EDM LAYER");
     panelBox (mixerPanel, "MIXER");
-    g.setColour (text.withAlpha (0.4f));
-    g.setFont (juce::FontOptions (11.0f));
-    g.drawFittedText ("Plays Logic's Drum Kit Designer recordings on this Mac. Use it on a Drummer track as is.",
-                      mixerPanel.reduced (12, 8).removeFromBottom (32), juce::Justification::bottomLeft, 2);
+    // 出口の様子
+    {
+        auto a = outsArea;
+        g.setColour (text.withAlpha (0.55f));
+        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        g.drawText ("SEPARATE OUTS", a.removeFromTop (18), juce::Justification::centredLeft);
+        const int outs = processor.connectedOuts();
+        g.setFont (juce::FontOptions (11.0f));
+        g.setColour (outs > 1 ? accent.withAlpha (0.85f) : text.withAlpha (0.45f));
+        g.drawFittedText (outs > 1 ? juce::String ("Multi Output: ") + juce::String (outs) + " outs. Add them with + on the channel strip"
+                                   : juce::String ("Stereo: everything plays from Main. Load \"Multi Output\" in Logic to split"),
+                          a.removeFromBottom (30), juce::Justification::bottomLeft, 2);
+    }
 }
 
 void HybridKitEditor::resized()
@@ -398,7 +427,18 @@ void HybridKitEditor::resized()
 
     auto mp = mixerPanel.reduced (12, 8);
     mp.removeFromTop (22);
-    mp.removeFromBottom (36);
+    outsArea = mp.removeFromBottom (18 + 2 * 26 + 6 + 32);
+    {
+        auto oa = outsArea.withTrimmedTop (18);
+        for (int row = 0; row < 2; ++row)
+        {
+            auto line = oa.removeFromTop (26);
+            const int bw = line.getWidth() / 3;
+            for (int c = 0; c < 3; ++c) sepBtn[(size_t) (row * 3 + c)].setBounds (line.removeFromLeft (bw).reduced (3, 2));
+            if (row == 0) oa.removeFromTop (6);
+        }
+    }
+    mp.removeFromBottom (8);
     const int fw = mp.getWidth() / 5;
     for (auto* f : { &closeF, &ohF, &roomF, &bleedF, &outF })
     {

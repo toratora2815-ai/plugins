@@ -55,6 +55,8 @@ public:
     int latencyOut() const { return bypass ? 0 : (int) std::ceil ((double) H * (double) outR / (double) inR); }
     int64_t inputWritten() const { return written; }
     int64_t outputPos() const { return outPos; }
+    // 出さない出口（Logic がつないでいない）も、ほかの出口と同じ位置に進めておく（計算はしない）
+    void skip (int n) { outPos += n; }
 
     // ホストの出力 j 番目に当たるイベントを、中の何番目で鳴らすか（遅れ H の分を足す）
     int64_t eventIndexFor (int64_t hostIndex) const { return (hostIndex * inR) / outR + H; }

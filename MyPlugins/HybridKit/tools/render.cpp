@@ -542,6 +542,101 @@ static int test (const std::string& kitName)
         printf ("     クラッシュの 2.8〜3.1 秒: LENGTH 99 %% %.1f dB、100 %% %.1f dB\n", t99, t100);
         check (std::abs (t100 - t99) < 2.0, "LENGTH 99 % と 100 % の間に段差がない（2 dB 以内）");
     }
+    // 10) マルチアウト: 部品ごとに別の出口へ出しても、全部を足すと 1 本で出したのと同じ / 出口ごとに自分の部品だけ / 途中で替えても足した音は同じ
+    {
+        constexpr int K = Engine::maxOuts;
+        auto runMulti = [&] (const std::vector<Ev>& evs, const std::array<int, NumPieces>& direct, const std::array<int, NumPieces>& room,
+                             double switchAt, std::vector<std::vector<float>>& outsV)
+        {
+            Settings st; st.kickBlend = 1; st.snareBlend = 1;
+            analyzeEdm (kit, st);
+            auto e = std::make_unique<Engine>(); e->prepare (fs); e->setKit (&kit); e->setSettings (st);
+            std::array<int, NumPieces> zero {};
+            e->setRouting (switchAt > 0 ? zero : direct, switchAt > 0 ? zero : room);
+            const size_t N = (size_t) ((evs.back().sec + 2.0) * fs);
+            outsV.assign (2 * K, std::vector<float> (N, 0.0f));
+            std::vector<float*> ptr (2 * K);
+            size_t i = 0, k = 0;
+            while (i < N)
+            {
+                while (k < evs.size() && (size_t) std::llround (evs[k].sec * fs) <= i) { e->noteOn (evs[k].note, evs[k].vel); ++k; }
+                if (switchAt > 0 && i >= (size_t) (switchAt * fs)) e->setRouting (direct, room);
+                size_t n = std::min<size_t> (256, N - i);
+                if (k < evs.size()) n = std::min (n, std::max<size_t> (1, (size_t) std::llround (evs[k].sec * fs) - i));
+                for (int c = 0; c < 2 * K; ++c) ptr[(size_t) c] = outsV[(size_t) c].data() + i;
+                e->render (ptr.data(), K, (int) n);
+                i += n;
+            }
+        };
+        std::array<int, NumPieces> direct {}, room {};
+        direct[Kick] = Engine::OutKick; direct[Snare] = Engine::OutSnare;
+        for (int p : { (int) TomHi, (int) TomMidHi, (int) TomMidLo, (int) TomLo }) direct[(size_t) p] = Engine::OutToms;
+        direct[HiHat] = Engine::OutHiHat;
+        for (int p : { (int) CrashL, (int) CrashR, (int) Ride }) direct[(size_t) p] = Engine::OutCymbals;
+        room = direct;
+        std::vector<float> a, b;
+        { auto e = makeEngine (kit, fs, 1, 1); renderEvents (*e, ev, fs, 2.0, a, b); }
+        std::vector<std::vector<float>> o;
+        runMulti (ev, direct, room, 0, o);
+        float d = 0; for (size_t i = 0; i < a.size() && i < o[0].size(); ++i) { float sl = 0, sr = 0; for (int c = 0; c < K; ++c) { sl += o[(size_t) (2 * c)][i]; sr += o[(size_t) (2 * c + 1)][i]; } d = std::max ({ d, std::abs (sl - a[i]), std::abs (sr - b[i]) }); }
+        float mainPk = 0; for (size_t i = 0; i < o[0].size(); ++i) mainPk = std::max ({ mainPk, std::abs (o[0][i]), std::abs (o[1][i]) });
+        printf ("     全部を別の出口に: 足した音と 1 本の差の最大 %.2e、Main に残った音 %.1f dBFS\n", d, 20 * std::log10 (mainPk + 1e-12));
+        check (d < 1e-5f, "マルチアウト: 全部の出口を足すと 1 本で出したのと同じ（二重に足していない・抜けていない）");
+        check (mainPk < 1e-7f, "マルチアウト: 全部を分けたら Main は無音");
+        // キックだけ・ルームは分ける: スネアを叩いても Kick の出口は無音、キックのルームは Room の出口
+        std::array<int, NumPieces> d2 {}, r2 {};
+        d2[Kick] = Engine::OutKick;
+        for (auto& x : r2) x = Engine::OutRoom;
+        r2[Kick] = Engine::OutRoom;
+        std::vector<std::vector<float>> o2;
+        runMulti ({ { 0.01, 36, 110 }, { 3.0, 38, 110 } }, d2, r2, 0, o2);   // キックが鳴り終わってからスネア
+        auto pk = [&] (const std::vector<float>& x, double from, double to) { float m = 0; for (size_t i = (size_t) (from * fs); i < (size_t) (to * fs) && i < x.size(); ++i) m = std::max (m, std::abs (x[i])); return 20 * std::log10 (m + 1e-12); };
+        const double kickDuringKick = pk (o2[2 * Engine::OutKick], 0.0, 0.6), mainDuringKick = pk (o2[0], 0.0, 2.9);
+        const double kickDuringSnare = pk (o2[2 * Engine::OutKick], 3.0, 3.6), roomDuringSnare = pk (o2[2 * Engine::OutRoom], 3.0, 3.6), mainDuringSnare = pk (o2[0], 3.0, 3.6);
+        printf ("     スネアの間: Kick %.1f / Room %.1f / Main %.1f dBFS、キックの間: Kick %.1f / Main %.1f dBFS\n", kickDuringSnare, roomDuringSnare, mainDuringSnare, kickDuringKick, mainDuringKick);
+        std::vector<std::vector<float>> o2k;   // キックだけ（スネアなし）と比べて、Kick の出口が全く同じならスネアは入っていない
+        runMulti ({ { 0.01, 36, 110 }, { 3.0, 37, 1 } }, d2, r2, 0, o2k);
+        float leak = 0; for (size_t i = 0; i < o2[2 * Engine::OutKick].size() && i < o2k[2 * Engine::OutKick].size(); ++i)
+            leak = std::max (leak, std::abs (o2[2 * Engine::OutKick][i] - o2k[2 * Engine::OutKick][i]));
+        printf ("     Kick の出口へのスネアの漏れ（キックだけとの差の最大）%.2e\n", leak);
+        (void) kickDuringSnare;
+        check (leak < 1e-7f && roomDuringSnare > -60 && mainDuringSnare > -40, "キックだけ分けた: スネアは Kick の出口に入らず、スネアのルームは Room の出口へ");
+        check (kickDuringKick > -30 && mainDuringKick < -150, "キックは Kick の出口だけ（ルームは Room、Main には入らない）");
+        // 鳴っている途中で出口を替えても、全部を足した音は 1 本と同じ（10 ms で移すだけ）
+        std::vector<std::vector<float>> o3;
+        runMulti (ev, direct, room, 1.03, o3);
+        float d3 = 0; for (size_t i = 0; i < a.size() && i < o3[0].size(); ++i) { float sl = 0, sr = 0; for (int c = 0; c < K; ++c) { sl += o3[(size_t) (2 * c)][i]; sr += o3[(size_t) (2 * c + 1)][i]; } d3 = std::max ({ d3, std::abs (sl - a[i]), std::abs (sr - b[i]) }); }
+        printf ("     鳴っている途中で全部の出口を替えた: 足した音と 1 本の差の最大 %.2e\n", d3);
+        check (d3 < 1e-5f, "途中で出口を替えても、足した音は変わらない（15 ms で移す）");
+    }
+    // 11) ROOM を分けても、キックのルームの低音は BLEND どおり 808 に入れ替わる（Room の出口から生キックの低音が戻らない）
+    {
+        auto roomLow = [&] (float blend)
+        {
+            Settings st; st.kickBlend = blend;
+            analyzeEdm (kit, st);
+            auto e = std::make_unique<Engine>(); e->prepare (fs); e->setKit (&kit); e->setSettings (st);
+            std::array<int, NumPieces> d {}, r {};
+            for (auto& x : r) x = Engine::OutRoom;
+            e->setRouting (d, r);
+            constexpr int K = Engine::maxOuts;
+            const size_t N = (size_t) (1.5 * fs);
+            std::vector<std::vector<float>> o (2 * K, std::vector<float> (N, 0.0f));
+            std::vector<float*> ptr (2 * K);
+            e->noteOn (36, 110);
+            for (size_t i = 0; i < N; i += 256)
+            {
+                for (int c = 0; c < 2 * K; ++c) ptr[(size_t) c] = o[(size_t) c].data() + i;
+                e->render (ptr.data(), K, (int) std::min<size_t> (256, N - i));
+            }
+            Biquad h1, h2, l1, l2; h1.highpass (fs, 30, 0.707); h2 = h1; l1.lowpass (fs, 60, 0.707); l2 = l1;   // 分け目（100 Hz）より十分下
+            double sum = 0; for (float v : o[2 * Engine::OutRoom]) { const float y = l2.run (l1.run (h2.run (h1.run (v)))); sum += (double) y * y; }
+            return 10 * std::log10 (sum + 1e-30);
+        };
+        const double b0 = roomLow (0), b1 = roomLow (1);
+        printf ("     Room の出口のキックの 30〜60 Hz: BLEND 0 %% %.1f dB → 100 %% %.1f dB\n", b0, b1);
+        check (b1 < b0 - 10, "ROOM を分けても、キックのルームの低音（分け目より下）は BLEND 100 % で 10 dB 以上下がる（分け目がなければ 0 dB。808 に任せる）");
+    }
     printf (fails ? "\n%d 個 NG\n" : "\n全部 OK\n", fails);
     return fails ? 1 : 0;
 }

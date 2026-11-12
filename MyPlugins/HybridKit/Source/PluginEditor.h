@@ -60,6 +60,10 @@ private:
     juce::Label soundLabel, noteLabel, edmHint;
     std::unique_ptr<ComboAtt> soundAtt, noteAtt;
     Knob closeF, ohF, roomF, bleedF, outF;  // ミキサー
+    std::array<juce::TextButton, 6> sepBtn;  // 別の出口へ（KICK / SNARE / TOMS / HI-HAT / CYMBALS / ROOM）
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>, 6> sepAtt;
+    juce::Rectangle<int> outsArea;
+    int shownOuts = -1;
 
     plink::LinkBar linkBar { processor.apvts, accent, panel, text };
     myp::PresetBar presetBar { processor.myPresets, accent, panel, text };
