@@ -55,6 +55,8 @@ private:
     juce::Label voicesLabel, takeLabel;
     juce::Slider takeSlider;
     std::unique_ptr<Attachment> takeAtt;
+    juce::TextButton doubleOnlyBtn;   // 1.1.0: 原音を消してダブルだけ（AUX 用。保存する）
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> doubleOnlyAtt;
     juce::ComboBox factoryBox;
 
     twinui::TakesView takesView { processor };

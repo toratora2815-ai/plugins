@@ -43,12 +43,13 @@ public:
 
     myp::Presets myPresets { *this, apvts, "TwinTake" };            // 自分のプリセット・取り消し
     plink::Link link { (plink::Kind) kTwinTakeLinkKind, apvts };    // Plugin Link（LINK 欄だけ）
-    myp::GainMatch gainMatch { *this, myPresets };                  // GAIN MATCH
+    myp::GainMatch gainMatch { *this, myPresets, { "doubleOnly" } };   // GAIN MATCH（DOUBLE ONLY の切り替えでは測り直さない）
 
     void updateTrackProperties (const TrackProperties& tp) override;
 
     int mode() const { return apvts.getRawParameterValue ("mode")->load() > 0.5f ? 1 : 0; }
     int voices() const { const int i = juce::roundToInt (apvts.getRawParameterValue ("voices")->load()); return i >= 2 ? 4 : (i == 1 ? 2 : 1); }
+    bool doubleOnly() const { return apvts.getRawParameterValue ("doubleOnly")->load() > 0.5f; }
 
     // 画面用（音のスレッドが書く）
     std::atomic<bool> monoListen { false };              // MONO ボタンを押している間だけ（保存しない）

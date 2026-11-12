@@ -11,6 +11,14 @@
 //
 // VOCAL : 原音はそのまま（遅れ 0）。ダブルは 1 / 2 / 4 本、原音より 12〜45 ms 後ろ。子音（サ行・タ行の頭）と息はダブルしない。ダブルの高域を少し下げる
 // GUITAR: 原音を左・ダブルを右。原音を 40 ms 遅らせ（Logic に申告）、ダブルは原音の前後 10〜25 ms（0 付近は使わない）。LOW KEEP より下は原音をまん中に
+//
+// 1.1.0（2026-11-12、ミックスエンジニア係の決め方）:
+//   - 語尾（TAIL）: ダブルが今読んでいる所の原音の大きさ（10 ms の窓）が、そこから「範囲の終わり」（VOCAL は今、GUITAR は原音を出している所 ＋10 ms）
+//     までの一番小さい大きさより 4 dB 以上大きければ、超えた分だけ 1:1 で下げる（下げる 3 ms・戻す 10 ms）。原音が先に終わったのに、ダブルだけ残らない。
+//     消したまま待つ形にはしない（音の頭がとれない歌い方で抜けるため）。GUITAR でダブルが前のときは何もしない
+//   - 長い音の中の揺れ（DRIFT、VOCAL だけ）: 音の頭で決めた音程のずれのまわりを、その ±50%（最大 ±3 セント）で、1.5〜3 秒ごとの次の目標へなめらかに動く。
+//     0 セントをまたがない（原音と同じ高さに近づくと、くし形の音色が止まって聞こえるため）。音の頭では 0 から始める
+//   - DOUBLE ONLY: 原音を出さずダブルだけ（AUX のセンドに挿して、ダブルだけを加工する用）。切り替えは 20 ms
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -31,6 +39,8 @@ namespace twin
         float lowKeepHz = 200.0f;  // これより下はダブルしない（20 未満 = OFF）
         int take = 1;              // 1..8（別のテイクを引き直す）
         bool mono = false;         // 聴くだけ（L+R）
+        bool doubleOnly = false;   // 原音を出さずダブルだけ（AUX に挿して使う）
+        bool tail = true;          // テスト用（語尾の処理を止めて比べる。プラグインからはいつも true）
         uint32_t trackSeed = 0;    // トラック名から（同じ設定でもトラックごとに違うテイクになる）
     };
 
@@ -40,6 +50,8 @@ namespace twin
         int64_t onsets = 0, forced = 0, jumps = 0;
         float lastDelayMs[4] = {}, lastCents[4] = {};
         float gate = 1.0f;         // 子音・息で閉じている割合（1 = 開いている）
+        float driftMaxAbs = 0.0f;  // テスト用: 長い音の中の揺れのいちばん大きい幅（セント）
+        float driftMinRatio = 1.0f;// テスト用: （音程のずれ ＋ 揺れ）÷ 音程のずれ のいちばん小さい値（0 より大きい = 0 セントをまたがない）
     };
 
     class Engine
@@ -68,6 +80,11 @@ namespace twin
             designHP (gateHP, 4000.0);
             guitarLat = (int) std::lround (guitarLatencyMs * 0.001 * fs);
             swStep = (float) (1.0 / (0.01 * fs));
+            frameLen = std::max (1, (int) std::lround (0.001 * fs));
+            halfWin = (int) std::lround (0.005 * fs);
+            frameP.assign ((size_t) kFrames, 0.0f); lvlDb.assign ((size_t) kFrames, -120.0f); sufMin.assign ((size_t) kFrames, -120.0f);
+            frameOf.assign ((size_t) sz, -1);
+            aTailDown = a (3.0); aTailUp = a (10.0);
             reset();
         }
 
@@ -91,6 +108,10 @@ namespace twin
             swGain = 1.0f;
             for (int v = 0; v < maxVoices; ++v) voiceGain[v] = voiceOnT[v];
             snapPan();
+            std::fill (frameP.begin(), frameP.end(), 0.0f); std::fill (lvlDb.begin(), lvlDb.end(), -120.0f); std::fill (sufMin.begin(), sufMin.end(), -120.0f);
+            std::fill (frameOf.begin(), frameOf.end(), (int64_t) -1);
+            frameCount = 0; frameAcc = 0; win10 = 0; curFrame = 0; tailEnd = -1;
+            dryS = dryT;
             stats = Stats();
         }
 
@@ -112,6 +133,7 @@ namespace twin
             lkMixT = p.lowKeepHz < 20.0f ? 0.0f : 1.0f;   // OFF はフィルターを外さず、混ぜる量で消す（周波数を 0 へ動かさない）
             if (p.lowKeepHz >= 20.0f) lowKeepT = std::clamp (p.lowKeepHz, 20.0f, 1000.0f);
             monoT = p.mono ? 1.0f : 0.0f;
+            dryT = p.doubleOnly ? 0.0f : 1.0f;
             applyVoiceTargets();
         }
         void applyVoiceTargets()
@@ -162,6 +184,7 @@ namespace twin
                 dblGain += (dblGainT - dblGain) * aSmooth;
                 widthS += (widthT - widthS) * aSmooth;
                 monoS += (monoT - monoS) * aSmooth;
+                dryS += (dryT - dryS) * aSmooth;   // DOUBLE ONLY: 原音の量（20 ms で出し入れ）
                 lkMix += (lkMixT - lkMix) * aSmooth;
                 lowKeepS += (lowKeepT - lowKeepS) * aSmoothSlow;
                 if (((w & 31) == 0) && std::fabs (lowKeepS - designedHz) > 0.05f) designCross (lowKeepS);
@@ -202,19 +225,19 @@ namespace twin
                 if (! stereoOut)
                 {
                     // モノのトラック: 原音はそのまま（GUITAR は 40 ms 遅れ）、ダブルを足すだけ（パンの −3 / −6 dB をかけない）
-                    L[i] = ((guitar ? od : inL) + dL) * swGain;
+                    L[i] = ((guitar ? od : inL) * dryS + dL) * swGain;
                     ++w;
                     continue;
                 }
                 float oL, oR;
-                if (! guitar) { oL = inL + dL; oR = inR + dR; }
+                if (! guitar) { oL = inL * dryS + dL; oR = inR * dryS + dR; }
                 else
                 {
                     const float lo4 = xLP[1].run (xLP[0].run (od)), hi4 = xHP[1].run (xHP[0].run (od));   // LR4（足すと平ら）
                     const float th = (1.0f - widthS) * (float) kPi * 0.25f;   // 原音は左へ（pan = −WIDTH）
                     const float c = std::cos (th), sn = std::sin (th);
-                    oL = lo4 * (0.70710678f * lkMix + c * (1.0f - lkMix)) + hi4 * c + dL;    // FIX: od と混ぜない（へこみなし）
-                    oR = lo4 * (0.70710678f * lkMix + sn * (1.0f - lkMix)) + hi4 * sn + dR;
+                    oL = (lo4 * (0.70710678f * lkMix + c * (1.0f - lkMix)) + hi4 * c) * dryS + dL;    // FIX: od と混ぜない（へこみなし）
+                    oR = (lo4 * (0.70710678f * lkMix + sn * (1.0f - lkMix)) + hi4 * sn) * dryS + dR;
                 }
                 oL *= swGain; oR *= swGain;   // FIX: MODE 切りかえ
                 if (monoS > 1.0e-4f) { const float mm = 0.5f * (oL + oR); oL += (mm - oL) * monoS; oR += (mm - oR) * monoS; }
@@ -240,6 +263,10 @@ namespace twin
             double outEnd = 1e300, outLen = 1;      // 読み出し位置で決めるフェードアウト（1e300 = まだ決まっていない）
             float amp = 1, gLo = 1, gHi = 1, lp = 0, gateSm = 1;
             int64_t keyTl = 0; int forced = 0; float cents = 0;
+            // 長い音の中の揺れ（DRIFT）: cents のまわりを dFrom → dTo へ segLen サンプルかけて動く（driftA = 揺れの幅、0 = なし）
+            float driftA = 0, dFrom = 0, dTo = 0; double segPos = 0, segLen = 1; uint64_t drs = 0; int rateCount = 0;
+            // 語尾（TAIL）: 今の下げ量と目標（8 サンプルごとに決め直す）
+            float tailG = 1, tailT = 1; int tailCount = 0;
         };
         // 読み出し 6 個・予定 8 個で足りる理由: いちばん長い遅れ（GUITAR 65 ms）＋ 手前 1.5 ms ＋ フェード < 音の頭の最短間隔 70 ms。
         // なので同時に生きているのは「消えかけ 1 ＋ 今の 1 ＋ つなぎ直し 1」まで、予定は 1 個まで（検査係の実測でも最大 2 個・1 個）。
@@ -263,6 +290,11 @@ namespace twin
         void analyse (float m, int64_t tl, bool guitar)
         {
             const float x2 = m * m;
+            // 語尾（TAIL）用の原音の大きさ（1 ms ごと）。区切りは曲の位置にそろえる（止まっていた長さで区切りがずれると、再生のたびに語尾の下げ方が変わるため）
+            frameOf[(size_t) (w & mask)] = curFrame;
+            frameAcc += (double) x2;
+            ++frameCount;
+            if ((tl + 1) % frameLen == 0 || frameCount >= 4 * frameLen) frameDone (guitar);
             ef += (x2 - ef) * (x2 > ef ? aFastAtt : aFastRel);
             es += (x2 - es) * aSlow;
             eA += (x2 - eA) * aPow3;
@@ -290,6 +322,58 @@ namespace twin
                 armed = false; lastOnset = w;
                 const int64_t back = (int64_t) (0.001 * fs);
                 onset (w - back, tl - back, guitar);
+            }
+        }
+
+        // 1 ms ぶん たまったら: 10 ms の窓の大きさ（dB）を記録し、「範囲の終わり」から前へ 100 ms ぶんの「そこから終わりまでの一番小さい値」を作り直す
+        void frameDone (bool guitar)
+        {
+            const float pw = frameCount > 0 ? (float) (frameAcc / frameCount) : 0.0f;
+            frameAcc = 0; frameCount = 0;
+            const int64_t f = curFrame++;
+            constexpr int64_t fm = kFrames - 1;
+            win10 += (double) pw - (double) frameP[(size_t) ((f - 10) & fm)];
+            if (win10 < 0) win10 = 0;
+            frameP[(size_t) (f & fm)] = pw;
+            lvlDb[(size_t) (f & fm)] = 10.0f * std::log10 ((float) std::max (win10 / 10.0, 1.0e-12));
+            // 範囲の終わり: VOCAL は今、GUITAR は原音を出している所（40 ms 前）＋ 10 ms（測るのが 10 ms 遅れる分を打ち消す）
+            const int64_t E = guitar ? f - (int64_t) std::lround (guitarLatencyMs - 10.0) : f;
+            float mn = 1.0e9f;
+            for (int64_t k = E; k > E - kSufLen && k >= 0; --k) { mn = std::min (mn, lvlDb[(size_t) (k & fm)]); sufMin[(size_t) (k & fm)] = mn; }
+            tailEnd = E;
+        }
+        // この位置を読んでいるダブルの下げ量（1 = そのまま）。
+        // 比べるのは「pos がまん中の 10 ms の窓」（= pos + 5 ms で終わる窓 fc）と、「fc から範囲の終わりまでの一番小さい値」。
+        // （1.1.0 の最初の版は一番小さい値を pos の区切りから探していて、音の頭の直前の静かな所を拾い、ダブルの頭まで下げていた。DSP 検査係）
+        float tailTarget (double pos) const
+        {
+            if (tailEnd < 0) return 1.0f;
+            constexpr int64_t fm = kFrames - 1;
+            const int64_t ip = (int64_t) std::floor (pos);
+            const int64_t ic = std::min (ip + (int64_t) halfWin, w - 1);
+            if (ip < w - mask || ic < 0) return 1.0f;
+            const int64_t fc = std::min (frameOf[(size_t) (ic & mask)], tailEnd);
+            if (fc < 0 || fc <= tailEnd - kSufLen) return 1.0f;
+            const float ex = lvlDb[(size_t) (fc & fm)] - sufMin[(size_t) (fc & fm)] - 4.0f;
+            return ex > 0.0f ? std::pow (10.0f, -ex / 20.0f) : 1.0f;
+        }
+        // 長い音の中の揺れ（1 サンプルぶん進める。音程は 32 サンプルごとに計算し直す）
+        void driftStep (Head& h)
+        {
+            h.segPos += 1.0;
+            if (h.segPos >= h.segLen)
+            {
+                h.segPos -= h.segLen; h.dFrom = h.dTo;
+                Rnd rr { h.drs }; h.dTo = h.driftA * rr.bip(); h.segLen = (1.5 + 1.5 * rr.next()) * fs; h.drs = rr.s;
+            }
+            if (--h.rateCount <= 0)
+            {
+                h.rateCount = 32;
+                const double u = std::clamp (h.segPos / h.segLen, 0.0, 1.0), sm = u * u * (3.0 - 2.0 * u);
+                const double d = h.dFrom + (h.dTo - h.dFrom) * sm;
+                h.rate = std::pow (2.0, ((double) h.cents + d) / 1200.0);
+                stats.driftMaxAbs = std::max (stats.driftMaxAbs, (float) std::fabs (d));
+                if (h.cents != 0.0f) stats.driftMinRatio = std::min (stats.driftMinRatio, (float) (((double) h.cents + d) / h.cents));
             }
         }
 
@@ -340,6 +424,11 @@ namespace twin
             }
             h.rate = std::pow (2.0, cents / 1200.0);
             h.cents = cents;
+            // 長い音の中の揺れ（VOCAL だけ）: その音のずれの ±50%、最大 ±3 セント → 0 セントをまたがない。音の頭では 0 から
+            h.driftA = guitar ? 0.0f : std::min (3.0f, 0.5f * std::fabs (cents));
+            h.dFrom = 0.0f; h.segPos = 0.0; h.rateCount = 0;
+            { Rnd rr { r.s ^ 0xD5F7A3C1ull }; h.dTo = h.driftA * rr.bip(); h.segLen = (1.5 + 1.5 * rr.next()) * fs; h.drs = rr.s; }
+            h.tailG = h.tailT = 1.0f; h.tailCount = 0;
             const float ampDb = (0.5f + 2.0f * L) * r.bip();
             h.amp = std::pow (10.0f, ampDb / 20.0f);
             const float tiltDb = (0.5f + 1.5f * L) * r.bip();
@@ -388,6 +477,7 @@ namespace twin
             ef = es = eA = eH = pkPow = 0.0f; armed = true;
             lastOnset = w - (int64_t) fs;
             jumpW = w;
+            frameAcc = 0; frameCount = 0;
             ++stats.jumps;
         }
 
@@ -453,6 +543,7 @@ namespace twin
                 }
             const double dMinAbs = (guitar ? 10.0 : 11.0) * 0.001 * fs;
             const double dMaxAbs = (guitar ? 70.0 : 60.0) * 0.001 * fs;
+            const bool tailOn = p.tail && (! guitar || guitarSide() > 0.0f);   // 語尾は VOCAL と、GUITAR でダブルが後ろのとき
             float out = 0.0f;
             Head* current = nullptr;
             for (auto& h : vc.heads)
@@ -472,8 +563,18 @@ namespace twin
                     h.gateSm += (gt - h.gateSm) * (gt < h.gateSm ? aGateClose : aGateOpen);
                     x *= h.gateSm;
                 }
-                out += x * h.amp * (float) (gin * gout);
+                if (tailOn)
+                {
+                    if (--h.tailCount <= 0) { h.tailCount = 8; h.tailT = tailTarget (h.pos); }
+                    h.tailG += (h.tailT - h.tailG) * (h.tailT < h.tailG ? aTailDown : aTailUp);
+                }
+                else if (h.tailG < 1.0f)
+                {   // GUITAR で TAKE を「後ろ → 前」に変えた時など: 下げたまま固まらないように 10 ms で戻す
+                    h.tailT = 1.0f; h.tailG += (1.0f - h.tailG) * aTailUp; if (1.0f - h.tailG < 1.0e-6f) h.tailG = 1.0f;
+                }
+                out += x * h.amp * (float) (gin * gout) * h.tailG;
                 h.pos += h.rate;
+                if (h.driftA > 0.0f) driftStep (h);
                 if (h.outEnd > 1e299 && (current == nullptr || h.inStart > current->inStart)) current = &h;
             }
             // 遅れが範囲を外れたら、波形のそろう所でつなぎ直す（伸ばした長い音だけ）
@@ -613,6 +714,13 @@ namespace twin
         Biquad gateHP, dblHP[2], xLP[2], xHP[2];
 
         float dblGain = 0.5f, dblGainT = 0.5f, widthS = 0.8f, widthT = 0.8f, lowKeepS = 200, lowKeepT = 200, lkMix = 1, lkMixT = 1, monoS = 0, monoT = 0, designedHz = -1;
+        float dryS = 1, dryT = 1;   // DOUBLE ONLY（原音の量）
+        // 語尾（TAIL）用: 原音の大きさを 1 ms ごとに。lvlDb = 10 ms の窓（dB）、sufMin = そこから「範囲の終わり」までの一番小さい値
+        static constexpr int kFrames = 1024, kSufLen = 100;
+        std::vector<float> frameP, lvlDb, sufMin;
+        int frameLen = 48, frameCount = 0, halfWin = 240; double frameAcc = 0, win10 = 0; int64_t curFrame = 0, tailEnd = -1;
+        std::vector<int64_t> frameOf;   // サンプルごとの 1 ms の区切りの番号（buf と同じ輪）
+        float aTailDown = 0, aTailUp = 0;
         Stats stats;
         bool switching = false; int nextMode = 0; float swGain = 1.0f, swStep = 0.002f;
         static constexpr int64_t kNoTimeline = INT64_MIN;

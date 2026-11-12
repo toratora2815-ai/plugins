@@ -46,12 +46,14 @@ void TakesView::paint (juce::Graphics& g)
     auto plot = inner.withTrimmedLeft (30);
     auto xOf = [&] (float ms) { return plot.getX() + plot.getWidth() * (juce::jlimit (lo, hi, ms) - lo) / (hi - lo); };
 
-    // 原音の線
+    // 原音の線（DOUBLE ONLY の間は薄く = 原音は出ていない）
     const float x0 = xOf (0.0f);
-    g.setColour (text.withAlpha (0.55f));
+    const bool dOnly = proc.doubleOnly();
+    const float origA = dOnly ? 0.18f : 0.55f;
+    g.setColour (text.withAlpha (origA));
     g.fillRect (juce::Rectangle<float> (x0 - 1.0f, plot.getY(), 2.0f, plot.getHeight()));
     g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-    g.drawText ("ORIGINAL", juce::Rectangle<float> (x0 - 40, axis.getY(), 80, 14), juce::Justification::centred);
+    g.drawText (dOnly ? "ORIGINAL (muted)" : "ORIGINAL", juce::Rectangle<float> (x0 - 60, axis.getY(), 120, 14), juce::Justification::centred);
     if (m == 0)
     {
         // 12 ms より近いと、くし形の音色（フランジャーのような音）になるので使わない
@@ -62,7 +64,7 @@ void TakesView::paint (juce::Graphics& g)
     {
         g.setColour (dim);
         g.fillRect (juce::Rectangle<float> (xOf (-10.0f), plot.getY(), xOf (10.0f) - xOf (-10.0f), plot.getHeight()));
-        g.setColour (text.withAlpha (0.55f));
+        g.setColour (text.withAlpha (origA));
         g.fillRect (juce::Rectangle<float> (x0 - 1.0f, plot.getY(), 2.0f, plot.getHeight()));
     }
     g.setColour (text.withAlpha (0.4f));
@@ -172,6 +174,14 @@ TwinTakeEditor::TwinTakeEditor (TwinTakeProcessor& p)
     addAndMakeVisible (takeSlider);
     takeAtt = std::make_unique<Attachment> (processor.apvts, "take", takeSlider);
 
+    doubleOnlyBtn.setButtonText ("DOUBLE ONLY");
+    doubleOnlyBtn.setClickingTogglesState (true);
+    doubleOnlyBtn.setTooltip ("Mute the original and output only the doubles - for an AUX send (post-fader, DOUBLE at 0 dB, set the amount with the AUX fader). "
+                              "Saved with the song, not changed by presets or UNDO");
+    doubleOnlyBtn.setColour (juce::TextButton::buttonOnColourId, warm);
+    addAndMakeVisible (doubleOnlyBtn);
+    doubleOnlyAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, "doubleOnly", doubleOnlyBtn);
+
     monoBtn.setButtonText ("MONO");
     monoBtn.setTooltip ("Hold to listen in mono (phone speaker check). Not saved and not bounced");
     monoBtn.onStateChange = [this] { processor.monoListen.store (monoBtn.isDown()); };
@@ -259,7 +269,13 @@ void TwinTakeEditor::paint (juce::Graphics& g)
     g.setColour (text.withAlpha (0.45f));
     g.setFont (juce::FontOptions (11.0f));
     g.drawText ("double tracker", 170, 2, 120, topH - 4, juce::Justification::centredLeft);
-    if (processor.monoTrack.load())
+    if (processor.doubleOnly())
+    {   // 挿したまま ON にして「歌が消えた」と思わないように
+        g.setColour (warm);
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText ("DOUBLE ONLY: original muted (for an AUX send)", 270, 2, 330, topH - 4, juce::Justification::centredLeft);
+    }
+    else if (processor.monoTrack.load())
     {
         g.setColour (warm);
         g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
@@ -310,14 +326,16 @@ void TwinTakeEditor::resized()
         placeKnob (lowKeep, r);
     }
     {
-        auto r = sideArea.reduced (14, 12);
-        voicesLabel.setBounds (r.removeFromTop (18));
-        auto vb = r.removeFromTop (34);
+        auto r = sideArea.reduced (14, 10);
+        voicesLabel.setBounds (r.removeFromTop (16));
+        auto vb = r.removeFromTop (30);
         const int bw = vb.getWidth() / 3;
         for (int i = 0; i < 3; ++i) voicesBtn[i].setBounds (vb.removeFromLeft (bw).reduced (3, 2));
-        r.removeFromTop (18);
-        takeLabel.setBounds (r.removeFromTop (18));
-        takeSlider.setBounds (r.removeFromTop (34).reduced (20, 2));
+        r.removeFromTop (6);
+        takeLabel.setBounds (r.removeFromTop (16));
+        takeSlider.setBounds (r.removeFromTop (30).reduced (20, 2));
+        r.removeFromTop (10);
+        doubleOnlyBtn.setBounds (r.removeFromTop (28).reduced (3, 0));
     }
     area.removeFromTop (10);
     takesArea = area.removeFromTop (112);

@@ -34,6 +34,33 @@
 - パン: 定電力（cos / sin）。1 本 = まん中、2 本 = ±WIDTH、4 本 = ±WIDTH と ±WIDTH/2（4 本のときは 1 本ずつ −3 dB）
 - MONO: 最後に (L+R)/2。画面のボタンを押している間だけ（パラメーターではない、保存しない）。GAIN MATCH は MONO の間 amount 0
 
+## 1.1.0 で足したもの（2026-11-12、本人「全部直しましょう」→ ミックスエンジニア係が決めた形）
+- 語尾（TAIL、frameDone / tailTarget）: 原音のモノ合計の 2 乗を 1 ms ごと（frameLen = round(0.001·fs)）にまとめ、10 ms の窓の平均（dB、−120 で下止め）を lvlDb（輪 1024）に。
+  「範囲の終わり」E = VOCAL は今、GUITAR は 30 フレーム前（原音を出している w − 40 ms ＋ 10 ms。測るのが 10 ms 遅れる分を打ち消す）。
+  E から前へ 100 フレーム、「そこから E までの一番小さい値」を sufMin に作り直す（1 ms ごと）。
+  各 Head は 8 サンプルごとに、fc = 「pos ＋ 5 ms のサンプルの区切り」（= pos がまん中の 10 ms の窓、E まで）として ex = lvlDb[fc] − sufMin[fc] − 4 dB、
+  ex > 0 なら 10^(−ex/20) を目標にし、下げる 3 ms・戻す 10 ms で追う（tailG）。VOCAL と、GUITAR でダブルが後ろ（guitarSide() > 0）のときだけ。
+  効かない間（GUITAR で TAKE を後ろ → 前にした時など）は 10 ms で 1 へ戻す（固まらないように）。
+  1 ms の区切りは曲の位置（tl）にそろえ（(tl+1) % frameLen == 0 で区切る。平均は frameAcc / frameCount）、サンプルごとの区切りの番号を frameOf（buf と同じ輪）に持つ。
+  位置が飛んだら書きかけの区切りは捨てる。これで止まっていた長さが違っても同じ音（直す前は 10 ms ごとのダブルの大きさで最大 1.2 dB 違った）
+  3 秒のピークとは比べない（大きいサビの後の小さいパートで何秒も消えるため）。「今」だけと比べない（短い切れ目の後に手前の母音がポコッと戻るため）。消したまま待たない（レガートで抜けるため）
+- 長い音の中の揺れ（DRIFT、choose / driftStep）: VOCAL だけ。driftA = min(3, 0.5·|cents|) → 0 セントをまたがない。dFrom → dTo を smoothstep で segLen（1.5〜3 秒）かけて、
+  rate は 32 サンプルごと。乱数は choose の Rnd から（曲の位置・TAKE・トラック・声部）。音の頭では 0 から。forcedSplice は Head を写すので続きから。サイン波にはしない（Echo Drift・HS と被る）
+- DOUBLE ONLY: パラメーター doubleOnly（Bool、版のヒント 11、オートメーション不可）。dryS を 20 ms で 0 に（モノ出力・VOCAL・GUITAR の 3 か所）。
+  myPresets.exclude・GainMatch の ignoreIds・内蔵プリセットの初期化から外す。GAIN MATCH は MONO・DOUBLE ONLY の間 amount 0。
+  画面: 右の欄（VOICES・TAKE の下）のボタン、上の帯の注意書き（MONO TRACK より先に出す）、TAKES の ORIGINAL を薄く
+- DSP 検査係（1.1.0、1 回目「直してから」）: ① sufMin を pos の区切りから引いていて、音の頭の直前の静かな所を拾い、ダブルの頭を下げていた
+  （本人の歌で頭 20 ms が平均 −3.1 dB、ギターの右でいちばん下 −10.9 dB）→ fc で引く ② GUITAR で TAKE を後ろ→前にすると tailG が固まった → 1 へ戻す
+  ③ 区切りが reset からのサンプル数で、再生のたびに最大 1.2 dB 違った → 曲の位置にそろえた。テストに「音の頭を下げない」「TAKE の切り替えで固まらない」「止まっていた長さが違っても同じ」を足し、
+  「20 ms の切れ目」の窓を min(手前の遅れ − 6, 次の遅れ − 3) ms に直した。2 回目「渡してよい」（音の頭 0.00 dB、TAKE の切り替え −13.0 → −13.0 dB、再生ごとの差 −106〜−117 dBFS = 1.0.0 と同じ）。
+  テスト 9 で残るサンプル単位の差（48 kHz 1e−5・192 kHz 1e−4）は 1.0.0 から: LOW KEEP の float の 2 次 HP（200 Hz）が丸めの 1 ビットの違いを低域でふくらませる。
+  Biquad を double にすれば 3e−8 / 9e−8 まで消える（任意。gateHP・LR4 にも効く。まだやっていない）
+- テスト（tools/render.cpp の test、44.1〜192 kHz）: パッと切れる語尾 25 ms 後 −53〜−56 dB / ゆっくり消える語尾（80 ms で −60 dB）で原音 −30 dB の所のダブル −27 dB（処理なし −7〜−14 dB）/
+  20 ms の切れ目で戻らない −34.9〜−36.6 dB（窓は min(手前の遅れ − 6, 次の遅れ − 3) ms） / −12 dB のへこみで下げるのは 8.1〜8.2 dB / 揺れ ±3 セント以内・0 をまたがない・GUITAR は 0 / DOUBLE ONLY で原音が残らない・切り替えでプチッとしない。
+  Params.tail はテスト用（処理なしと比べる）
+- 次の候補（本人に聞いてから）: GUITAR はいつも同じ側が先に鳴る（TAKE で前後を固定しているため。先行音効果で「右がいつも走る / もたる」に聞こえやすい）。
+  休みのあと（跳ぶ量 20〜50 ms 以上原音が無音だった音の頭）でだけ前後を選び直す案（ミックスエンジニア係、2026-11-12）
+
 ## プラグイン（Source/PluginProcessor.*）
 - パラメーター ID: mode（Choice、オートメーション不可）、voices（Choice 1/2/4）、double（−40〜0 dB、−40 = OFF、skew 2）、loose、width（%）、
   lowKeep（60〜400 Hz、70 未満 = OFF）、take（Int 1〜8）、gainMatch（共通、版のヒント 10）、linkGroup
@@ -61,3 +88,4 @@
 
 ## 版
 - 1.0.0（2026-11-12）… 最初の版
+- 1.1.0（2026-11-12）… 語尾（TAIL）・長い音の中の揺れ（DRIFT）・DOUBLE ONLY を追加

@@ -21,6 +21,8 @@ TwinTakeProcessor::TwinTakeProcessor()
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
     apvts.addParameterListener ("mode", this);
+    // DOUBLE ONLY は「挿し方」の切り替えなので、自分のプリセット・取り消しでは変えない（AUX でプリセットを選ぶたびに原音が戻らないように）
+    myPresets.exclude ("doubleOnly");
 }
 
 TwinTakeProcessor::~TwinTakeProcessor()
@@ -52,6 +54,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout TwinTakeProcessor::createLay
     ps.push_back (std::make_unique<I> (juce::ParameterID { "take", 1 }, "Take", 1, 8, 1));
     ps.push_back (myp::GainMatch::makeParameter());
     ps.push_back (plink::makeGroupParameter (1));
+    // 1.1.0: 原音を出さずダブルだけ（AUX のセンドに挿す用）。版のヒント 11（GAIN MATCH の 10 より後ろ = 今ある曲のパラメーター番号をずらさない）
+    ps.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "doubleOnly", 11 }, "Double Only", false,
+                                                               juce::AudioParameterBoolAttributes().withAutomatable (false)));
     return { ps.begin(), ps.end() };
 }
 
@@ -78,6 +83,7 @@ twin::Params TwinTakeProcessor::currentParams() const
     p.lowKeepHz = lk < kLowKeepOff ? 0.0f : lk;
     p.take = juce::roundToInt (apvts.getRawParameterValue ("take")->load());
     p.mono = monoListen.load();
+    p.doubleOnly = doubleOnly();
     p.trackSeed = trackSeed.load();
     return p;
 }
@@ -160,8 +166,8 @@ void TwinTakeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     shownOnsets.store ((int) st.onsets);
     shownGate.store (st.gate);
 
-    // GAIN MATCH: MONO を聴いている間は比べる元がないので効かせない（覚えた値はそのまま）
-    gainMatch.process (buffer, chs, getLatencySamples(), prm.mono ? 0.0f : 1.0f);
+    // GAIN MATCH: MONO を聴いている間・DOUBLE ONLY の間は比べる元がないので効かせない（覚えた値はそのまま）
+    gainMatch.process (buffer, chs, getLatencySamples(), (prm.mono || prm.doubleOnly) ? 0.0f : 1.0f);
 }
 
 void TwinTakeProcessor::getStateInformation (juce::MemoryBlock& destData)
@@ -222,12 +228,12 @@ void TwinTakeProcessor::loadFactoryPreset (int i)
     if (i < 0 || i >= numFactoryPresets()) return;
     const auto& f = kFactory[i];
     myPresets.snapshot();
-    // まず全部を初期値に（GAIN MATCH・LINK の番号は触らない）
+    // まず全部を初期値に（GAIN MATCH・LINK の番号・DOUBLE ONLY は触らない）
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
         {
             const auto id = r->getParameterID();
-            if (id == myp::GainMatch::paramId || id == "linkGroup") continue;
+            if (id == myp::GainMatch::paramId || id == "linkGroup" || id == "doubleOnly") continue;
             r->beginChangeGesture(); r->setValueNotifyingHost (r->getDefaultValue()); r->endChangeGesture();
         }
     for (auto& kv : juce::StringArray::fromTokens (f.values, ",", ""))

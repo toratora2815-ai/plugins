@@ -102,6 +102,7 @@ static twin::Params paramsFrom (std::map<std::string, std::string>& kv)
     p.mode = (kv.count ("mode") && kv["mode"] == "guitar") ? 1 : 0;
     p.voices = (int) f ("voices", 2); p.doubleDb = f ("double", p.mode ? 0.0f : -6.0f); p.loose = f ("loose", 0.3f);
     p.width = f ("width", p.mode ? 1.0f : 0.8f); p.lowKeepHz = f ("lowkeep", 200); p.take = (int) f ("take", 1);
+    p.doubleOnly = f ("doubleonly", 0) > 0.5f; p.tail = f ("tail", 1) > 0.5f;
     return p;
 }
 
@@ -229,7 +230,9 @@ static int test()
             twin::Params v1; v1.voices = 1; v1.doubleDb = 0; twin::Params v2 = v1; v2.voices = 2; twin::Params v4 = v1; v4.voices = 4;
             twin::Params gOn; gOn.mode = 1; gOn.doubleDb = 0; gOn.lowKeepHz = 200; twin::Params gOff = gOn; gOff.lowKeepHz = 0;
             twin::Params vo; vo.mode = 0; twin::Params gu = vo; gu.mode = 1;
+            twin::Params dOn = v2; dOn.doubleOnly = true; twin::Params gdOn = gOn; gdOn.doubleOnly = true;
             const Sw sws[] = { { "VOICES 1→2", v1, v2, false, 6 }, { "VOICES 2→4", v2, v4, false, 6 }, { "VOICES 4→1", v4, v1, false, 6 },
+                               { "DOUBLE ONLY OFF→ON", v2, dOn, false, 6 }, { "DOUBLE ONLY ON→OFF", dOn, v2, false, 6 }, { "GUITAR DOUBLE ONLY OFF→ON", gOn, gdOn, false, 6 },
                                { "モノ 1→1 VOICES 2→4", v2, v4, true, 6 }, { "モノ 1→1 VOICES 4→1", v4, v1, true, 6 },
                                { "GUITAR LOW KEEP ON→OFF", gOn, gOff, false, 6 }, { "GUITAR LOW KEEP OFF→ON", gOff, gOn, false, 6 },
                                { "MODE VOCAL→GUITAR", vo, gu, false, 12 }, { "MODE GUITAR→VOCAL", gu, vo, false, 12 } };
@@ -333,6 +336,217 @@ static int test()
             auto o = runEngine (z, sr, p, 512);
             double mx = 0; for (auto& c : o) for (float v : c) mx = std::max (mx, (double) std::fabs (v));
             check (mx == 0.0, "無音を入れたら無音");
+        }
+
+        // ---- 1.1.0: 語尾（TAIL）・長い音の揺れ（DRIFT）・DOUBLE ONLY ----
+        // 倍音の多い伸ばした音（196 Hz）。env(t) で大きさを決める
+        auto toneWith = [&] (double secs, auto env)
+        {
+            const size_t m = (size_t) (secs * sr);
+            Chans x (2, std::vector<float> (m));
+            for (size_t i = 0; i < m; ++i)
+            {
+                const double t = (double) i / sr;
+                double v = 0; for (int h = 1; h <= 10; ++h) v += std::sin (2 * M_PI * 196.0 * h * t) / h;
+                x[0][i] = x[1][i] = (float) (0.25 * v * env (t));
+            }
+            return x;
+        };
+        auto doublesOf = [] (const Chans& o, const Chans& x) { std::vector<float> d (o[0].size()); for (size_t i = 0; i < d.size(); ++i) d[i] = o[0][i] - x[0][i]; return d; };
+        auto at = [&] (double t) { return (size_t) (t * sr); };
+        const double S = 1.1;
+        // 1) パッと切れる語尾（LOOSE 100%）: 原音が切れて 25 ms 後には、ダブルが −40 dB 未満
+        {
+            auto x = toneWith (1.6, [&] (double t) { return t < 0.1 ? 0.0 : (t < S ? std::min (1.0, (t - 0.1) / 0.01) : 0.0); });
+            double worst = -200;
+            for (int take = 1; take <= 8; ++take)
+            {
+                twin::Params p; p.mode = 0; p.voices = 1; p.doubleDb = 0; p.loose = 1.0f; p.take = take;
+                auto d = doublesOf (runEngine (x, sr, p, 256), x);
+                worst = std::max (worst, rmsDb (d, at (S + 0.025), at (S + 0.045)) - rmsDb (d, at (S - 0.3), at (S - 0.05)));
+            }
+            check (worst < -40.0, "語尾: 原音がパッと切れて 25 ms 後のダブル " + std::to_string (worst) + " dB（−40 dB 未満、LOOSE 100%・TAKE 1〜8 のいちばん大きいもの）");
+        }
+        // 1b) GUITAR でダブルが後ろのテイク: 原音（左、40 ms 遅れて出る）が止まって 10〜30 ms 後に、右のダブルも消えている
+        {
+            auto x = toneWith (1.6, [&] (double t) { return t < 0.1 ? 0.0 : (t < S ? std::min (1.0, (t - 0.1) / 0.01) : 0.0); });
+            double worst = -200;
+            for (int take : { 1, 2, 5 })   // trackSeed 0 でダブルが後ろになる TAKE
+            {
+                twin::Params p; p.mode = 1; p.doubleDb = 0; p.loose = 1.0f; p.width = 1.0f; p.lowKeepHz = 0; p.take = take;
+                auto o = runEngine (x, sr, p, 256);
+                worst = std::max (worst, rmsDb (o[1], at (S + 0.05), at (S + 0.07)) - rmsDb (o[1], at (S - 0.3), at (S - 0.05)));
+            }
+            check (worst < -35.0, "語尾: GUITAR（ダブルが後ろ）で原音が止まって 10〜30 ms 後の右のダブル " + std::to_string (worst) + " dB（−35 dB 未満）");
+        }
+        // 2) ゆっくり消える語尾（80 ms で −60 dB、指数で）: 原音が 30 dB 下がった所からの 30 ms で、ダブルがまだ大きく残っていない。
+        //    語尾の処理なしだと、遅れて読むダブルはまだほとんど元の大きさ（LOOSE 100% で 43 ms 後ろ）
+        {
+            auto x = toneWith (1.6, [&] (double t) { return t < 0.1 ? 0.0 : (t < S ? std::min (1.0, (t - 0.1) / 0.01) : std::pow (10.0, -3.0 * (t - S) / 0.08)); });
+            const double T30 = S + 0.04;   // 原音が −30 dB になる所
+            double worstOn = -200, worstOff = -200;
+            for (int take = 1; take <= 8; ++take)
+                for (int tl = 0; tl < 2; ++tl)
+                {
+                    twin::Params p; p.mode = 0; p.voices = 1; p.doubleDb = 0; p.loose = 1.0f; p.take = take; p.tail = tl == 0;
+                    auto d = doublesOf (runEngine (x, sr, p, 256), x);
+                    const double r = rmsDb (d, at (T30), at (T30 + 0.03)) - rmsDb (d, at (S - 0.3), at (S - 0.05));
+                    (tl == 0 ? worstOn : worstOff) = std::max (tl == 0 ? worstOn : worstOff, r);
+                }
+            check (worstOn < -15.0 && worstOff > worstOn + 8.0, "語尾: ゆっくり消える語尾で、原音が −30 dB の所からのダブル " + std::to_string (worstOn) +
+                   " dB（−15 dB 未満。語尾の処理なしだと " + std::to_string (worstOff) + " dB）");
+        }
+        // 3) 20 ms の切れ目: 原音が戻っても、ダブルが切れ目を読み終えるまで、手前の母音の残りがポコッと戻らない
+        {
+            const double G0 = 1.1, G1 = 1.12;
+            auto x = toneWith (2.0, [&] (double t) { return t < 0.1 ? 0.0 : (t < G0 ? std::min (1.0, (t - 0.1) / 0.01) : (t < G1 ? 0.0 : 1.0)); });
+            double worst = -200; int checked = 0;
+            for (int take = 1; take <= 8; ++take)
+            {
+                twin::Params p; p.mode = 0; p.voices = 1; p.doubleDb = 0; p.loose = 1.0f; p.take = take;
+                twin::Engine e; e.prepare (sr); e.setParams (p); e.reset();
+                Chans o = x; float dEst = 0, dNew = 0;
+                for (size_t pos = 0; pos < o[0].size(); pos += 256)
+                {
+                    const int b = (int) std::min<size_t> (256, o[0].size() - pos);
+                    e.process (o[0].data() + pos, o[1].data() + pos, 2, b, (int64_t) pos);
+                    if (pos < at (G0)) dEst = e.getStats().lastDelayMs[0];
+                    if (pos > at (G1 + 0.005) && dNew == 0) dNew = e.getStats().lastDelayMs[0];
+                }
+                auto d = doublesOf (o, x);
+                const double steady = rmsDb (d, at (G0 - 0.3), at (G0 - 0.05));
+                // 窓の終わり = min(手前の音の遅れ − 6 ms, 次の音のダブルの遅れ − 3 ms)（伸ばす間に音程のずれで遅れが 4〜5 ms 縮むため）
+                const double dEnd = std::min ((double) dEst - 6.0, (double) dNew - 3.0);
+                for (double t0 = G1 + 0.002; t0 + 0.002 < G1 + dEnd * 0.001; t0 += 0.002)
+                { worst = std::max (worst, rmsDb (d, at (t0), at (t0 + 0.002)) - steady); ++checked; }
+            }
+            check (checked > 0 && worst < -15.0, "語尾: 20 ms の切れ目のあと、ダブルが切れ目を通り過ぎるまで戻らない（いちばん大きい所 " + std::to_string (worst) + " dB、−15 dB 未満）");
+        }
+        // 4) −12 dB のへこみ（30 ms）: ダブルの下げ量は 8 dB まで（「超えた分だけ」下げる。消したりしない）
+        {
+            const double D0 = 1.1;
+            auto env = [&] (double t)
+            {
+                if (t < 0.1) return 0.0;
+                double g = std::min (1.0, (t - 0.1) / 0.01);
+                const double dip = 0.25119;   // −12 dB
+                if (t >= D0 && t < D0 + 0.040)
+                {
+                    const double u = t - D0;
+                    const double k = u < 0.005 ? u / 0.005 : (u < 0.035 ? 1.0 : (0.040 - u) / 0.005);
+                    g *= 1.0 - (1.0 - dip) * k;
+                }
+                return g;
+            };
+            auto x = toneWith (1.6, env);
+            double most = 0, least = 0;
+            for (int take = 1; take <= 8; ++take)
+            {
+                twin::Params p; p.mode = 0; p.voices = 1; p.doubleDb = 0; p.loose = 1.0f; p.take = take;
+                twin::Params q = p; q.tail = false;
+                auto dOn = doublesOf (runEngine (x, sr, p, 256), x), dOff = doublesOf (runEngine (x, sr, q, 256), x);
+                for (double t0 = D0; t0 < D0 + 0.12; t0 += 0.002)
+                {
+                    const double r = rmsDb (dOn, at (t0), at (t0 + 0.002)) - rmsDb (dOff, at (t0), at (t0 + 0.002));
+                    most = std::min (most, r);
+                }
+                least = std::min (least, most);
+            }
+            check (most >= -8.5 && most < -2.0, "語尾: −12 dB のへこみでダブルを下げるのは " + std::to_string (-most) + " dB まで（8 dB まで、少しは下げる）");
+        }
+        // 5) 長い音の中の揺れ: ±3 セント以内・0 セントをまたがない（伸ばした 6 秒の音、LOOSE 100%・4 本）
+        {
+            auto x = toneWith (6.5, [&] (double t) { return t < 0.1 ? 0.0 : std::min (1.0, (t - 0.1) / 0.01); });
+            twin::Params p; p.mode = 0; p.voices = 4; p.doubleDb = 0; p.loose = 1.0f; p.take = 2;
+            twin::Stats st; runEngine (x, sr, p, 512, &st);
+            check (st.driftMaxAbs > 0.3f && st.driftMaxAbs <= 3.0001f && st.driftMinRatio >= 0.4999f,
+                   "揺れ: 幅 " + std::to_string (st.driftMaxAbs) + " セント（±3 まで）、ずれに対するいちばん小さい割合 " + std::to_string (st.driftMinRatio) + "（0.5 以上 = 0 をまたがない）");
+            twin::Params g = p; g.mode = 1; twin::Stats sg; runEngine (x, sr, g, 512, &sg);
+            check (sg.driftMaxAbs == 0.0f, "揺れ: GUITAR では揺らさない");
+        }
+        // 6) DOUBLE ONLY: 原音が残らない（ダブル無音なら出力も無音）
+        for (int mode : { 0, 1 })
+        {
+            twin::Params p; p.mode = mode; p.doubleOnly = true; p.doubleDb = -100;
+            auto o = runEngine (in, sr, p, 512);
+            double mx = 0; for (auto& c : o) for (float v : c) mx = std::max (mx, (double) std::fabs (v));
+            check (mx < 1.0e-6, std::string (mode ? "GUITAR" : "VOCAL") + " DOUBLE ONLY: 原音が残らない（いちばん大きい値 " + std::to_string (mx) + "）");
+        }
+        {
+            // DOUBLE ONLY で、ダブルは ON のときと同じ（原音を足していないだけ）
+            twin::Params a; a.mode = 0; a.voices = 2; a.doubleDb = -3; twin::Params b = a; b.doubleOnly = true;
+            auto oa = runEngine (in, sr, a, 512), ob = runEngine (in, sr, b, 512);
+            double md = 0; for (size_t i = 0; i < n; ++i) md = std::max (md, (double) std::fabs ((oa[0][i] - in[0][i]) - ob[0][i]));
+            check (md < 1.0e-5, "VOCAL DOUBLE ONLY: ダブルはそのまま（差 " + std::to_string (md) + "）");
+        }
+        // 7) 語尾の処理で音の頭を下げない: 無音のあとの音（立ち上がり 3 ms・0.3 秒・間 0.2 秒）で、音の頭から 10〜70 ms のダブルが処理なしと −0.5 dB 以内（DSP 検査係）
+        {
+            auto x = toneWith (4.0, [&] (double t) { if (t < 0.2) return 0.0; const double u = std::fmod (t - 0.2, 0.5); return u < 0.3 ? std::min (1.0, u / 0.003) * std::min (1.0, (0.3 - u) / 0.005) : 0.0; });
+            double worst = 0;
+            for (int take = 1; take <= 8; ++take)
+            {
+                twin::Params p; p.mode = 0; p.voices = 1; p.doubleDb = 0; p.loose = 1.0f; p.take = take; twin::Params q = p; q.tail = false;
+                auto dOn = doublesOf (runEngine (x, sr, p, 256), x), dOff = doublesOf (runEngine (x, sr, q, 256), x);
+                for (int k = 0; k < 7; ++k) { const double t0 = 0.2 + 0.5 * k; worst = std::min (worst, rmsDb (dOn, at (t0 + 0.010), at (t0 + 0.070)) - rmsDb (dOff, at (t0 + 0.010), at (t0 + 0.070))); }
+            }
+            check (worst > -0.5, "語尾: 音の頭のダブルは下げない（処理なしとの差 " + std::to_string (worst) + " dB、−0.5 dB 以内）");
+        }
+        // 8) GUITAR で TAKE を「後ろ → 前」に変えても、ダブルが下げたまま固まらない（ミュートでダブルを下げている途中で変える。DSP 検査係）
+        //    同じ再生の中で、ミュートの前と戻った後の「ダブル（右）− 原音」が 1.5 dB 以内（固まると −15 dB のまま）
+        {
+            const size_t m = (size_t) (4.0 * sr);
+            Chans x (2, std::vector<float> (m));
+            double ph = 0;
+            for (size_t i = 0; i < m; ++i)
+            {
+                const double t = (double) i / sr; ph += 2 * M_PI * 147.0 / sr;
+                double v = 0; for (int h = 1; h <= 10; ++h) v += std::sin (ph * h) / h;
+                double g = t < 0.2 ? 0.0 : std::min (1.0, (t - 0.2) / 0.005);
+                if (t >= 1.0 && t < 1.03) g *= 0.1; else if (t >= 1.03 && t < 1.23) g *= 0.1 + 0.9 * (t - 1.03) / 0.2;
+                x[0][i] = x[1][i] = (float) (0.25 * v * g);
+            }
+            double worst = 0;
+            for (int changeMs : { 1050, 1060, 1070 })
+            {
+                twin::Params p; p.mode = 1; p.doubleDb = 0; p.loose = 0.4f; p.width = 1.0f; p.lowKeepHz = 0; p.take = 1;   // 1 = 後ろ
+                twin::Params q = p; q.take = 3;                                                                           // 3 = 前
+                twin::Engine e; e.prepare (sr); e.setParams (p); e.reset();
+                Chans o = x;
+                for (size_t i = 0; i < m; i += 64)
+                {
+                    if (i == (size_t) (changeMs * 0.001 * sr) / 64 * 64) e.setParams (q);
+                    e.process (o[0].data() + i, o[1].data() + i, 2, (int) std::min<size_t> (64, m - i), (int64_t) i);
+                }
+                const double before = rmsDb (o[1], at (0.5), at (0.9)) - rmsDb (x[0], at (0.5), at (0.9));
+                const double after = rmsDb (o[1], at (2.0), at (3.5)) - rmsDb (x[0], at (2.0), at (3.5));
+                worst = std::max (worst, std::fabs (after - before));
+            }
+            check (worst < 1.5, "語尾: GUITAR で TAKE を後ろ→前に変えても、ダブルの大きさが戻る（ミュートの前との差 " + std::to_string (worst) + " dB）");
+        }
+        // 9) 止まっていた長さが違っても、ダブルの大きさは同じ（語尾の区切りを曲の位置にそろえている。DSP 検査係: 直す前は 10 ms ごとに最大 1.2 dB 違った）
+        //    サンプル単位では前（1.0.0）からある −80 dB ほどの小さな差があるので、10 ms ごとの大きさで比べる
+        {
+            twin::Params p; p.mode = 0; p.voices = 2; p.doubleDb = 0; p.loose = 1.0f; p.take = 4;
+            std::vector<double> refLv; double worst = 0;
+            for (int pre : { 0, 1, 333, 1001 })
+            {
+                twin::Engine e; e.prepare (sr); e.setParams (p); e.reset();
+                std::vector<float> z ((size_t) pre + 1, 0.0f);
+                int64_t free = 777;
+                for (int k = 0; k < pre; k += 64) { const int b = std::min (64, pre - k); e.process (z.data(), z.data(), 2, b, free); free += b; }
+                Chans o = in;
+                for (size_t pos = 0; pos < n; pos += 256)
+                {
+                    const int b = (int) std::min<size_t> (256, n - pos);
+                    e.process (o[0].data() + pos, o[1].data() + pos, 2, b, (int64_t) (480000 + pos));   // 曲の同じ所から再生
+                }
+                auto d = doublesOf (o, in);
+                std::vector<double> lv;
+                for (size_t a = (size_t) sr; a + (size_t) (0.01 * sr) < n; a += (size_t) (0.01 * sr)) lv.push_back (rmsDb (d, a, a + (size_t) (0.01 * sr)));
+                if (refLv.empty()) refLv = lv;
+                else for (size_t k = 0; k < lv.size(); ++k) if (refLv[k] > -60.0) worst = std::max (worst, std::fabs (lv[k] - refLv[k]));
+            }
+            check (worst < 0.05, "止まっていた長さが違っても、ダブルの 10 ms ごとの大きさは同じ（いちばん大きい差 " + std::to_string (worst) + " dB）");
         }
     }
     printf (fails ? "\n%d 個 NG\n" : "\n全部 OK\n", fails);
