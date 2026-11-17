@@ -9,6 +9,7 @@
 #include "../Source/PluginEditor.h"
 #include "../Source/RecordGuide.h"
 #include "../Source/DrivePedals.h"
+#include "../Source/WahDSP.h"
 
 namespace
 {
@@ -259,7 +260,7 @@ static int ampProbe (int argc, char** argv)
 }
 
 // PEDAL probe: RenderTest --pedal <model> gain tone levelDb in.f32 out.f32 [sampleRate] [block] [voltsPerUnit]
-//   model 0 PORCH DRIVE, 1 WOOL FUZZ, 2 HEARTH DRIVE, 3 BRASS BOOST, 4 BARN DIST. f32 = stereo interleaved float. The output is moved back by the latency
+//   model 0 PORCH DRIVE, 1 WOOL FUZZ, 2 HEARTH DRIVE, 3 BRASS BOOST, 4 BARN DIST, 5 BELLOWS WAH (gain = PEDAL, tone = Q, level = SPEED). f32 = stereo interleaved float. The output is moved back by the latency
 template <typename DSP>
 static int runPedal (DSP& d, int argc, char** argv)
 {
@@ -298,6 +299,7 @@ static int pedalProbe (int argc, char** argv)
         case 1: { pedal::WoolFuzzDSP d; return runPedal (d, argc, argv); }
         case 2: { pedal::HearthDriveDSP d; d.voltsPerUnit = vpu; return runPedal (d, argc, argv); }
         case 3: { pedal::BrassBoostDSP d; d.voltsPerUnit = vpu; return runPedal (d, argc, argv); }
+        case 5: { pedal::WahDSP d; return runPedal (d, argc, argv); }   // gain = PEDAL, tone = Q, level = SPEED (AUTO off)
         default: { pedal::BarnDistDSP d; d.voltsPerUnit = vpu; return runPedal (d, argc, argv); }
     }
 }
@@ -1303,6 +1305,300 @@ int main (int argc, char** argv)
             for (auto* id : { "ccOn", "pdOn", "wfOn" }) setP (proc, id, 0);
             setP (proc, "pdModel", 0); setP (proc, "wfModel", 1); setP (proc, "pdGain", 4); setP (proc, "pdLevel", -6);
             setP (proc, "ampModel", 3); setP (proc, "ampGain", 4); setP (proc, "kitHuman", 0.5f); setP (proc, "strumOn", 1);
+            proc.prepareToPlay (sr, 256);
+        }
+    }
+
+    // ---- BELLOWS WAH (0.7.0, WahDSP.h): sweep, Q, AUTO from the notes, CC11 / CC4, its place in the row
+    std::cout << "== wah ==" << std::endl;
+    {
+        const double wsr = 48000.0;
+        auto runWah = [] (pedal::WahDSP& w, std::vector<float> x, int bs, std::function<void (int pos)> beforeBlock = {})
+        {
+            juce::AudioBuffer<float> out (2, (int) x.size());
+            for (int c = 0; c < 2; ++c) out.copyFrom (c, 0, x.data(), (int) x.size());
+            for (int pos = 0; pos < (int) x.size(); pos += bs)
+            {
+                const int k = juce::jmin (bs, (int) x.size() - pos);
+                w.beginBlock (k);
+                if (beforeBlock) beforeBlock (pos);
+                float* ch[2] { out.getWritePointer (0) + pos, out.getWritePointer (1) + pos };
+                w.process (ch, 2, k);
+            }
+            return out;
+        };
+        // the resonance: impulse response -> the frequency with the most gain
+        // contrast = the peak over the response an octave below it (how sharp the resonance is)
+        auto peakHz = [&] (float pedalKnob, float q, double rate, float* contrastDb = nullptr)
+        {
+            pedal::WahDSP w; w.prepare (rate, 512, 2); w.setParams (pedalKnob, q, 5.0f, true);
+            std::vector<float> x (16384, 0.0f); x[0] = 1.0f;
+            auto out = runWah (w, x, 512);
+            juce::dsp::FFT fft (14);
+            std::vector<float> buf (32768, 0.0f);
+            for (int i = 0; i < 16384; ++i) buf[(size_t) i] = out.getSample (0, i);
+            fft.performFrequencyOnlyForwardTransform (buf.data());
+            int best = 1;
+            for (int k = 2; k < 8192; ++k) if (buf[(size_t) k] > buf[(size_t) best]) best = k;
+            if (contrastDb != nullptr) *contrastDb = juce::Decibels::gainToDecibels (buf[(size_t) best] / juce::jmax (1.0e-9f, buf[(size_t) juce::jmax (1, best / 2)]));
+            return (float) (best * rate / 16384.0);
+        };
+        {
+            const float heel = peakHz (0.0f, 5.0f, wsr), mid = peakHz (5.0f, 5.0f, wsr), toe = peakHz (10.0f, 5.0f, wsr);
+            const float toe96 = peakHz (10.0f, 5.0f, 96000.0), heel441 = peakHz (0.0f, 5.0f, 44100.0);
+            auto near = [] (float a, float b) { return std::abs (a / b - 1.0f) < 0.08f; };
+            // the published measurement of the classic inductor wah: 460 / 840 / 2250 Hz
+            check (near (heel, 450.0f) && near (mid, 840.0f) && near (toe, 2250.0f) && near (toe96, 2250.0f) && near (heel441, 450.0f),
+                   "sweep: heel " + juce::String (heel, 0) + " / middle " + juce::String (mid, 0) + " / toe " + juce::String (toe, 0) + " Hz (96 kHz toe "
+                   + juce::String (toe96, 0) + ", 44.1 kHz heel " + juce::String (heel441, 0) + ")");
+            float lo = 0, hi = 0, cHeel = 0, cToe = 0;
+            peakHz (5.0f, 0.0f, wsr, &lo); peakHz (5.0f, 10.0f, wsr, &hi);
+            peakHz (0.0f, 5.0f, wsr, &cHeel); peakHz (10.0f, 5.0f, wsr, &cToe);
+            check (hi - lo > 6.0f && cHeel > cToe + 6.0f, "Q: 0 -> 10 makes the resonance " + juce::String (hi - lo, 1) + " dB sharper; heel sharper than toe ("
+                   + juce::String (cHeel, 1) + " / " + juce::String (cToe, 1) + " dB over an octave below)");
+        }
+
+        // a DI: picked notes every 0.6 s
+        auto notesDI = [] (double rate, double seconds)
+        {
+            juce::Random rng (5);
+            std::vector<float> x ((size_t) (rate * seconds), 0.0f);
+            for (double t = 0.1; t < seconds - 0.5; t += 0.6)
+                addPluck (x, (int) (t * rate), rate, noteHz (52.0), 0.15f, 0.55, 0.5, false, rng);
+            return x;
+        };
+        // about as loud as off at heel, middle and toe, for any Q (the wah sits in front of the drives: a level step would change the drive).
+        // The test DI is as bright as a real guitar DI (about -3 dB per octave above 500 Hz, like the user's recordings;
+        // the synthetic pluck above has far too little above 1 kHz for this)
+        {
+            std::vector<float> x ((size_t) (wsr * 4.0), 0.0f);
+            int k0 = 0;
+            for (double nn : { 40.0, 47.0, 52.0, 59.0, 64.0, 69.0 })
+            {
+                const double f0 = noteHz (nn); const int at = (int) (k0++ * 0.6 * wsr);
+                for (int h = 1; h * f0 < 6000.0; ++h)
+                    for (int i = 0; i < (int) (0.6 * wsr) && at + i < (int) x.size(); ++i)
+                        x[(size_t) (at + i)] += (float) (0.05 / std::sqrt ((double) h) * std::exp (-i / (0.3 * wsr)) * std::sin (6.283185307 * h * f0 * i / wsr + h));
+            }
+            double e = 0; for (float v : x) e += (double) v * v;
+            const float off = (float) (10.0 * std::log10 (e / (double) x.size()));
+            juce::String txt; bool ok = true;
+            for (float q : { 0.0f, 5.0f, 10.0f })
+                for (float pd : { 0.0f, 5.0f, 10.0f })
+                {
+                    pedal::WahDSP w; w.prepare (wsr, 512, 2); w.setParams (pd, q, 7.0f, true);
+                    const auto out = runWah (w, x, 512);
+                    const float d = rmsDb (out, 0.0, 3.9, wsr) - off;
+                    ok = ok && std::abs (d) < 4.5f;
+                    if (q == 5.0f) txt << juce::String (d, 1) << " ";
+                }
+            check (ok, "on vs off within 4.5 dB at heel / middle / toe for Q 0 / 5 / 10 (Q 5: " + txt.trim() + " dB)");
+        }
+        // ends, rates, block sizes, a pedal that jumps every block: finite, never wild
+        {
+            bool ok = true; float worst = -200.0f;
+            juce::Random rng (9);
+            for (double rate : { 44100.0, 96000.0, 192000.0 })
+                for (int bs : { 1, 64, 4096 })
+                {
+                    pedal::WahDSP w; w.prepare (rate, bs, 2); w.setParams (0.0f, 10.0f, 10.0f, true); w.setAuto (true);
+                    std::vector<float> x ((size_t) (rate * 1.0));
+                    for (auto& v : x) v = 4.0f * (rng.nextFloat() * 2.0f - 1.0f);   // +12 dBFS noise
+                    auto out = runWah (w, x, bs, [&] (int pos)
+                    {
+                        w.setParams (rng.nextFloat() * 10.0f, rng.nextFloat() * 10.0f, rng.nextFloat() * 10.0f);
+                        if (pos % 4800 < bs) w.noteAt (0, 1.0f);
+                    });
+                    const float pk = juce::Decibels::gainToDecibels (out.getMagnitude (0, 0, out.getNumSamples()), -200.0f);
+                    worst = juce::jmax (worst, pk);
+                    ok = ok && allFinite (out) && pk < 40.0f;
+                }
+            check (ok, "wah: knob ends, 44.1-192 kHz, blocks 1-4096, +12 dBFS noise, jumping knobs: finite (worst peak " + juce::String (worst, 1) + " dBFS)");
+        }
+        // the pedal swept fast: the same sound in any block size (smoothed per sample, not per block)
+        {
+            const auto x = notesDI (wsr, 2.0);
+            auto sweep = [&] (int bs)
+            {
+                pedal::WahDSP w; w.prepare (wsr, bs, 2); w.setParams (0.0f, 6.0f, 5.0f, true);
+                return runWah (w, x, bs, [&] (int pos) { w.setParams (pos < (int) (0.5 * wsr) ? 0.0f : 10.0f, 6.0f, 5.0f); });
+            };
+            const auto a = sweep (32), b = sweep (32);
+            float d = 0;
+            for (int i = 0; i < a.getNumSamples(); ++i) d = juce::jmax (d, std::abs (a.getSample (0, i) - b.getSample (0, i)));
+            // same blocks: identical; different block sizes: the pedal target arrives at a different sample (by up to one block), so compare the shape
+            const auto c = sweep (512);
+            const float lA = rmsDb (a, 0.6, 1.9, wsr), lC = rmsDb (c, 0.6, 1.9, wsr);
+            check (d == 0.0f && std::abs (lA - lC) < 0.5f && allFinite (c), "pedal heel -> toe in one step: smooth (20 ms), the same level in blocks 32 / 512 ("
+                   + juce::String (lA, 1) + " / " + juce::String (lC, 1) + " dB)");
+        }
+        // CC11 by its place in the block: the same movement in blocks of 64 and 2048 (no stairs in a big buffer)
+        {
+            const auto x = notesDI (wsr, 2.0);
+            auto withCC = [&] (int bs)
+            {
+                pedal::WahDSP w; w.prepare (wsr, bs, 2); w.setParams (0.0f, 6.0f, 7.0f, true); w.useCC (true);
+                juce::AudioBuffer<float> out (2, (int) x.size());
+                for (int c = 0; c < 2; ++c) out.copyFrom (c, 0, x.data(), (int) x.size());
+                for (int pos = 0; pos < (int) x.size(); pos += bs)
+                {
+                    const int k = juce::jmin (bs, (int) x.size() - pos);
+                    w.beginBlock (k);
+                    for (int t = 0; t < k; ++t)   // a CC every 10 ms, sweeping 0 -> 127 -> 0 over a second
+                        if ((pos + t) % 480 == 0)
+                        {
+                            const double ph = std::fmod ((pos + t) / wsr, 1.0);
+                            w.ccAt (t, (float) (10.0 * (ph < 0.5 ? 2.0 * ph : 2.0 - 2.0 * ph)));
+                        }
+                    w.setParams (-1.0f, 6.0f, 7.0f);
+                    float* ch[2] { out.getWritePointer (0) + pos, out.getWritePointer (1) + pos };
+                    w.process (ch, 2, k);
+                }
+                return out;
+            };
+            const auto a = withCC (64), b = withCC (2048);
+            float d = 0, m = a.getMagnitude (0, 0, a.getNumSamples());
+            for (int i = 0; i < a.getNumSamples(); ++i) d = juce::jmax (d, std::abs (a.getSample (0, i) - b.getSample (0, i)));
+            check (d <= 1.0e-4f * juce::jmax (1.0e-6f, m), "CC11 sweep: the same in blocks of 64 and 2048 (difference " + juce::String (juce::Decibels::gainToDecibels (d / juce::jmax (1.0e-9f, m), -200.0f), 1) + " dB)");
+        }
+        // AUTO: each note opens it toward the toe and it comes back (brighter right after the pick than 0.6 s later).
+        // The test tone is a decaying sawtooth (rich in highs: a synthetic pluck has too little above 1 kHz to show it)
+        {
+            auto hiShare = [] (const juce::AudioBuffer<float>& b, double t0, double t1, double rate)
+            {
+                juce::dsp::FFT fft (12);
+                std::vector<float> buf (8192, 0.0f);
+                const int a = (int) (t0 * rate), n = juce::jmin (4096, (int) ((t1 - t0) * rate));
+                for (int i = 0; i < n; ++i) buf[(size_t) i] = b.getSample (0, a + i) * (0.5f - 0.5f * std::cos (6.2831853f * i / n));
+                fft.performFrequencyOnlyForwardTransform (buf.data());
+                double hi = 0, all = 0;
+                for (int k = 1; k < 2048; ++k) { const double m = (double) buf[(size_t) k] * buf[(size_t) k]; all += m; if (k * rate / 4096.0 > 1200.0) hi += m; }
+                return (float) (10.0 * std::log10 (hi / juce::jmax (1.0e-20, all) + 1.0e-12));
+            };
+            std::vector<float> x ((size_t) (wsr * 1.2), 0.0f);
+            for (int i = (int) (0.1 * wsr); i < (int) x.size(); ++i)
+            {
+                const double t = (i - 0.1 * wsr) / wsr, ph = std::fmod (t * 110.0, 1.0);
+                x[(size_t) i] = (float) (0.3 * (2.0 * ph - 1.0) * std::exp (-t / 1.5));
+            }
+            auto run = [&] (bool autoOn)
+            {
+                pedal::WahDSP w; w.prepare (wsr, 256, 2); w.setParams (0.0f, 6.0f, 5.0f, true); w.setAuto (autoOn);
+                return runWah (w, x, 256, [&] (int pos) { if (pos <= (int) (0.1 * wsr) && pos + 256 > (int) (0.1 * wsr)) w.noteAt ((int) (0.1 * wsr) - pos, 0.9f); });
+            };
+            const auto on = run (true), off = run (false);
+            const float early = hiShare (on, 0.11, 0.19, wsr), late = hiShare (on, 0.75, 0.83, wsr);
+            const float earlyOff = hiShare (off, 0.11, 0.19, wsr), lateOff = hiShare (off, 0.75, 0.83, wsr);
+            check (early > late + 10.0f && std::abs (earlyOff - lateOff) < 2.0f,
+                   "AUTO: a note opens it and it comes back (energy above 1.2 kHz " + juce::String (early, 1) + " -> " + juce::String (late, 1)
+                   + " dB; AUTO off " + juce::String (earlyOff, 1) + " -> " + juce::String (lateOff, 1) + " dB)");
+        }
+
+        // in the plugin: CC11 moves it, the knob takes over again when it moves, AUTO from the played notes, its place in the row, saving
+        {
+            setP (proc, "strumOn", 0); setP (proc, "kitHuman", 0.0f); setP (proc, "fxChain", (float) rig::kDefault);
+            setP (proc, "ampOn", 0); setP (proc, "cabOn", 0);
+            setP (proc, "whOn", 1); setP (proc, "whPedal", 0); setP (proc, "whQ", 6); setP (proc, "whAuto", 0); setP (proc, "wahAt", 0);
+            proc.prepareToPlay (sr, 256);
+            auto brightness = [&] (const juce::AudioBuffer<float>& b, double t0, double t1)
+            {
+                // energy above 1.2 kHz relative to all (a crude, robust brightness)
+                juce::dsp::FFT fft (13);
+                std::vector<float> buf (16384, 0.0f);
+                const int a = (int) (t0 * sr);
+                for (int i = 0; i < 8192 && a + i < b.getNumSamples() && a + i < (int) (t1 * sr); ++i) buf[(size_t) i] = b.getSample (0, a + i);
+                fft.performFrequencyOnlyForwardTransform (buf.data());
+                double hi = 0, all = 0;
+                for (int k = 1; k < 4096; ++k) { const double m = (double) buf[(size_t) k] * buf[(size_t) k]; all += m; if (k * sr / 8192.0 > 1200.0) hi += m; }
+                return (float) (10.0 * std::log10 (hi / juce::jmax (1.0e-20, all) + 1.0e-12));
+            };
+            auto note = [] (std::vector<Ev> extra)
+            {
+                std::vector<Ev> ev { { 0.01, juce::MidiMessage::noteOn (1, 52, 0.8f) }, { 0.01, juce::MidiMessage::noteOn (1, 57, 0.8f) },
+                                     { 0.9, juce::MidiMessage::noteOff (1, 52) }, { 0.9, juce::MidiMessage::noteOff (1, 57) } };
+                for (auto& e : extra) ev.push_back (e);
+                std::sort (ev.begin(), ev.end(), [] (const Ev& a, const Ev& b) { return a.t < b.t; });
+                return ev;
+            };
+            const auto heel = render (proc, note ({}), 1.0, sr);
+            const auto cc = render (proc, note ({ { 0.0, juce::MidiMessage::controllerEvent (1, 11, 127) } }), 1.0, sr);
+            setP (proc, "whPedal", 0.5f);   // the knob moves: it is in charge again
+            const auto knob = render (proc, note ({}), 1.0, sr);
+            const float bH = brightness (heel, 0.3, 0.8), bC = brightness (cc, 0.3, 0.8), bK = brightness (knob, 0.3, 0.8);
+            check (bC > bH + 6.0f && bK < bC - 6.0f, "CC11 = 127 opens the wah (" + juce::String (bH, 1) + " -> " + juce::String (bC, 1)
+                   + " dB above 1.2 kHz), moving PEDAL takes over again (" + juce::String (bK, 1) + " dB)");
+            const auto cc4 = render (proc, note ({ { 0.0, juce::MidiMessage::controllerEvent (1, 4, 127) } }), 1.0, sr);
+            check (brightness (cc4, 0.3, 0.8) > bH + 6.0f, "CC4 (foot controller) moves it too");
+            setP (proc, "whPedal", 0.0f);
+            setP (proc, "whAuto", 1); setP (proc, "whSpeed", 5);
+            const auto au = render (proc, note ({}), 1.0, sr);
+            check (brightness (au, 0.03, 0.12) > brightness (au, 0.6, 0.8) + 4.0f, "AUTO in the plugin: the played notes open it, then it closes ("
+                   + juce::String (brightness (au, 0.03, 0.12), 1) + " -> " + juce::String (brightness (au, 0.6, 0.8), 1) + " dB)");
+            // the first note after a rest opens it too (a block with a note never counts as quiet), and so does the note in the block
+            // where the WAH is switched on; D1 (the strum direction key, silent) does not change how far it opens
+            {
+                setP (proc, "whPedal", 0.0f); setP (proc, "whSpeed", 5);
+                std::vector<Ev> rested { { 1.5, juce::MidiMessage::noteOn (1, 52, 0.9f) }, { 2.3, juce::MidiMessage::noteOff (1, 52) } };
+                const auto r = render (proc, rested, 2.4, sr, 1024);
+                const float opened = brightness (r, 1.51, 1.6), closed = brightness (r, 2.1, 2.3);
+                setP (proc, "whOn", 0); proc.prepareToPlay (sr, 256);
+                render (proc, {}, 0.3, sr);
+                // switched on exactly with the note: the slot starts from rest, the note must not be lost
+                auto on = render (proc, {}, 0.0, sr);
+                juce::AudioBuffer<float> blk (2, 256); juce::MidiBuffer mb;
+                mb.addEvent (juce::MidiMessage::noteOn (1, 52, 0.9f), 10);
+                setP (proc, "whOn", 1);
+                juce::AudioBuffer<float> out (2, (int) (0.4 * sr)); out.clear();
+                for (int pos = 0; pos < out.getNumSamples(); pos += 256)
+                {
+                    blk.clear(); juce::MidiBuffer m2; if (pos == 0) m2 = mb;
+                    proc.processBlock (blk, m2);
+                    for (int c = 0; c < 2; ++c) out.copyFrom (c, pos, blk, c, 0, juce::jmin (256, out.getNumSamples() - pos));
+                }
+                const float onOpen = brightness (out, 0.02, 0.1);
+                // a soft chord with / without D1 in front of it
+                auto soft = [&] (bool d1)
+                {
+                    std::vector<Ev> ev { { 0.05, juce::MidiMessage::noteOn (1, 52, 0.25f) }, { 0.05, juce::MidiMessage::noteOn (1, 57, 0.25f) },
+                                         { 0.9, juce::MidiMessage::noteOff (1, 52) }, { 0.9, juce::MidiMessage::noteOff (1, 57) } };
+                    if (d1) ev.insert (ev.begin(), { 0.045, juce::MidiMessage::noteOn (1, Score::kStrumDownKey, 0.8f) });
+                    return brightness (render (proc, ev, 1.0, sr), 0.06, 0.14);
+                };
+                const float plain = soft (false), withD1 = soft (true);
+                check (opened > closed + 4.0f && onOpen > closed + 4.0f && std::abs (withD1 - plain) < 1.5f,
+                       "AUTO: opens on the first note after a rest (" + juce::String (opened, 1) + " vs " + juce::String (closed, 1) + " dB), on the note where WAH is switched on ("
+                       + juce::String (onOpen, 1) + "), D1 does not open it further (" + juce::String (plain, 1) + " / " + juce::String (withD1, 1) + " dB)");
+                (void) on;
+            }
+            setP (proc, "whAuto", 0);
+
+            // its place: after the amp (COMP DRIVE A DRIVE B AMP WAH TREM) - sound, finite, the same latency
+            const int lat0 = proc.getLatencySamples();
+            setP (proc, "ampOn", 1); setP (proc, "cabOn", 1); setP (proc, "wahAt", 4); setP (proc, "whPedal", 5);
+            proc.prepareToPlay (sr, 256);
+            const auto after = render (proc, note ({}), 1.0, sr);
+            check (allFinite (after) && rmsDb (after, 0.05, 0.8, sr) > -45.0f && proc.getLatencySamples() == lat0
+                   && rig::routeOf (rig::kDefault, 4)[4] == rig::blkWah && rig::routeOf (rig::kDefault, 4)[3] == rig::blkAmp,
+                   "WAH after the AMP: plays, the same latency (" + juce::String (lat0) + ")");
+            bool keysOk = true;
+            for (int k = 0; k < rig::kNumRoutes; ++k)
+            {
+                int c = 0, a = 0;
+                rig::splitRoute (rig::routeAtKey (k), c, a);
+                keysOk = keysOk && rig::routeKey (c, a) == k;
+            }
+            check (keysOk, "720 rows (fxChain x WAH place): every one round-trips");
+
+            juce::MemoryBlock mb; proc.getStateInformation (mb);
+            AIOGuitarProcessor p2; p2.setStateInformation (mb.getData(), (int) mb.getSize());
+            check ((int) p2.apvts.getRawParameterValue ("wahAt")->load() == 4 && p2.apvts.getRawParameterValue ("whOn")->load() > 0.5f
+                   && std::abs (p2.apvts.getRawParameterValue ("whPedal")->load() - 5.0f) < 0.01f, "the wah and its place are saved with the song");
+            AIOGuitarProcessor p3;
+            check (p3.apvts.getRawParameterValue ("whOn")->load() < 0.5f && (int) p3.apvts.getRawParameterValue ("wahAt")->load() == 0,
+                   "defaults (and songs from before 0.7.0): WAH off, first in the row");
+            for (auto* id : { "whOn", "whAuto" }) setP (proc, id, 0);
+            setP (proc, "wahAt", 0); setP (proc, "whPedal", 5); setP (proc, "whQ", 5);
+            setP (proc, "ampOn", 1); setP (proc, "cabOn", 1); setP (proc, "kitHuman", 0.5f); setP (proc, "strumOn", 1);
             proc.prepareToPlay (sr, 256);
         }
     }
@@ -2394,6 +2690,11 @@ int main (int argc, char** argv)
         for (int i = 0; i < 4; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
         snap ("editor_drives2.png");
         setP (proc, "pdModel", 0); setP (proc, "wfModel", 1); setP (proc, "pdOn", 0); setP (proc, "wfOn", 0);
+        // the WAH (0.7.0): on, third in the row
+        setP (proc, "whOn", 1); setP (proc, "wahAt", 2); setP (proc, "whAuto", 1);
+        for (int i = 0; i < 4; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
+        snap ("editor_wah.png");
+        setP (proc, "whOn", 0); setP (proc, "wahAt", 0); setP (proc, "whAuto", 0);
     }
 
 

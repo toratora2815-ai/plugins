@@ -1,5 +1,5 @@
 #pragma once
-// EFFECTS ページ: IN → [COTTON COMP / DRIVE A / DRIVE B / AMP / TREM を好きな順に] → CAB（いつも最後）→ OUT。
+// EFFECTS ページ: IN → [COTTON COMP / DRIVE A / DRIVE B / AMP / TREM / WAH を好きな順に] → CAB（いつも最後）→ OUT。
 // DRIVE A / B（0.6.0）は「機種 ▾」で PORCH DRIVE / WOOL FUZZ / HEARTH DRIVE / BRASS BOOST / BARN DIST から選ぶ（DriveSlot.h）。
 // TREM（0.4.0）は My Tremolo の小型版。つまみは DEPTH / RATE / SHAPE と小さい SYNC だけ（細かく作るときは後ろに My Tremolo）。
 // 箱をドラッグするか ◀ ▶ で並べ替え。AMP の箱は小さく、押すと AMP ページ（つまみはそちら）。CAB の箱も押すと AMP ページ。
@@ -11,12 +11,33 @@ namespace FxUI
 {
     inline juce::String jp (const char* s) { return juce::String (juce::CharPointer_UTF8 (s)); }
 
-    // ◀ ▶ (move one place)
-    inline void styleArrow (juce::TextButton& b, juce::Colour ink)
+    // ◀ ▶ (move one place): a button that draws its triangle (a text arrow does not fit a narrow box in every font)
+    class ArrowButton : public juce::Button
     {
-        b.setColour (juce::TextButton::buttonColourId, juce::Colours::black.withAlpha (0.18f));
-        b.setColour (juce::TextButton::textColourOffId, ink);
+    public:
+        explicit ArrowButton (bool pointsLeft) : juce::Button (pointsLeft ? "left" : "right"), leftward (pointsLeft) {}
+        juce::Colour ink { juce::Colours::white };
+        void paintButton (juce::Graphics& g, bool over, bool down) override
+        {
+            auto r = getLocalBounds().toFloat().reduced (1.0f);
+            g.setColour (juce::Colours::black.withAlpha (down ? 0.32f : (over ? 0.25f : 0.18f)));
+            g.fillRoundedRectangle (r, 4.0f);
+            const float cx = r.getCentreX(), cy = r.getCentreY(), w = juce::jmin (9.0f, r.getWidth() * 0.32f), h = w * 1.15f;
+            juce::Path t;
+            if (leftward) t.addTriangle (cx + w * 0.5f, cy - h * 0.5f, cx + w * 0.5f, cy + h * 0.5f, cx - w * 0.5f, cy);
+            else          t.addTriangle (cx - w * 0.5f, cy - h * 0.5f, cx - w * 0.5f, cy + h * 0.5f, cx + w * 0.5f, cy);
+            g.setColour (ink.withAlpha (isEnabled() ? 1.0f : 0.3f));
+            g.fillPath (t);
+        }
+    private:
+        bool leftward;
+    };
+
+    inline void styleArrow (ArrowButton& b, juce::Colour ink)
+    {
+        b.ink = ink;
         b.setTooltip (jp (u8"1 つずらす（箱をドラッグしても入れ替えられます）"));
+        b.repaint();
     }
 
     // six dots: "you can grab this"
@@ -48,10 +69,11 @@ public:
 protected:
     void placeArrows (juce::Rectangle<int> row)   // in the two bottom corners
     {
-        left.setBounds (row.removeFromLeft (30).withSizeKeepingCentre (30, 28));
-        right.setBounds (row.removeFromRight (30).withSizeKeepingCentre (30, 28));
+        const int w = row.getWidth() < 150 ? 27 : 30;   // 27: the narrowest that still shows the arrow
+        left.setBounds (row.removeFromLeft (w).withSizeKeepingCentre (w, 28));
+        right.setBounds (row.removeFromRight (w).withSizeKeepingCentre (w, 28));
     }
-    juce::TextButton left { juce::String (juce::CharPointer_UTF8 (u8"◀")) }, right { juce::String (juce::CharPointer_UTF8 (u8"▶")) };
+    FxUI::ArrowButton left { true }, right { false };
 };
 
 class PedalPanel : public MovableBlock
@@ -79,6 +101,7 @@ public:
             auto l = std::make_unique<juce::Label> ("", label);
             l->setJustificationType (juce::Justification::centred);
             l->setFont (juce::FontOptions (13.0f, juce::Font::bold));
+            l->setMinimumHorizontalScale (0.6f);
             l->setColour (juce::Label::textColourId, look.ink);
             l->setInterceptsMouseClicks (false, false);   // the label area drags the pedal
             addAndMakeVisible (*l);
@@ -109,8 +132,8 @@ public:
 
         // name plate
         g.setColour (look.ink);
-        g.setFont (juce::FontOptions (getWidth() < 240 ? 21.0f : 26.0f, juce::Font::bold));
-        g.drawFittedText (name, plate.toNearestInt().withTrimmedTop (18).removeFromTop (30), juce::Justification::centred, 1);
+        g.setFont (juce::FontOptions (getWidth() < 180 ? 18.0f : (getWidth() < 240 ? 21.0f : 26.0f), juce::Font::bold));
+        g.drawFittedText (name, plate.toNearestInt().withTrimmedTop (18).removeFromTop (30), juce::Justification::centred, 1, 0.75f);
         g.setFont (juce::FontOptions (12.0f));
         g.drawText (sub, plate.withTrimmedTop (48.0f).removeFromTop (18.0f), juce::Justification::centred);
 
@@ -130,7 +153,9 @@ public:
     {
         auto r = getLocalBounds().reduced (14, 22);
         auto bottom = r.removeFromBottom (54);
-        footswitch.setBounds (bottom.withSizeKeepingCentre (juce::jmin (120, bottom.getWidth() - 70), 46));
+        const bool narrowRow = bottom.getWidth() < 150;
+        footswitch.setButtonText (narrowRow ? "ON/OFF" : "ON / OFF");
+        footswitch.setBounds (bottom.withSizeKeepingCentre (juce::jmin (120, bottom.getWidth() - (narrowRow ? 60 : 70)), 46));
         placeArrows (bottom);
         const int n = (int) knobs.size();
         if (getWidth() < 240 && n == 3)   // narrow: two knobs on top, the third under them (like many real pedals)
@@ -208,8 +233,8 @@ public:
     {
         PedalPanel::paint (g);
         g.setColour (look.ink.withAlpha (0.8f));
-        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.drawText (slotName, getLocalBounds().reduced (16, 8).removeFromTop (14), juce::Justification::centredLeft);
+        g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+        g.drawText (slotName, getLocalBounds().reduced (12, 8).removeFromTop (14).withWidth (getWidth() / 2 - 22), juce::Justification::centredLeft, true);
     }
 
     void resized() override
@@ -286,6 +311,73 @@ private:
     const char* modelId;
     int shown = -1;
     juce::TextButton pick;
+};
+
+// BELLOWS WAH（0.7.0）: PEDAL / Q / SPEED と AUTO。プレートの下の横棒 = 今のワウの位置（かかと〜つま先）。
+// MIDI の CC11 / CC4 で踏んでいるときも、AUTO で開いているときも、この棒が動く（PEDAL のつまみは動かない）
+class WahPanel : public PedalPanel, private juce::Timer
+{
+public:
+    WahPanel (AIOGuitarProcessor& p, int blockId)
+        : PedalPanel (p.apvts, blockId, "BELLOWS WAH", "", "whOn", { { "whPedal", "PEDAL" }, { "whQ", "Q" }, { "whSpeed", "SPEED" } },
+                      { juce::Colour (0xff5a3a28), juce::Colour (0xfff2e3cf), juce::Colour (0xffe0a96d) }),
+          proc (p)
+    {
+        knobs[0]->textFromValueFunction = [] (double v) { return v < 0.5 ? juce::String ("HEEL") : v > 9.5 ? juce::String ("TOE") : juce::String (v, 1); };
+        for (auto& k : knobs) k->updateText();
+        autoBtn.setButtonText ("AUTO");
+        autoBtn.setClickingTogglesState (true);
+        autoBtn.setColour (juce::TextButton::buttonColourId, juce::Colours::black.withAlpha (0.25f));
+        autoBtn.setColour (juce::TextButton::buttonOnColourId, look.knob);
+        autoBtn.setColour (juce::TextButton::textColourOffId, look.ink);
+        autoBtn.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+        autoBtn.setTooltip (FxUI::jp (u8"ON = 音が鳴るたびにつま先側へ開いて PEDAL の位置へ戻る（開く量は強さ、戻る速さは SPEED）。OFF = PEDAL の位置のまま"));
+        addAndMakeVisible (autoBtn);
+        autoAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "whAuto", autoBtn);
+        knobs[0]->setTooltip (FxUI::jp (u8"踏み込み（0 かかと＝こもる、10 つま先＝明るい）。Logic のオートメーション、または MIDI の CC11 / CC4 で動かせます（最後に動いたほう）"));
+        knobs[1]->setTooltip (FxUI::jp (u8"共振の強さ。上げるほど「ワウ」とはっきり鳴く"));
+        knobs[2]->setTooltip (FxUI::jp (u8"AUTO のとき、開いてから PEDAL の位置へ戻る速さ（0 ゆっくり、10 速い）"));
+        setTooltip (FxUI::jp (u8"ワウ。足で踏む代わりに、Logic のオートメーション・CC11 / CC4・AUTO で動かします"));
+        startTimerHz (20);
+    }
+
+    void resized() override
+    {
+        PedalPanel::resized();
+        auto p = plate.toNearestInt();
+        autoBtn.setBounds (p.withSizeKeepingCentre (64, 22).withY (p.getY() + 50));
+        barRow = p.withSizeKeepingCentre (juce::jmin (150, p.getWidth() - 12), 12).withY (p.getBottom() - 14).toFloat();
+        bar = barRow.reduced (30.0f, 2.0f);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        PedalPanel::paint (g);
+        if (bar.isEmpty()) return;
+        g.setColour (juce::Colours::black.withAlpha (0.3f));
+        g.fillRoundedRectangle (bar, 3.0f);
+        g.setColour (look.knob.withAlpha (footswitch.getToggleState() ? 1.0f : 0.4f));
+        g.fillRoundedRectangle (bar.withWidth (juce::jmax (4.0f, bar.getWidth() * shownPos)), 3.0f);
+        g.setColour (look.ink.withAlpha (0.7f));
+        g.setFont (juce::FontOptions (9.0f));
+        g.drawText ("HEEL", barRow.withWidth (28.0f), juce::Justification::centredLeft);
+        g.drawText ("TOE", barRow.withTrimmedLeft (barRow.getWidth() - 28.0f), juce::Justification::centredRight);
+    }
+
+private:
+    void timerCallback() override
+    {
+        const float p = proc.wahPosition();
+        if (std::abs (p - shownPos) > 0.003f) { shownPos = p; repaint (barRow.expanded (2.0f).toNearestInt()); }
+        const float a = autoBtn.getToggleState() ? 1.0f : 0.45f;   // SPEED only matters with AUTO
+        if (std::abs (knobs[2]->getAlpha() - a) > 0.01f) { knobs[2]->setAlpha (a); labels[2]->setAlpha (a); }
+    }
+
+    AIOGuitarProcessor& proc;
+    juce::TextButton autoBtn;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoAtt;
+    juce::Rectangle<float> bar, barRow;
+    float shownPos = 0.5f;
 };
 
 // TREM: DEPTH / RATE / SHAPE。RATE は SYNC 中は音符の長さ（trRate）、SYNC OFF・単体アプリは Hz（trHz）に入れ替わる
@@ -470,7 +562,8 @@ public:
           drive (p.apvts, rig::blkDrive, "DRIVE A", "pdOn", "pdGain", "pdTone", "pdLevel", "pdModel"),
           fuzz (p.apvts, rig::blkFuzz, "DRIVE B", "wfOn", "wfSustain", "wfTone", "wfVolume", "wfModel"),
           ampBlock (p),
-          trem (p.apvts, rig::blkTrem, { juce::Colour (0xff24504b), juce::Colour (0xffe8f3f1), juce::Colour (0xff7fd6c8) })
+          trem (p.apvts, rig::blkTrem, { juce::Colour (0xff24504b), juce::Colour (0xffe8f3f1), juce::Colour (0xff7fd6c8) }),
+          wah (p, rig::blkWah)
     {
         for (auto* b : blocks())
         {
@@ -576,21 +669,26 @@ public:
     }
 
 private:
-    static constexpr int kInW = 34, kOutW = 40, kGap = 18, kCabW = 120;
+    static constexpr int kInW = 34, kOutW = 40, kGap = 12, kCabW = 104;
 
-    std::array<MovableBlock*, rig::numBlocks> blocks() { return { &comp, &drive, &fuzz, &ampBlock, &trem }; }
+    std::array<MovableBlock*, rig::numBlocks> blocks() { return { &comp, &drive, &fuzz, &ampBlock, &trem, &wah }; }   // index = rig::Block
     MovableBlock* blockFor (int id) { return blocks()[(size_t) juce::jlimit (0, rig::numBlocks - 1, id)]; }
 
-    rig::Order currentOrder() const { return rig::orderAt ((int) proc.apvts.getRawParameterValue ("fxChain")->load()); }
+    int routeKey() const { return rig::routeKey ((int) proc.apvts.getRawParameterValue ("fxChain")->load(), (int) proc.apvts.getRawParameterValue ("wahAt")->load()); }
+    rig::Route currentOrder() const { return rig::routeAtKey (routeKey()); }
 
-    void setOrder (const rig::Order& o)
+    // the row is kept as the five of fxChain + WAH's place (wahAt)
+    void setOrder (const rig::Route& o)
     {
-        if (auto* p = proc.apvts.getParameter ("fxChain"))
-        {
-            p->beginChangeGesture();
-            p->setValueNotifyingHost (p->convertTo0to1 ((float) rig::indexOf (o)));
-            p->endChangeGesture();
-        }
+        int chain = 0, at = 0;
+        rig::splitRoute (o, chain, at);
+        for (auto [id, v] : { std::pair<const char*, int> { "fxChain", chain }, std::pair<const char*, int> { "wahAt", at } })
+            if (auto* p = proc.apvts.getParameter (id))
+            {
+                p->beginChangeGesture();
+                p->setValueNotifyingHost (p->convertTo0to1 ((float) v));
+                p->endChangeGesture();
+            }
         layout();
         repaint();
     }
@@ -619,10 +717,10 @@ private:
             inner.removeFromLeft (kGap);
         }
         if (! dragging) placeBlocks (currentOrder(), nullptr);
-        shownOrder = (int) proc.apvts.getRawParameterValue ("fxChain")->load();
+        shownOrder = routeKey();
     }
 
-    void placeBlocks (const rig::Order& o, MovableBlock* skip)
+    void placeBlocks (const rig::Route& o, MovableBlock* skip)
     {
         for (int k = 0; k < rig::numBlocks; ++k)
         {
@@ -666,7 +764,7 @@ private:
 
     void timerCallback() override
     {
-        const int o = (int) proc.apvts.getRawParameterValue ("fxChain")->load();
+        const int o = routeKey();
         if (o != shownOrder && ! dragging) { layout(); repaint(); }
         const bool sl = proc.fxSleeping.load();
         if (sl != shownSleep) { shownSleep = sl; repaint(); }
@@ -682,12 +780,13 @@ private:
     DrivePanel drive, fuzz;
     AmpBlock ampBlock;
     TremPanel trem;
+    WahPanel wah;
     std::array<juce::Rectangle<int>, rig::numBlocks> slots;
     juce::Rectangle<int> row, cabBox;
     MovableBlock* dragBlock = nullptr;
     juce::Point<int> dragStart;
     bool dragging = false, cabPressed = false;
-    rig::Order previewOrder { 0, 1, 2, 3, 4 };
+    rig::Route previewOrder = rig::routeAtKey (0);
     int shownOrder = -1;
     bool shownSleep = false;
     juce::String shownAmp, shownCab;

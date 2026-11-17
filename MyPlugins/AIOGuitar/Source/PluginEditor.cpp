@@ -941,7 +941,7 @@ AIOGuitarEditor::AIOGuitarEditor (AIOGuitarProcessor& p)
     ampPage.onShowEffects = [this] { showPage (2); };     // the chain strip on AMP -> where it sits
 
     showPage (0);
-    setSize (1100, 860);
+    setSize (1280, 860);   // 0.7.0: wide enough for six boxes on the EFFECTS page
     startTimerHz (4);
 }
 

@@ -130,6 +130,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
                                   juce::AudioParameterChoiceAttributes().withAutomatable (false)));
     l.add (std::make_unique<APC> (juce::ParameterID { "wfModel", 5 }, "Drive B Model", pedal::DriveSlotDSP::modelNames(), pedal::DriveSlotDSP::wool,
                                   juce::AudioParameterChoiceAttributes().withAutomatable (false)));
+    // BELLOWS WAH (0.7.0, WahDSP.h). Version hint 6: at the end of the AU list. PEDAL is automatable (and follows MIDI CC11 / CC4);
+    // its place in the row is wahAt (0..5, the five of fxChain keep their order), not automatable like the order itself
+    l.add (std::make_unique<APB> (juce::ParameterID { "whOn", 6 }, "Wah On", false));
+    l.add (std::make_unique<APF> (juce::ParameterID { "whPedal", 6 }, "Wah Pedal", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
+    l.add (std::make_unique<APF> (juce::ParameterID { "whQ", 6 }, "Wah Q", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
+    l.add (std::make_unique<APF> (juce::ParameterID { "whSpeed", 6 }, "Wah Auto Speed", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 7.0f, fmt ("", 1)));
+    l.add (std::make_unique<APB> (juce::ParameterID { "whAuto", 6 }, "Wah Auto", false));
+    l.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "wahAt", 6 }, "Wah Place", 0, rig::numBlocks - 1, rig::kDefaultWahAt,
+                                                      juce::AudioParameterIntAttributes().withAutomatable (false)));
     l.add (std::make_unique<APF> (juce::ParameterID { "kitVelSens", 1 }, "Velocity Sensitivity",
                                   juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.7f, fmt ("", 2)));
 
@@ -253,13 +262,16 @@ void AIOGuitarProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     expectedPpq = -1.0;
     volume.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (get ("gtVolume")));
     readParams();
-    rig.prepare (sampleRate, samplesPerBlock, (int) get ("fxChain"), fx);
+    rig.prepare (sampleRate, samplesPerBlock, rig::routeKey ((int) get ("fxChain"), (int) get ("wahAt")), fx);
     rig.drive.get().setModel ((int) get ("pdModel"), true);
     rig.fuzz.get().setModel ((int) get ("wfModel"), true);
     rig.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));
     rig.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
     rig.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
     rig.trem.snapParams (get ("trDepth"), get ("trRate"), get ("trShape"));
+    lastWahParam = get ("whPedal"); wahFromCC = false;
+    rig.wah.snapParams (lastWahParam, get ("whQ"), get ("whSpeed"));
+    rig.wah.get().setAuto (get ("whAuto") > 0.5f);
     setLatencySamples (rig.latency());   // the same for every order
     quietSamples = 0;
     lastOutPeak = 1.0f;
@@ -340,12 +352,20 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const int preview = voiceParams.previewArticulation.exchange (-1);
     if (preview >= 0) synth.select (preview);
 
-    // mod wheel -> palm mute
+    // mod wheel -> palm mute; CC11 / CC4 -> WAH (by its place in the block)
+    rig.wah.get().beginBlock (n);
+    bool wahCCThisBlock = false;
     for (const auto meta : midi)
     {
         const auto msg = meta.getMessage();
         if (msg.isController() && msg.getControllerNumber() == 1)
             voiceParams.modWheel.store (msg.getControllerValue() / 127.0f);
+        else if (msg.isController() && (msg.getControllerNumber() == 11 || msg.getControllerNumber() == 4))   // expression / foot pedal -> WAH
+        {
+            wahCC = msg.getControllerValue() / 12.7f;
+            wahFromCC = wahCCThisBlock = true;
+            rig.wah.get().ccAt (meta.samplePosition, wahCC);
+        }
         else if (msg.isChannelPressure())
             voiceParams.aftertouch.store (msg.getChannelPressureValue() / 127.0f);
     }
@@ -418,7 +438,13 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (expectedPpq >= 0.0 && ! playing && ! previewRunning) synth.allNotesOff (0, true);   // transport stopped: let everything ring out
     // playback starts / jumps: articulation back to Normal, so a keyswitch latched at the end
     // of the last pass does not leak into the first notes (same result every time you press play)
-    if (playing && havePpq && ! previewRunning && (expectedPpq < 0.0 || jumped)) synth.select (artNormal);
+    if (playing && havePpq && ! previewRunning && (expectedPpq < 0.0 || jumped))
+    {
+        synth.select (artNormal);
+        // the WAH goes back to its knob / automation (a CC from the last pass must not stay), unless Logic sends the
+        // CC again right now (chase: the controller value at the place playback starts from)
+        wahFromCC = wahCCThisBlock;
+    }
     syncWasPlaying = syncPlay;
 
     // capture passes (FOLLOW LOGIC): a pass = one continuous stretch of playback
@@ -462,6 +488,19 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         }
     }
     else hookPpq0 = ppq;
+    // WAH AUTO: where the notes start in this block, as played (before STRUM spreads a chord: one stroke = one opening;
+    // the first string sounds right there, and WahDSP takes notes within 30 ms as the same stroke). Not the keyswitches,
+    // not D1 / D#1 (the strum direction keys: silent). A block with notes in it never counts as quiet (the effects must not rest on them)
+    bool notesHere = false;
+    for (const auto meta : midi)
+    {
+        const auto msg = meta.getMessage();
+        if (msg.isNoteOn() && ! GuitarSynth::isKeyswitch (msg.getNoteNumber()) && ! Score::isStrumKey (msg.getNoteNumber()))
+        {
+            rig.wah.get().noteAt (meta.samplePosition, msg.getFloatVelocity());
+            notesHere = true;
+        }
+    }
     // STRUM: spread chords string by string (after the score notes are in, before the synth)
     strum.process (midi, n, strumSet, synth, audioTable.get(), (playing && havePpq) || previewRunning, hookPpq0, ppqPerSample,
                    previewRunning || syncPlay);
@@ -494,30 +533,42 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     rig.fuzz.setParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
     rig.trem.setOn (get ("trOn") > 0.5f);
     rig.trem.setParams (get ("trDepth"), get ("trRate"), get ("trShape"));
+    // WAH: the PEDAL knob / automation or MIDI CC11 / CC4, whichever moved last
+    {
+        const float pp = get ("whPedal");
+        if (std::abs (pp - lastWahParam) > 1.0e-4f) { lastWahParam = pp; wahFromCC = false; }
+        rig.wah.setOn (get ("whOn") > 0.5f);
+        const bool running = rig.wah.isRunning();
+        rig.wah.get().useCC (wahFromCC && running);   // the CCs of this block move it at their own places
+        rig.wah.setParams ((wahFromCC && running) ? -1.0f : (wahFromCC ? wahCC : pp), get ("whQ"), get ("whSpeed"));
+        rig.wah.get().setAuto (get ("whAuto") > 0.5f);
+        if (! running) rig.wah.get().showResting();
+    }
     // TREM の時計: SYNC 中は Logic の拍（止まっている間は Logic のテンポで自分で回る）。単体アプリは Logic がないので Hz だけ
     rig.trem.get().setClock (! isStandaloneApp() && get ("trSync") > 0.5f, get ("trHz"), playing, havePpq, ppq, bpm);
 
     const bool silentIn = buffer.getMagnitude (0, n) < 1.0e-6f && (buffer.getNumChannels() < 2 || buffer.getMagnitude (1, 0, n) < 1.0e-6f);
-    quietSamples = silentIn ? quietSamples + n : 0;
+    quietSamples = (silentIn && ! notesHere) ? quietSamples + n : 0;
     // rest once nothing comes in for 0.5 s AND what comes out (the cabinet's tail) has died away
     const bool sleeping = quietSamples > (int) (sr * 0.5) && lastOutPeak < 1.0e-5f;
     fxSleeping.store (sleeping);
     if (sleeping)
     {
         fx.offline = isNonRealtime();
-        rig.rest (fx, (int) get ("fxChain"), n);
+        rig.rest (fx, rig::routeKey ((int) get ("fxChain"), (int) get ("wahAt")), n);
         rig.drive.get().setModel ((int) get ("pdModel"), true);
         rig.fuzz.get().setModel ((int) get ("wfModel"), true);
         rig.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));    // the next note starts as set
         rig.drive.snapParams (get ("pdGain"), get ("pdTone"), get ("pdLevel"));
         rig.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
         rig.trem.snapParams (get ("trDepth"), get ("trRate"), get ("trShape"));
+        rig.wah.snapParams (wahFromCC ? wahCC : get ("whPedal"), get ("whQ"), get ("whSpeed"));
         buffer.clear();
         return;
     }
     fx.offline = isNonRealtime();
     if (buffer.getNumChannels() >= 2)
-        rig.process (buffer, n, fx, (int) get ("fxChain"));
+        rig.process (buffer, n, fx, rig::routeKey ((int) get ("fxChain"), (int) get ("wahAt")));
 
     // safety on the way out: linear up to -6 dBFS, rounded off above, never over 0 dBFS
     // (the pedals alone reach +26 dBFS, a clean amp turned all the way up +7)

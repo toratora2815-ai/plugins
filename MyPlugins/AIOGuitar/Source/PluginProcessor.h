@@ -94,6 +94,7 @@ public:
     std::atomic<bool>   uiHostPlaying { false }, uiPreview { false };
     std::atomic<double> hostBpm { 120.0 };
     std::atomic<bool>   fxSleeping { false };   // UI: effects and amp are resting (nothing playing)
+    float wahPosition() const { return rig.wah.get().shownPosition(); }   // UI: where the WAH is (0 heel .. 1 toe)
     std::atomic<int>    hostNum { 4 }, hostDen { 4 };
 
     // ---- RECORD GUIDE (stand-alone app only: the guitar comes in through the audio interface)
@@ -136,6 +137,9 @@ private:
     Strummer::Settings strumSet;
     int quietSamples = 0;
     float lastOutPeak = 1.0f;
+    // WAH pedal: MIDI CC11 / CC4 (0..10) or the knob, whichever moved last
+    float wahCC = 5.0f, lastWahParam = -1.0f;
+    bool wahFromCC = false;
     FXParams fx;
     void setCabIR (juce::AudioBuffer<float>&& ir, double rate, const juce::String& name);
     juce::CriticalSection irLock;          // message thread only (state save vs. loading)

@@ -225,6 +225,29 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
   192 kHz で HEARTH 1 台 17 %、左右同じ音を 2 回計算している（片方だけ計算してコピーすれば半分）検査の道具は build/driveinspect（tonefix・zipper・swfix・converge・alias、ProcInspect tonetick）
 - 測定ホストの注意（メモリ measuring-commercial-au にも）: Guitar Rig のラックは入口のゲートが既定 ON、DUMP で読み戻して部品が残っているか必ず確かめる
 
+## WAH（2026-11-17 本人「ワウを作る」、mix-engineer「作る価値あり」）
+- 手本: Guitar Rig 無料版にワウはない（Cry Wah・Wahwah・Real Wah・Talk Wah・AutoFilter も捨てられる。動くのは Pro-Filter だけ）→ 公開の実測値で作った:
+  J. O. Smith（CCRMA）の CryBaby 実測 = 460 / 840 / 2250 Hz、Q 9.4 / 4.0 / 2.0。WahDSP.h: f = 450·5^(p^1.4)、Q = 9.4·(2/9.4)^(p^0.857)、
+  TPT SVF（動かしても跳ばない）、出口 = 帯域（山 1）＋ 低い側 0.08（山より約 23 dB 下）、入口 60 Hz HP。Q つまみは曲線全体の倍率 0.5〜2（5 = 実測どおり）
+- 大きさ: 本人の DI（Brit and Clean #11）で真ん中の ON = OFF（kOut 2.77）、Q の倍率ごとに 2 倍で約 1.9 dB 下がる分を中で戻す（qMul^0.316）。
+  かかと〜つま先は本人の DI で −2.9〜+0.4 dB、RenderTest の明るい DI で −1.6 / −1.0 / +1.3 dB（AIO に GAIN MATCH はないので、歪みの前で音量差が出ないように）
+- 並び: fxChain（前の 5 箱、そのまま）＋ wahAt（WAH の場所 0〜5、オートメーション不可）。鍵 = fxChain×6＋wahAt（720 通り）。前の曲・前のプリセット（.mypreset も）は読み替えなしで
+  WAH がいちばん前・OFF（mix-engineer: 720 通りの新しい番号にすると .mypreset の並びがまた初期に戻るので、この形のまま。3 回目の MOD も同じ形で足せる）
+- PEDAL: オートメーション、または MIDI CC11 / CC4（最後に動いたほう）。再生開始・位置のジャンプでは CC からつまみへ戻す（前のパスの CC を残さない）。
+  ただしそのブロックに CC が来ていれば CC のまま（Logic のチェイス）。実機で「CC のリージョンの途中から再生」はまだ確かめていない
+- AUTO: STRUM で弦をずらす前の音の頭を拾う（1 ストローク = 1 回）。WahDSP でも 30 ms 以内は同じストローク（開く量が増えるときだけ足す）。開くのは約 4 ms、
+  戻りは SPEED（0 = 1.2 s 〜 10 = 60 ms、初期値 7 ≈ 150 ms = 16 分でも閉じる）
+- 画面: 箱が 6 個になったのでエディターを 1100 → 1280 幅に。細い箱では名前・ON/OFF・矢印を小さく、矢印は図形で描く（◀ の文字が細い箱に入らないため）。
+  WahPanel のプレートの下に HEEL〜TOE の棒（今の位置。CC・AUTO でも動く）
+- プリセット（最後に追加）: Wah Funk (AUTO)、Cocked Wah Lead
+- DSP 検査 1 回目（2026-11-17）「直してから」→ 直した: 休みの判定が音の頭のあるブロックを休ませていた（→ 音の頭があるブロックは休ませない）、
+  ON にしたときの reset() が音の頭の列を消していた（→ reset では消さない、beginBlock と prepare だけ）、D1 / D#1 を数えていた（→ Score::isStrumKey を除外）、
+  CC はブロックの最後の値だけだった（→ ccAt で位置つき、20 ms でなめらかに）、オートメーションはブロックの長さ以上かけて動かす（大きいバッファで階段にならない）、
+  休みのあいだ AUTO の開きが残っていた（→ snap で閉じる）、画面の棒が OFF・休みで動かなかった（→ showResting）、3/4 付近（1.3 kHz）が約 3 dB 小さかった（→ +1.5 dB）。
+  まだ: Logic のチェイスの CC が再生の最初のブロックに来るか、MIDI リセットで CC4 = 0 が来たときの動き（実機で確かめる）
+- DSP 検査 2 回目「渡してよい」（休み明け 28/28、ランダム 240 音すべて開く、CC はブロック 1〜4096 で同じ）。CC が 1 ブロックに 128 個を超えたら最後を上書き（1 行）。
+  残り（急がない）: Q のオートメーションは 30 ms の SmoothedValue のまま（ブロック 2048 で少し階段）
+
 ## まだ直していないこと（DSP 検査 2026-11-10、急がない）
 - COMP を AMP の後ろに置いたまま、鳴らしながら AMP の機種・プリセットを替えると 20〜26 ms だけ +4〜5 dB（コンプのピック抜け +5 dB と、
   pad の 15 ms・機種切替の 5 ms 下げ 10 ms 上げ・GAIN の 30 ms のずれ、表の +12 dB 頭打ち）。出口のクリップで 0 dBFS は超えない。pad を 30 ms にすると GAIN 0→10 が悪化したので、時間合わせだけでは直らない
@@ -235,6 +258,7 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
 `RenderTest <出力> [弦の硬さ 0〜0.0004]`、`RenderTest --padtable`（AmpPad.h の表を出す、約 1 分）、`RenderTest --amp ...`（AMP の音を WAV で）
 
 ## 版
+- 0.7.0（2026-11-17）… EFFECTS に BELLOWS WAH（6 個目の箱、AUTO・CC11 / CC4）。エディターの幅 1280。上の「WAH」の節
 - 0.6.0（2026-11-11）… DRIVE A / B（5 機種から選ぶ: Porch Drive・Wool Fuzz・Hearth Drive・Brass Boost・Barn Dist）。上の「DRIVE A / B」の節
 - 0.5.0（2026-11-10）… ビビり補正（Fix Buzz）。上の「ビビり補正」の節
 - 0.1.0（2026-11-08）… リポジトリに移す。MY GUITAR ページ（録音 4 欄、弦とフレットの表、PLAYING、奏法）、SCORE ページ（タブ譜、FOLLOW LOGIC / PLAY IN SYNC、DRAG TO LOGIC）、タブ 4 つ（EFFECTS / AMP は仮）、LINK 欄・プリセット欄。

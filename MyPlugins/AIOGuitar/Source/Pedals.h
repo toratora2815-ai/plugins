@@ -5,6 +5,7 @@
 // OFF のペダルは計算しない（タイミングをそろえる短い遅らせだけ）。ON/OFF は 15 ms でつなぐ。
 #include <JuceHeader.h>
 #include "DriveSlot.h"
+#include "WahDSP.h"
 #include "CottonCompDSP.h"
 #include "TremPedalDSP.h"
 
@@ -28,6 +29,7 @@ public:
 
     void setParams (float a, float b, float c) { dsp.setParams (a, b, c); }
     DSP& get() { return dsp; }   // TREM の時計など、3 つのつまみ以外を渡すとき
+    const DSP& get() const { return dsp; }
     void snapParams (float a, float b, float c) { dsp.setParams (a, b, c, true); }
 
     void setOn (bool shouldBeOn)

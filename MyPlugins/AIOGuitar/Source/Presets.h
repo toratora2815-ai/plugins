@@ -111,7 +111,25 @@ inline const std::vector<Preset>& getFactoryPresets()
             { "pdModel", 4 }, { "pdOn", 1 }, { "pdGain", 6.5f }, { "pdTone", 4.5f }, { "pdLevel", -11 },
             { "ampOn", 1 }, { "ampModel", 0 }, { "ampGain", 4 }, { "ampBass", 5.5f }, { "ampMid", 5 }, { "ampTreble", 5.5f },
             { "ampPresence", 5 }, { "ampMaster", 5 },
-            { "cabOn", 1 }, { "cabType", 2 }, { "cabMicType", 0 }, { "cabPos", 3 }, { "cabDist", 2 } } }
+            { "cabOn", 1 }, { "cabType", 2 }, { "cabMicType", 0 }, { "cabPos", 3 }, { "cabDist", 2 } } },
+
+        // 0.7.0: the WAH (first in the row unless wahAt says otherwise)
+        // clean funk: every note opens the wah and it snaps back (AUTO), the comp evens the picking
+        { "Wah Funk (AUTO)", {
+            { "whOn", 1 }, { "whAuto", 1 }, { "whPedal", 1 }, { "whQ", 6 }, { "whSpeed", 7.5f },
+            { "ccOn", 1 }, { "ccComp", 5 }, { "ccLevel", 0 }, { "ccBlend", 80 },
+            { "ampOn", 1 }, { "ampModel", 0 }, { "ampGain", 3.5f }, { "ampBass", 4.5f }, { "ampMid", 5 }, { "ampTreble", 6 },
+            { "ampPresence", 6 }, { "ampMaster", 5 },
+            { "cabOn", 1 }, { "cabType", 1 }, { "cabMicType", 0 }, { "cabPos", 2.5f }, { "cabDist", 2 } } },
+
+        // the wah parked half way ("cocked") into the mid-forward drive and a crunchy amp: a nasal, singing lead
+        { "Cocked Wah Lead", {
+            { "gtRelease", 0.2f },
+            { "whOn", 1 }, { "whPedal", 6 }, { "whQ", 5 },
+            { "pdModel", 2 }, { "pdOn", 1 }, { "pdGain", 4 }, { "pdTone", 5 }, { "pdLevel", 0 },
+            { "ampOn", 1 }, { "ampModel", 3 }, { "ampGain", 6 }, { "ampBass", 5 }, { "ampMid", 6 }, { "ampTreble", 5 },
+            { "ampPresence", 5 }, { "ampMaster", 6 },
+            { "cabOn", 1 }, { "cabType", 2 }, { "cabMicType", 2 }, { "cabPos", 3 }, { "cabDist", 2 } } }
     };
     return presets;
 }
