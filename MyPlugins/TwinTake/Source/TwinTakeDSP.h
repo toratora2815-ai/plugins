@@ -19,6 +19,13 @@
 //   - 長い音の中の揺れ（DRIFT、VOCAL だけ）: 音の頭で決めた音程のずれのまわりを、その ±50%（最大 ±3 セント）で、1.5〜3 秒ごとの次の目標へなめらかに動く。
 //     0 セントをまたがない（原音と同じ高さに近づくと、くし形の音色が止まって聞こえるため）。音の頭では 0 から始める
 //   - DOUBLE ONLY: 原音を出さずダブルだけ（AUX のセンドに挿して、ダブルだけを加工する用）。切り替えは 20 ms
+// 1.2.0（2026-11-17、本人「作る」）:
+//   - GUITAR の前後を、長い休み（3 ms の平均で 100 ms 以上 = 実際の無音でだいたい 125 ms 以上）のあとの音でだけ、くじで選び直す（フレーズごと）。
+//     TAKE で固定だと、左右に振り切った同じ音がいつも同じ向きにずれ、右のギターが「いつも走る / もたる」に聞こえやすかった。
+//     ミュートした刻み（休み 50〜100 ms）では選び直さない（1 音ごとに 20〜50 ms 跳ぶと雑に聞こえるため。DSP 検査係）。
+//     入れかわる音の頭では、休みの終わりで古い読み出しを切る（見つけるのが遅れても、古い側が新しい音の頭を読んで二重のアタックにならない）。
+//     古い読み出しを休みの中で消しきれない時と、前 → 後ろで休みが「跳ぶ量 ＋ 5 ms」より短い時は入れかえない。
+//     何も鳴っていない時（再生の始め・reset・位置が飛んだ後）もくじ → 書き出しと「頭から再生」が同じになる
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -111,6 +118,7 @@ namespace twin
             std::fill (frameP.begin(), frameP.end(), 0.0f); std::fill (lvlDb.begin(), lvlDb.end(), -120.0f); std::fill (sufMin.begin(), sufMin.end(), -120.0f);
             std::fill (frameOf.begin(), frameOf.end(), (int64_t) -1);
             frameCount = 0; frameAcc = 0; win10 = 0; curFrame = 0; tailEnd = -1;
+            curSide = 0.0f; quietRun = 0; lastQuietLen = 0; lastQuietEndW = INT64_MIN / 2;
             dryS = dryT;
             stats = Stats();
         }
@@ -123,7 +131,7 @@ namespace twin
             const int activeMode = p.mode;
             p = np;
             if (np.mode != activeMode && w > 0) { switching = true; nextMode = np.mode; p.mode = activeMode; }   // FIX: 鳴らしている途中なら 10 ms で下げてから
-            else if (np.mode != activeMode) { for (auto& v : voice) v = Voice(); armed = true; switching = false; }
+            else if (np.mode != activeMode) { for (auto& v : voice) v = Voice(); armed = true; switching = false; curSide = 0.0f; }
             else switching = false;
             p.voices = p.voices >= 4 ? 4 : (p.voices >= 2 ? 2 : 1);
             p.loose = std::clamp (p.loose, 0.0f, 1.0f);
@@ -168,7 +176,7 @@ namespace twin
             const bool stereoOut = numCh > 1 && R != nullptr;
             for (int i = 0; i < n; ++i)
             {
-                if (switching) { swGain -= swStep; if (swGain <= 0.0f) { swGain = 0.0f; p.mode = nextMode; switching = false; for (auto& v : voice) v = Voice(); armed = true; applyVoiceTargets(); } }
+                if (switching) { swGain -= swStep; if (swGain <= 0.0f) { swGain = 0.0f; p.mode = nextMode; switching = false; for (auto& v : voice) v = Voice(); armed = true; curSide = 0.0f; applyVoiceTargets(); } }
                 else if (swGain < 1.0f) swGain = std::min (1.0f, swGain + swStep);
                 const bool guitar = p.mode == 1;
                 const int nv = guitar ? 1 : p.voices;
@@ -267,6 +275,7 @@ namespace twin
             float driftA = 0, dFrom = 0, dTo = 0; double segPos = 0, segLen = 1; uint64_t drs = 0; int rateCount = 0;
             // 語尾（TAIL）: 今の下げ量と目標（8 サンプルごとに決め直す）
             float tailG = 1, tailT = 1; int tailCount = 0;
+            float side = 0;   // GUITAR: −1 = ダブルが原音より前、+1 = 後ろ（VOCAL は 0）
         };
         // 読み出し 6 個・予定 8 個で足りる理由: いちばん長い遅れ（GUITAR 65 ms）＋ 手前 1.5 ms ＋ フェード < 音の頭の最短間隔 70 ms。
         // なので同時に生きているのは「消えかけ 1 ＋ 今の 1 ＋ つなぎ直し 1」まで、予定は 1 個まで（検査係の実測でも最大 2 個・1 個）。
@@ -299,6 +308,10 @@ namespace twin
             es += (x2 - es) * aSlow;
             eA += (x2 - eA) * aPow3;
             pkPow = std::max (eA, pkPow * pkDecay);
+            // 休み（GUITAR の前後を選び直すため）: 3 ms の平均の大きさが直近のピークより 40 dB 以上小さい間を数え、終わった時に長さを覚えておく
+            // （10 ms で減る ef だと消え際がにじみ、100 ms の休みを 40 ms ほどと短く見て、後ろへ移るのを止めすぎていた）
+            if (eA < std::max (1.0e-9f, pkPow * 1.0e-4f)) ++quietRun;
+            else if (quietRun > 0) { lastQuietLen = quietRun; lastQuietEndW = w; quietRun = 0; }
             // 子音・息（VOCAL だけ）: 4 kHz より上の割合が大きい所、小さくてざらざらした所
             float g = 1.0f;
             if (! guitar)
@@ -321,7 +334,9 @@ namespace twin
             {
                 armed = false; lastOnset = w;
                 const int64_t back = (int64_t) (0.001 * fs);
-                onset (w - back, tl - back, guitar);
+                // この音の頭の手前の休み（休みが終わったのが 20 ms 以内なら、その長さ）
+                const int64_t rest = (w - lastQuietEndW <= (int64_t) (0.02 * fs)) ? lastQuietLen : 0;
+                onset (w - back, tl - back, guitar, rest);
             }
         }
 
@@ -399,7 +414,7 @@ namespace twin
         }
 
         // 新しい読み出しの設定を選ぶ（delay はサンプル）
-        void choose (Head& h, Rnd& r, int v, bool guitar, double& delaySamples) const
+        void choose (Head& h, Rnd& r, int v, bool guitar, double& delaySamples, float side) const
         {
             const float L = p.loose;
             double dMs;
@@ -416,8 +431,8 @@ namespace twin
             else
             {
                 const float off = 10.0f + (6.0f + 9.0f * L) * r.next();
-                // 前か後ろかは TAKE とトラックで決める（音ごとにくじで入れかえると、後ろへ跳んだ所で右だけ最大 47 ms 途切れたため）
-                const float sign = guitarSide();
+                // 前か後ろかは onset() が決める（休みのあとの音でだけ選び直す）
+                const float sign = side < 0.0f ? -1.0f : 1.0f;
                 dMs = guitarLatencyMs + sign * off;
                 // 原音から離れる向きに流す（前にいるダブルは高め＝もっと前へ、後ろは低め＝もっと後ろへ）
                 cents = centsMax * (0.25f + 0.75f * r.next()) * (sign < 0 ? 1.0f : -1.0f);
@@ -429,6 +444,7 @@ namespace twin
             h.dFrom = 0.0f; h.segPos = 0.0; h.rateCount = 0;
             { Rnd rr { r.s ^ 0xD5F7A3C1ull }; h.dTo = h.driftA * rr.bip(); h.segLen = (1.5 + 1.5 * rr.next()) * fs; h.drs = rr.s; }
             h.tailG = h.tailT = 1.0f; h.tailCount = 0;
+            h.side = guitar ? (side < 0.0f ? -1.0f : 1.0f) : 0.0f;
             const float ampDb = (0.5f + 2.0f * L) * r.bip();
             h.amp = std::pow (10.0f, ampDb / 20.0f);
             const float tiltDb = (0.5f + 1.5f * L) * r.bip();
@@ -438,7 +454,7 @@ namespace twin
             (void) v;
         }
 
-        float guitarSide() const   // −1 = ダブルが原音より前、+1 = 後ろ
+        float guitarSide() const   // TAKE とトラックで決まる、いちばん最初の音の側（−1 = ダブルが原音より前、+1 = 後ろ）
         {
             return (mix64 (((uint64_t) (uint32_t) p.take << 32) ^ (uint64_t) p.trackSeed ^ 0x5A17ull) & 1) ? 1.0f : -1.0f;
         }
@@ -478,10 +494,11 @@ namespace twin
             lastOnset = w - (int64_t) fs;
             jumpW = w;
             frameAcc = 0; frameCount = 0;
+            curSide = 0.0f;   // 前後: 鳴っている読み出しが残っていればその側を続け、なければ次の音の頭でくじ
             ++stats.jumps;
         }
 
-        void onset (int64_t O, int64_t tlO, bool guitar)
+        void onset (int64_t O, int64_t tlO, bool guitar, int64_t rest)
         {
             ++stats.onsets;
             const double pre = 0.0015 * fs, fadeOut = 0.005 * fs;
@@ -490,23 +507,65 @@ namespace twin
             for (int v = 0; v < nv; ++v)
             {
                 Voice& vc = voice[(size_t) v];
-                // 古い読み出し（頭の手前を読んでいるもの）は、頭の手前で消す
+                // GUITAR: 今鳴っている読み出し（遅れ・位置・側）。前後を入れかえる時に、どれだけ跳ぶか・休みの中で消しきれるかを見る
+                double dOld = -1.0, oldPos = -1.0e300; float oldSide = 0.0f;
+                if (guitar)
+                {
+                    const Head* cur = nullptr;
+                    for (auto& h : vc.heads) if (h.on && h.outEnd > 1e299 && (cur == nullptr || h.inStart > cur->inStart)) cur = &h;
+                    if (cur == nullptr)   // 位置が飛んだ直後などは、消える予定の読み出しだけ。まだ鳴っている物を見る
+                        for (auto& h : vc.heads) if (h.on && h.outEnd > h.pos + 1.0 && (cur == nullptr || h.inStart > cur->inStart)) cur = &h;
+                    if (cur != nullptr) { dOld = (double) w - cur->pos; oldPos = cur->pos; oldSide = cur->side; }
+                }
+                // 新しい読み出し: 頭の 1.5 ms 手前（入れかわる時は休みの終わり）から、選んだ遅れで始める
+                float side = 0.0f;
+                double cutV = cut;
+                if (guitar)
+                {
+                    // 前か後ろか: 鳴っている読み出しの側を続ける（まだ始まっていない予定があれば、最後に決めた側）。
+                    // 何も鳴っていない時（再生の始め・reset・位置が飛んだ後）と、長い休みのあとの音の頭でだけ、くじで選び直す（フレーズごと）
+                    side = oldSide != 0.0f ? oldSide : curSide;
+                    if (side == 0.0f || (double) rest >= kRepickRest * fs)
+                    {
+                        Rnd rs = rndFor (tlO, 5, 0);   // 前後のくじ（声部 5 = ほかの値と別の流れ。TAKE・トラック・曲の位置で決まる）
+                        side = rs.next() < 0.5f ? -1.0f : 1.0f;
+                    }
+                }
+                Rnd r = rndFor (tlO, v, 0);
+                Head nh; double d = 0;
+                choose (nh, r, v, guitar, d, side);
+                if (guitar && oldSide != 0.0f && side != oldSide)
+                {
+                    // 入れかわる時は、休みの終わり（本当の音の頭に近い）で切る。音の頭を見つけるのが遅れても、古い側が新しい音の頭を読んで
+                    // 30〜55 ms 離れた二重のアタックにならないように（DSP 検査係）
+                    cutV = std::min (cut, std::max ((double) lastQuietEndW - pre, (double) jumpW));
+                    // 古い読み出しを休みの中で消しきれない（もう新しい音のそばまで読んでいる）、
+                    // または前 → 後ろで休みが「跳ぶ量 ＋ 5 ms」より短い（跳ぶ間だけ右が抜ける）なら、入れかえない
+                    bool late = oldPos + fadeOut > cutV;
+                    // つなぎ直しで消える途中の古い読み出し（新しい物より先を読んでいる）も見る（休みの中でつなぎ直した直後に、立ち上がりの遅い音が来た時。DSP 検査係）
+                    for (auto& h : vc.heads) if (h.on && h.outEnd > cutV && h.pos + fadeOut > cutV) late = true;
+                    const bool shortRest = side > oldSide && dOld >= 0.0 && (double) rest < (d - dOld) + 0.005 * fs;
+                    if (late || shortRest)
+                    {
+                        side = oldSide; cutV = cut;
+                        r = rndFor (tlO, v, 0);
+                        choose (nh, r, v, guitar, d, side);
+                    }
+                }
+                if (guitar) curSide = side;
+                // 古い読み出し（頭の手前を読んでいるもの）は、cutV の手前で消す
                 auto limit = [&] (Head& h, double curPos)
                 {
-                    if (curPos >= cut || h.outEnd <= cut) return;   // FIX: すでに cut までに消える予定なら触らない
+                    if (curPos >= cutV || h.outEnd <= cutV) return;   // FIX: すでに cutV までに消える予定なら触らない
                     const double gNow = std::clamp ((h.outEnd - curPos) / h.outLen, 0.0, 1.0);
-                    double end = std::max (cut, curPos + 16.0), len = fadeOut;
+                    double end = std::max (cutV, curPos + 16.0), len = fadeOut;
                     if (std::min (1.0, (end - curPos) / len) > gNow) len = (end - curPos) / std::max (gNow, 1.0e-3);   // FIX: 今の音量より上げない
                     h.outEnd = end; h.outLen = len;
                 };
                 for (auto& h : vc.heads) if (h.on) limit (h, h.pos);
-                for (auto& s : vc.spawns) if (s.on) limit (s.h, s.h.pos);
-                // 新しい読み出し: 頭の 1.5 ms 手前から、選んだ遅れで始める
-                Rnd r = rndFor (tlO, v, 0);
-                Head nh; double d = 0;
-                choose (nh, r, v, guitar, d);
-                nh.on = true; nh.pos = cut; nh.inStart = cut; nh.inLen = pre; nh.keyTl = tlO; nh.forced = 0;
-                const int64_t t = (int64_t) std::llround (cut + d);
+                for (auto& sp : vc.spawns) if (sp.on) limit (sp.h, sp.h.pos);
+                nh.on = true; nh.pos = cutV; nh.inStart = cutV; nh.inLen = pre; nh.keyTl = tlO; nh.forced = 0;
+                const int64_t t = (int64_t) std::llround (cutV + d);
                 addSpawn (vc, nh, t);
                 stats.lastDelayMs[v] = (float) (d / fs * 1000.0);
                 stats.lastCents[v] = nh.cents;
@@ -543,7 +602,6 @@ namespace twin
                 }
             const double dMinAbs = (guitar ? 10.0 : 11.0) * 0.001 * fs;
             const double dMaxAbs = (guitar ? 70.0 : 60.0) * 0.001 * fs;
-            const bool tailOn = p.tail && (! guitar || guitarSide() > 0.0f);   // 語尾は VOCAL と、GUITAR でダブルが後ろのとき
             float out = 0.0f;
             Head* current = nullptr;
             for (auto& h : vc.heads)
@@ -563,13 +621,14 @@ namespace twin
                     h.gateSm += (gt - h.gateSm) * (gt < h.gateSm ? aGateClose : aGateOpen);
                     x *= h.gateSm;
                 }
+                const bool tailOn = p.tail && (! guitar || h.side > 0.0f);   // 語尾は VOCAL と、GUITAR でダブルが後ろの読み出し
                 if (tailOn)
                 {
                     if (--h.tailCount <= 0) { h.tailCount = 8; h.tailT = tailTarget (h.pos); }
                     h.tailG += (h.tailT - h.tailG) * (h.tailT < h.tailG ? aTailDown : aTailUp);
                 }
                 else if (h.tailG < 1.0f)
-                {   // GUITAR で TAKE を「後ろ → 前」に変えた時など: 下げたまま固まらないように 10 ms で戻す
+                {   // 念のため（MODE の切り替えなど）: 下げたまま固まらないように 10 ms で戻す
                     h.tailT = 1.0f; h.tailG += (1.0f - h.tailG) * aTailUp; if (1.0f - h.tailG < 1.0e-6f) h.tailG = 1.0f;
                 }
                 out += x * h.amp * (float) (gin * gout) * h.tailG;
@@ -597,7 +656,7 @@ namespace twin
             if (! guitar) dMs = tooEarly ? std::min (45.0, 26.0 + 14.0 * p.loose) : std::max (16.0, 15.0 + 2.0 * p.loose);
             else
             {
-                const bool front = guitarSide() < 0.0f;   // 前にいるダブル（高め）
+                const bool front = (old.side != 0.0f ? old.side : guitarSide()) < 0.0f;   // その読み出しの側のまま（前にいるダブルは高め）
                 const double off = 15.0 + 3.0 * p.loose;   // FIX: align の ±5 ms を足しても原音から 10 ms 以上
                 dMs = guitarLatencyMs + (front ? -off : off);
             }
@@ -715,6 +774,9 @@ namespace twin
 
         float dblGain = 0.5f, dblGainT = 0.5f, widthS = 0.8f, widthT = 0.8f, lowKeepS = 200, lowKeepT = 200, lkMix = 1, lkMixT = 1, monoS = 0, monoT = 0, designedHz = -1;
         float dryS = 1, dryT = 1;   // DOUBLE ONLY（原音の量）
+        // GUITAR の前後: 今の側（0 = まだ決めていない）と、休みの長さの数え
+        float curSide = 0.0f; int64_t quietRun = 0, lastQuietLen = 0, lastQuietEndW = INT64_MIN / 2;
+        static constexpr double kRepickRest = 0.100;   // 前後を選び直す休みの長さ（秒、3 ms の平均で。実際の無音はこれより 20〜28 ms 長い）
         // 語尾（TAIL）用: 原音の大きさを 1 ms ごとに。lvlDb = 10 ms の窓（dB）、sufMin = そこから「範囲の終わり」までの一番小さい値
         static constexpr int kFrames = 1024, kSufLen = 100;
         std::vector<float> frameP, lvlDb, sufMin;

@@ -152,9 +152,10 @@
   VOICE FIX = Mouth De-click・Breath Control・De-plosive に合成の素材で寄せた（初期 OFF）。細かいつまみ（GENTLE・帯域 4 本・WIDTH など）は各段の DETAIL（2026-11-12 本人「全部できる限り本物に近づけて」）。
   遅れ 6144（48 kHz、息・吹かれの先読み）。DELTA。Plugin Link は Fader Pilot が歌っている間 ADAPTIVE の推定を止める（Kind 24 は未登録）。測定の道具は build/noiselab
 
-- Twin Take（TwinTake）1.1.0 … 1 本録りの歌・ギターを「2 回録って重ねた」ように聞かせるダブラー（2026-11-11。提案の Double Take は実在製品名なので改名）。
+- Twin Take（TwinTake）1.2.0 … 1 本録りの歌・ギターを「2 回録って重ねた」ように聞かせるダブラー（2026-11-11。提案の Double Take は実在製品名なので改名）。
   音の頭ごとに各ダブルの遅れ・音程（±2〜9 セント）・音色・音量を選び直す。VOCAL（遅れ 0、ダブル 1/2/4 本、子音・息はダブルしない）/ GUITAR（原音を左・ダブルを右、40 ms の遅れを申告）。
   1.1.0: 語尾（原音が先に終わったらダブルも下げる）・長い音の中の小さな揺れ（VOCAL だけ）・DOUBLE ONLY（原音を消してダブルだけ、AUX のセンド用。プリセット・UNDO の対象外）。
+  1.2.0: GUITAR の前後（ダブルが原音より前か後ろか）を、休みのあとの音でだけ選び直す（フレーズごと。続けて弾いている間は変えない）。
   DSP は TwinTakeDSP.h（JUCE なし）、試作・テストは tools/render.cpp。Plugin Link は LINK 欄だけ（Kind 25 は未登録）
 
 - Retro Retro（RetroRetro）1.0.0 … 音を古っぽくする全部入り（本人の Mac の市販 Lo-Fi プラグインを測って合わせ込み。2026-11-12 本人「rc version2」→ 実在製品名に近いので「Retro Retro」に）。

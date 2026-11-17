@@ -298,18 +298,91 @@ static int test()
             check (e.getStats().jumps == 0 && std::fabs (d1 - d2) < 3.0, "曲の位置が揺れてもダブルが消えない（飛びの判定 " + std::to_string (e.getStats().jumps) +
                    " 回、ダブルの大きさ " + std::to_string (d1) + " dB / ふつう " + std::to_string (d2) + " dB）");
         }
-        // GUITAR: ダブルが前と後ろを行き来しない（音ごとの遅れの跳びは 6 + 9·LOOSE ms まで）
+        // GUITAR の前後（1.2.0）: 続けて弾いている間は入れかわらない（音ごとの遅れの跳びは 6 + 9·LOOSE ms まで）
         {
-            twin::Params p; p.mode = 1; p.loose = 1.0f; p.take = 5;
-            twin::Engine e; e.prepare (sr); e.setParams (p); e.reset();
-            Chans o = in; float last = -1, maxJump = 0; int64_t seen = -1;
-            for (size_t pos = 0; pos < n; pos += 64)
+            // 休みのない弾き方: 0.25 秒ごとに弾き直す（前の音が鳴っている所へ次の音。大きさが 12 dB 跳ね上がる）
+            const size_t m = (size_t) (sr * 8);
+            Chans x (2, std::vector<float> (m));
+            double ph = 0;
+            for (size_t i = 0; i < m; ++i)
             {
-                const int b = (int) std::min<size_t> (64, n - pos);
-                e.process (o[0].data() + pos, o[1].data() + pos, 2, b, (int64_t) pos);
-                if (e.getStats().onsets != seen) { seen = e.getStats().onsets; const float d = e.getStats().lastDelayMs[0]; if (last >= 0) maxJump = std::max (maxJump, std::fabs (d - last)); last = d; }
+                const double t = (double) i / sr; const int k = (int) (t / 0.25); const double u = t - k * 0.25;
+                const double f0 = 110.0 * std::pow (2.0, ((k * 5) % 12) / 12.0);
+                ph += 2 * M_PI * f0 / sr;
+                double v = 0; for (int h = 1; h <= 10; ++h) v += std::sin (ph * h) / h;
+                const double env = 0.25 + 0.75 * std::exp (-u / 0.06);   // 弾いた所で大きく、0.25 まで減って次へ（無音にならない）
+                x[0][i] = x[1][i] = (float) (0.2 * v * env * std::min (1.0, t / 0.005));
             }
-            check (maxJump <= 15.5f, "GUITAR: 音ごとの遅れの跳び " + std::to_string (maxJump) + " ms（15 ms まで）");
+            float maxJump = 0; int flips = 0;
+            for (int take = 1; take <= 8; ++take)
+            {
+                twin::Params p; p.mode = 1; p.loose = 1.0f; p.take = take;
+                twin::Engine e; e.prepare (sr); e.setParams (p); e.reset();
+                Chans o = x; float last = -1; int64_t seen = -1;
+                for (size_t pos = 0; pos < m; pos += 64)
+                {
+                    const int b = (int) std::min<size_t> (64, m - pos);
+                    e.process (o[0].data() + pos, o[1].data() + pos, 2, b, (int64_t) pos);
+                    if (e.getStats().onsets != seen)
+                    {
+                        seen = e.getStats().onsets; const float d = e.getStats().lastDelayMs[0];
+                        if (last >= 0) { maxJump = std::max (maxJump, std::fabs (d - last)); if ((d - 40.0f) * (last - 40.0f) < 0) ++flips; }
+                        last = d;
+                    }
+                }
+            }
+            check (flips == 0 && maxJump <= 15.5f, "GUITAR: 続けて弾いている間は前後が入れかわらない（入れかわり " + std::to_string (flips) + " 回、遅れの跳び " + std::to_string (maxJump) + " ms・15 ms まで）");
+        }
+        // GUITAR の前後（1.2.0）: 休みのある弾き方では前も後ろも出る。右（ダブル）が、原音が鳴っている途中で 30 ms 以上抜けない
+        {
+            twin::Params p; p.mode = 1; p.doubleDb = 0; p.loose = 1.0f; p.width = 1.0f; p.lowKeepHz = 0; p.take = 2;
+            int front = 0, backN = 0; double worstHole = 0;
+            for (int take = 1; take <= 4; ++take)
+            {
+                p.take = take;
+                twin::Engine e; e.prepare (sr); e.setParams (p); e.reset();
+                Chans o = in; int64_t seen = -1;
+                for (size_t pos = 0; pos < n; pos += 64)
+                {
+                    const int b = (int) std::min<size_t> (64, n - pos);
+                    e.process (o[0].data() + pos, o[1].data() + pos, 2, b, (int64_t) pos);
+                    if (e.getStats().onsets != seen) { seen = e.getStats().onsets; if (seen > 0) (e.getStats().lastDelayMs[0] < 40.0f ? front : backN)++; }
+                }
+                // 1 ms ごとの大きさ。左（原音、40 ms 遅れ）が鳴っているのに、右が 30 dB 以上小さい所が続く長さ
+                const size_t W = (size_t) (0.001 * sr);
+                double run = 0;
+                const double ref = rmsDb (o[1], (size_t) (sr * 0.1), n);
+                for (size_t a = (size_t) (sr * 0.2); a + W < n; a += W)
+                {
+                    const double l = rmsDb (o[0], a, a + W), r = rmsDb (o[1], a, a + W);
+                    // 左がふだんより 10 dB 以内（しっかり鳴っている）なのに、右がふだんより 30 dB 以上小さい
+                    if (l > ref - 10.0 && r < ref - 30.0) { run += 1.0; worstHole = std::max (worstHole, run); } else run = 0;
+                }
+            }
+            check (front > 0 && backN > 0, "GUITAR: 休みのある弾き方では、前も後ろも出る（前 " + std::to_string (front) + " 回・後ろ " + std::to_string (backN) + " 回）");
+            check (worstHole <= 30.0, "GUITAR: 原音が鳴っている途中で、右のダブルが抜けるのは " + std::to_string (worstHole) + " ms まで（ダブルが後ろの音の頭は、もともと最大 25 ms 遅れて入る。30 ms まで）");
+        }
+        // GUITAR の前後（1.2.0）: 書き出し（reset の直後）と「止めてから頭から再生」で同じ音（DSP 検査係: 前は最初のフレーズの側が逆になることがあった）
+        {
+            double worst = 0;
+            for (int take = 1; take <= 8; ++take)
+            {
+                twin::Params p; p.mode = 1; p.doubleDb = 0; p.loose = 0.4f; p.take = take;
+                auto a = runEngine (in, sr, p, 256);   // 書き出し
+                twin::Engine e; e.prepare (sr); e.setParams (p); e.reset();
+                std::vector<float> z (2048, 0.0f); int64_t free = 12345;
+                for (int k = 0; k < 2048; k += 256) { e.process (z.data(), z.data(), 2, 256, free); free += 256; }   // 止まっている間
+                Chans o = in;
+                for (size_t pos = 0; pos < n; pos += 256)
+                {
+                    const int b = (int) std::min<size_t> (256, n - pos);
+                    e.process (o[0].data() + pos, o[1].data() + pos, 2, b, (int64_t) pos);   // 頭から再生
+                }
+                // 最初の音のダブルだけは、再生を始めた所（飛んだ所）より前を読まないので 0.5 ms ずれる。次の音の頭（0.5 秒）から比べる
+                for (int c = 0; c < 2; ++c) for (size_t i = (size_t) (0.6 * sr); i < n; ++i) worst = std::max (worst, (double) std::fabs (o[(size_t) c][i] - a[(size_t) c][i]));
+            }
+            // 前後が逆になると差は 0.02（−33 dBFS）ほど。1.0.0 からある LOW KEEP の float の丸めの差（192 kHz で 1e−4 ほど）より大きく、それより十分小さい 1e−3 で見る
+            check (worst < 1.0e-3, "GUITAR: 書き出しと「止めてから頭から再生」で同じ音（差 " + std::to_string (worst) + "）");
         }
         // モノ出力（Logic のモノのトラック）: GUITAR の原音はそのままの大きさ（パンで −3 / −6 dB にならない）
         {
@@ -370,14 +443,17 @@ static int test()
         // 1b) GUITAR でダブルが後ろのテイク: 原音（左、40 ms 遅れて出る）が止まって 10〜30 ms 後に、右のダブルも消えている
         {
             auto x = toneWith (1.6, [&] (double t) { return t < 0.1 ? 0.0 : (t < S ? std::min (1.0, (t - 0.1) / 0.01) : 0.0); });
-            double worst = -200;
-            for (int take : { 1, 2, 5 })   // trackSeed 0 でダブルが後ろになる TAKE
+            double worst = -200; int backTakes = 0;
+            for (int take = 1; take <= 8; ++take)   // 1.2.0: 前後は休みのあとにくじで決まるので、「後ろ」になった TAKE で確かめる
             {
                 twin::Params p; p.mode = 1; p.doubleDb = 0; p.loose = 1.0f; p.width = 1.0f; p.lowKeepHz = 0; p.take = take;
-                auto o = runEngine (x, sr, p, 256);
+                twin::Stats st;
+                auto o = runEngine (x, sr, p, 256, &st);
+                if (st.lastDelayMs[0] <= 40.0f) continue;
+                ++backTakes;
                 worst = std::max (worst, rmsDb (o[1], at (S + 0.05), at (S + 0.07)) - rmsDb (o[1], at (S - 0.3), at (S - 0.05)));
             }
-            check (worst < -35.0, "語尾: GUITAR（ダブルが後ろ）で原音が止まって 10〜30 ms 後の右のダブル " + std::to_string (worst) + " dB（−35 dB 未満）");
+            check (backTakes >= 2 && worst < -35.0, "語尾: GUITAR（ダブルが後ろの " + std::to_string (backTakes) + " TAKE）で原音が止まって 10〜30 ms 後の右のダブル " + std::to_string (worst) + " dB（−35 dB 未満）");
         }
         // 2) ゆっくり消える語尾（80 ms で −60 dB、指数で）: 原音が 30 dB 下がった所からの 30 ms で、ダブルがまだ大きく残っていない。
         //    語尾の処理なしだと、遅れて読むダブルはまだほとんど元の大きさ（LOOSE 100% で 43 ms 後ろ）
