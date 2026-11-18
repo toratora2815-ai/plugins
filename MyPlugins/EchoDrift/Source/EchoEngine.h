@@ -586,8 +586,9 @@ namespace echo
         }
         void reset()
         {
-            if (pendingMode >= 0 && configured) { Params np = q; np.mode = pendingMode; pendingMode = -1; applySet (np); }
-            pendingMode = -1; modeG = 1.0f; modeFade = 0; holdN = 0;
+            if (pending && configured) { Params np = q; np.mode = pendMode; np.style = pendStyle; pending = false; applySet (np); }
+            pending = false; modeG = 1.0f; modeFade = 0; holdN = 0;
+            quietN = (int64_t) 1 << 40;   // 線は空になった（次のモード・スタイルの切替は待たずにすぐ）
             for (int c = 0; c < 2; ++c)
             {
                 A[c].reset(); B[c].reset(); pa[c].reset(); pb[c].reset(); color[c].reset(); colorSplit[c].reset(); lowCut[c].reset(); lowCut2[c].reset(); outDiff[c].reset();
@@ -598,19 +599,22 @@ namespace echo
             snapSmooth();
         }
 
-        // つまみを入れる（毎ブロック呼ばれる）。鳴っている途中でモードを替えるときは、エコーの音とループへ戻す量を 10 ms で下げ切ってから替え、
-        // 10 ms で戻す（1.3.2。そのまま替えると、フィルターの係数と読み出しの形が一気に変わってプチッと鳴った）。モード以外のつまみはすぐ入れる
+        // つまみを入れる（毎ブロック呼ばれる）。鳴っている途中でモード・スタイルを替えるときは、エコーの音と線に書く音を 10 ms で下げ切り、
+        // 15 ms 待ってから替え、10 ms で戻す（1.3.2 でモード、1.3.3 でスタイルも。そのまま替えると、フィルターの係数と読み出しの形が一気に変わって
+        // プチッと鳴った。スタイルは最大 +14 dB）。線の中も入力も無音なら待たずにすぐ替える（止めている間に替えて再生したとき、
+        // 1 回目のエコーが欠けないように）。モード・スタイル以外のつまみはすぐ入れる
         void set (const Params& p)
         {
-            if (! configured || p.mode == q.mode)
+            const bool change = configured && (p.mode != q.mode || p.style != q.style);
+            if (! change || quietN >= quietNeed)
             {
-                if (pendingMode >= 0) { pendingMode = -1; holdN = 0; if (modeFade < 0) modeFade = 1; }   // 下げている途中で元のモードに戻した
+                if (pending) { pending = false; holdN = 0; if (modeFade < 0) modeFade = 1; }   // 下げている途中で元に戻した（か、静かになった）
                 applySet (p);
                 return;
             }
-            pendingMode = p.mode;
+            pending = true; pendMode = p.mode; pendStyle = p.style;
             modeFade = -1;
-            Params keep = p; keep.mode = q.mode;
+            Params keep = p; keep.mode = q.mode; keep.style = q.style;
             applySet (keep);
         }
         void applySet (const Params& p)
@@ -648,6 +652,7 @@ namespace echo
                         ps->loop.set (prof->loop, prof->nLoop, prof->loopGain, fs);
                         if (hc > 0) ps->hiCut.design ({ 6, (float) std::min (hc, fs * 0.45), 0.7f, 0 }, fs); else ps->hiCut.design ({ -1, 0, 0, 0 }, fs);
                         ps->sat.set (dIn, dOut, prof->hard, prof->bias, prof->compThr, prof->compRatio);
+                        if (styleChanged) ps->sat.snap();   // スタイルを替えたら倍率は一気に（20 ms で追うのは SATURATION のつまみだけ。前のスタイルの倍率から追うと最初の音が強く歪んだ）
                         {
                             const int gs = std::max (0, std::min (numProfiles() - 1, p.style));
                             const int ns = useCustom ? 0 : subN[(size_t) gs], nAll = useCustom ? 0 : guardN[(size_t) gs];
@@ -723,11 +728,20 @@ namespace echo
         {
             if (! configured) applySet (q);
             const double lat = Saturator::latency();
-            const double minT = prof->minMs;
-            const double t1 = std::max (minT, q.prime ? primeMs (q.time1Ms) : q.time1Ms) * 0.001 * fs;
-            const double t2 = std::max (minT, q.prime ? primeMs (q.time2Ms) : q.time2Ms) * 0.001 * fs;
+            // スタイルで決まる値（ブロックの途中でスタイルを替えたら読み直す）
+            double minT = 0, t1 = 0, t2 = 0;
+            const Profile* Pp = prof;
+            auto styleVals = [&]
+            {
+                Pp = prof; minT = prof->minMs;
+                t1 = std::max (minT, q.prime ? primeMs (q.time1Ms) : q.time1Ms) * 0.001 * fs;
+                t2 = std::max (minT, q.prime ? primeMs (q.time2Ms) : q.time2Ms) * 0.001 * fs;
+            };
+            styleVals();
             const double ms = 0.001 * fs;
-            const Profile& P = *prof;
+            // 線の中が空になったとみなすまでの無音の長さ（いちばん長い読み出し＋FEEL・GROOVE でタップが遅れる分＋余裕 0.3 秒）
+            quietNeed = (int64_t) (t1 + t2 + (q.mode == 3 ? std::max (1.0, q.loopBeatsMs * ms) + (double) nRep * q.rhythmMs * ms : 0.0)
+                                   + std::abs (q.feelMs) * ms + 0.25 * std::max (t1, t2) + 0.3 * fs);
             const float fbT = std::max (0.0f, std::min (1.25f, q.feedback));   // FEEDBACK も 20 ms で追う（1.3.2。ブロックごとの段でプチッと鳴っていた）
             const double maxD = maxDelaySec * fs - 8;
             // 時間はなめらかに追う（テープのように音程が動く。参考を測って時定数 0.504 s の指数、全スタイル同じ）
@@ -754,7 +768,7 @@ namespace echo
                             if (++holdN >= (int) (0.015 * fs))
                             {
                                 holdN = 0; modeFade = 1;
-                                if (pendingMode >= 0) { Params np = q; np.mode = pendingMode; pendingMode = -1; applySet (np); }
+                                if (pending) { Params np = q; np.mode = pendMode; np.style = pendStyle; pending = false; applySet (np); styleVals(); }
                             }
                         }
                     }
@@ -768,9 +782,9 @@ namespace echo
                 const double feel = feelS * ms;
                 const float inL = L[i] * inGain, inR = R[i] * inGain;
                 double mL, mR;
-                mod.tick (P, fs, q.wobble, mL, mR);
+                mod.tick (*Pp, fs, q.wobble, mL, mR);
                 double oML = 0, oMR = 0;
-                if (P.modOut) { oML = mL; oMR = mR; mL = mR = 0; }   // 出口で揺らすスタイルはループの中は揺らさない
+                if (Pp->modOut) { oML = mL; oMR = mR; mL = mR = 0; }   // 出口で揺らすスタイルはループの中は揺らさない
                 float wet[2] { 0, 0 };
                 if (q.mode == 0 || q.mode == 1)
                 {
@@ -779,16 +793,18 @@ namespace echo
                         const bool second = q.mode == 1 && c == 1;
                         tSm[c].update (second ? t2 : t1, second ? q.sync2 : q.sync1, aT, xStep);
                         const double md = c == 0 ? mL : mR;
-                        const double oOdd = P.off[c * 2] * ms + feel, oEven = P.off[c * 2 + 1] * ms + feel;
+                        const double oOdd = Pp->off[c * 2] * ms + feel, oEven = Pp->off[c * 2 + 1] * ms + feel;
                         const auto& ts = tSm[c];
                         // 揺れは「B から A へ戻る所」と「出口のタップ」だけ（参考: 2 回目は 1 回目と同じ深さ、3 回目で T 離れた 2 つが重なる）
                         const float aEnd = readT (ts, [&] (double T) { return A[c].read (clampD (T - lat, maxD)); });
                         const float bEnd = readT (ts, [&] (double T) { return B[c].read (clampD (T - lat + md, maxD)); });
                         const float tapA = readT (ts, [&] (double T) { return A[c].read (clampD (T - lat + md + oOdd + grooveS * T - outLat, maxD)); });
                         const float tapB = readT (ts, [&] (double T) { return B[c].read (clampD (T - lat + md + oEven - outLat, maxD)); });
-                        const float in = (c == 0 ? inL : inR) * modeG;   // モードを替えるときは、線に書く音も下げ切る（つなぎ目が 1 周後にプチッと出ないように）
-                        A[c].write (pa[c].process (in + fbL * bEnd));
-                        B[c].write (pb[c].process (fbL * aEnd));
+                        const float in = (c == 0 ? inL : inR) * modeG;
+                        // モード・スタイルを替えるときは、線に書く音も下げ切る（つなぎ目が 1 周後にプチッと出ないように）。
+                        // 歪みの前と後の両方で下げる（前だけだと強い歪みが音量を保って書く音が急に切れ、後だけだと歪みの中のフィルターが響いた）
+                        A[c].write (pa[c].process (in + fbL * bEnd) * modeG);
+                        B[c].write (pb[c].process (fbL * aEnd) * modeG);
                         wet[c] = tapA + tapB;
                     }
                 }
@@ -800,7 +816,7 @@ namespace echo
                     const float aEnd = readT (tSm[0], [&] (double T) { return A[0].read (clampD (T - lat + mL, maxD)); });
                     const float bEnd = readT (tSm2[0], [&] (double T) { return B[0].read (clampD (T, maxD)); });   // B は処理なし（遅れを引かない）・揺らさない
                     // にじむスタイルは、Single と同じだけ前に出す（Digital のずれ −3.44 / +4.56 ms を引いた分）
-                    const double shL = (P.off[0] + 3.44) * ms, shR = (P.off[2] - 4.56) * ms;
+                    const double shL = (Pp->off[0] + 3.44) * ms, shR = (Pp->off[2] - 4.56) * ms;
                     float tapA, tapB, toA;
                     if (ppDiffInLoop)
                     {
@@ -808,14 +824,14 @@ namespace echo
                         const float aEnd2 = readT (tSm[0], [&] (double T) { return A[0].read (clampD (T - lat + mL + shL, maxD)); });
                         tapA = readT (tSm[0], [&] (double T) { return A[0].read (clampD (T - lat + mL + shL + feel - outLat, maxD)); });
                         tapB = readT (tSm2[0], [&] (double T) { return B[0].read (clampD (T + feel - outLat, maxD)); });
-                        toA = ppDiff.process (pa[0].process (mono + fbL * bEnd));
+                        toA = ppDiff.process (pa[0].process (mono + fbL * bEnd)) * modeG;
                         B[0].write (aEnd2 * modeG);
                     }
                     else
                     {
                         tapA = readT (tSm[0], [&] (double T) { return A[0].read (clampD (T - lat + mL + feel + shL - outLat, maxD)); });
                         tapB = readT (tSm2[0], [&] (double T) { return B[0].read (clampD (T + feel + shR - outLat, maxD)); });
-                        toA = pa[0].process (mono + fbL * bEnd);
+                        toA = pa[0].process (mono + fbL * bEnd) * modeG;
                         B[0].write (aEnd * modeG);   // 参考は 1 往復で処理 1 回（右へ渡る所では削れない）
                     }
                     A[0].write (toA);
@@ -833,7 +849,7 @@ namespace echo
                     const float backRaw = A[0].read (clampD (loopLen - lat + mL, maxD));
                     const float back = fbL * backRaw;   // 別の文にして丸める（前の版と同じ丸め方。1 つの式にすると掛けて足すのがまとめられて少し違う）
                     const float inS = (inL + inR) * modeG;
-                    A[0].write (pa[0].process (inS + back));
+                    A[0].write (pa[0].process (inS + back) * modeG);
                     float s = rg[0] * (fbS * backRaw);   // 出口のタップは前と同じ（ループへ戻す量だけ SATURATION の分を引く）
                     s += readT (rhythmSm, [&] (double RT)
                     {
@@ -845,10 +861,14 @@ namespace echo
                     B[0].write (0.0f); A[1].write (0.0f); B[1].write (0.0f);   // 使っていない線（上の Ping-Pong と同じ）
                     pa[1].sat.snap(); pb[0].sat.snap(); pb[1].sat.snap();
                 }
+                {   // 入力もエコー（タップ）も −100 dBFS 未満が続いた長さ（モード・スタイルをすぐ替えてよいか）
+                    const float act = std::max (std::max (std::abs (inL), std::abs (inR)), std::max (std::abs (wet[0]), std::abs (wet[1])));
+                    quietN = act > 1.0e-5f ? 0 : quietN + 1;
+                }
                 for (int c = 0; c < 2; ++c)
                 {
                     float w = colorSplit[c].process (color[c].process (wet[c] * modeG));   // モードを替えるときは出口のフィルターの手前で下げる
-                    if (P.modOut)
+                    if (Pp->modOut)
                     {
                         // 出口の揺れ: 短い遅延線を outLat を中心に揺らす（その分ループの読み出しを早めてある）
                         outMod[c].write (w);
@@ -976,7 +996,9 @@ namespace echo
         float fbKT = 1, fbG0 = 1;   // ループへ戻す量に掛ける倍率（SATURATION の持ち上げ分を引く）と、SATURATION 0 dB の小さい音の倍率
         float fbS = 0.3f;           // FEEDBACK（20 ms で追う）
         float modeG = 1.0f, modeStep = 0.002f;   // モードを替えるときの下げ・上げ（0..1）
-        int modeFade = 0, pendingMode = -1, holdN = 0;   // −1 下げている・+1 上げている、替える先のモード（−1 = なし）、0 で待ったサンプル数
+        int modeFade = 0, holdN = 0;           // −1 下げている・+1 上げている、0 で待ったサンプル数
+        bool pending = false; int pendMode = 0, pendStyle = 0;   // 下げ切ったら替えるモード・スタイル
+        int64_t quietN = (int64_t) 1 << 40, quietNeed = 0;      // 入力もエコーも無音が続いたサンプル数、空とみなす長さ
         double feelS = 0, grooveS = 0;                                  // なめらかにした FEEL（ms）・GROOVE
         bool smInit = false;
         float rg[16] {}; int nRep = 8;
