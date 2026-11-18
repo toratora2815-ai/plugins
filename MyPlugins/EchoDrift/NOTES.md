@@ -64,3 +64,25 @@ Shortwave / Tube Reel の SATURATION 12 dB、Diffused、Squawk〔参考は 125% 
 - 1.3.0（2026-11-09）: GAIN MATCH を追加（Shared/GainMatch.h、ID gainMatch、既定 OFF、状態に gainMatchDb を保存）。ボタンはプリセット欄の左端。MIX 99.5% 以上は効かない。applyPreset の初期化から gainMatch を外した。下の欄を 2 段（footerH 72）に
 - 1.3.1（2026-11-12）: オートメーションのジジッを直した（健康診断の click で Feel +67・Groove +64・Output +52・Mix +42）。INPUT / OUTPUT / MIX は 20 ms、FEEL・GROOVE（エコーを読む位置）は TIME と同じ 0.504 s で 1 サンプルずつ追う（EchoEngine.h の follow / snapSmooth）。止まっている時の音は前とビット単位で同じ
   DSP 検査係: 追う式を「丸めでもう進まないなら目標ちょうど」に（192 kHz で目標の直前で止まり、係数を作り直し続ける所があった）
+- 1.3.2（2026-11-18）: FEEDBACK 100% 未満なのに鳴り止まない所を直した（健康診断のランダム設定で見つかった。本物（build/EchoFit/host）と測り比べて決め、DSP 検査係と 3 回やりとり）
+  - SATURATION: 処理 P の歪みの小さい音の倍率（satIn + satOut、SAT 24 dB で最大 +12 dB）がくり返すたびに掛かり、SAT 24 dB では FEEDBACK 40・60% の 62 通り中 44 通りが鳴りっぱなし（0 dBFS 近くも）。
+    本物は SAT を変えても「くり返し 1 回の減り方」が全スタイルで同じで、1 回目のエコーだけ +6〜12 dB 大きくなる → ループへ戻す量を fb × G0 /（入れる倍率 × 戻す倍率）にした
+    （G0 = SAT 0 dB の倍率。P を k 倍・天井も k 倍にして出口で 1/k に戻すのと同じ計算。止まっていれば fbKT ちょうど＝SAT 0 dB は前とビット単位で同じ）
+  - 入れる倍率・戻す倍率（Saturator の driveT / makeupT）と FEEDBACK（fbS）は 20 ms で追う（glide / follow、丸めでもう進まないなら目標ちょうど）。
+    前は一気に切り替わり、入れる所と戻す所が 4 倍のフィルターの遅れ（約 1 ms）だけずれてプチッと鳴った。FEEDBACK もブロックごとの段だった
+  - Ping-Pong・Rhythm は 1 周で pa しか通らないので、奇数回目の差（split・passTilt の +½）が毎周積み上がり、Telephone は 3 kHz で +8.8 dB → FEEDBACK 40% から鳴りっぱなしだった（本物は 60% でも消える）。
+    差の量 a をスタイルごとに prepare で計算（onePassAlpha: FEEDBACK 100% のループ利得の最大が、差なし（a = 0）と 0 dB の大きいほうを超えない範囲でいちばん 0.5 に近い値）。
+    a < 0.5 は Telephone 0.09・AM Radio 0.21・Bucket Swirl 0.17・Bucket Dark 0・Cheap Cassette 0 だけ。ほかは前と同じ音（全部 0 にすると Ping-Pong の減り方の本物とのずれが 0.29 → 0.43 dB/回に広がった）
+  - レート: ループのフィルターは 48 kHz で合わせてあり、ほかのレートでは 20 kHz 近くの形が変わって（0.49·fs に寄せる所も）ループ利得が 1 を超えていた（44.1 kHz の FM Radio は 80% から +10 dBFS、96 / 192 kHz の Vibrato は 60% から）。
+    prepare でスタイルごとに、48 kHz のときの最大（と 0 dB の大きいほう）を超える所だけ下げるピーク（Q 0.7）を作る（makeGuard、Pass の guard。48 kHz では何も足さない）
+  - Verbed: ループの 30.6 Hz・Q 8.1 のシェルフで 29 Hz が +1.2 dB → FEEDBACK 88% から 29 Hz で鳴りっぱなし（本物は 90% で消える）。40 Hz 未満で 0 dB を 0.1 dB より超える所を Q 6 で削る（addSubBassCut、Pass の guardSub）。
+    削るのは FEEDBACK 100% 以下のときだけ（超えたら g = 0）。Q を下げて山をなくす・削ったまま 125% にすると、40〜80 Hz も育って 125% が本物より 9 dB 大きくなった（前は 29 Hz だけが先に天井に当たり、出口で −5.6 dB 削られていた）。
+    125% は 1.3.1 とほぼ同じ（SAT 0 で山 +3.5 / 平均 −2.3、本物 +3.2 / −1.2）
+  - モードを替えるとき: エコーの音と線に書く音（入力・くり返し・Ping-Pong の右への写し）を 10 ms で下げ切り、15 ms 待ってから替え、10 ms で戻す（set → pendingMode、process の modeG・holdN）。
+    前は係数と読み出しが一気に変わり、つなぎ目が 1 周後にプチッと出た（3 kHz 以上の山: 中央 −4 → −52 dB、最大 +23 → −18 dB）。下げた 20 ms は 1 周ごとの小さなへこみとして残る。使っていない線には 0 を書き、使っていない歪みの倍率はそろえ、
+    出口のにじみは使わない間も回す、Ping-Pong に入るときはループの中のにじみを空にする（Single に戻したとき前のエコー・響きがまた鳴らないように）
+  - Digital Chorus の揺れの記録（hist）を prepare で確保（前は最初に選んだとき音の処理の中で約 115 KB 確保していた）
+  - 確認: SAT 0・つまみ固定で 124 通り中 110 通りが前と完全に同じ（違うのは Verbed と上の 5 スタイルの Ping-Pong・Rhythm）。FEEDBACK 40・60% × SAT 0/12/24 は全部消える（本物も）。
+    44.1 / 48 / 96 / 192 kHz × 3 モードで FEEDBACK 80% 以下は全部消える。FEEDBACK 125% の行き着く音量の本物とのずれ 537 → 333 dB（Queeked は本物どおり 125% でも消える）。
+    tools/test_echo.cpp に鳴り止む試験を 5 つ足した（1.3.1 では 5 つとも FAIL）。道具（使い捨て、コミットしない）: satloop.py・satdecay.py・ppdecay.py・ceilcmp.py・highfb.py・ident.py・verbceil.py・modesw_an.py
+  - 残り（前から）: スタイルを鳴らしながら替えたときのプチッ、Logic が止めてもエコーが残る（reset を上書きしていない）

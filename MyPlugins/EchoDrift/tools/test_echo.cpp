@@ -156,6 +156,39 @@ int main()
         const double sec = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
         check (sec < 10.0 * 0.15, "CPU: seconds to process 10 s stereo", sec);
     }
+    // 10) FEEDBACK 100% 未満なら鳴り止む（1.3.2）。0.2 秒のノイズの後 12 秒: 4〜8 秒の山より 8〜12 秒の山が 1 dB 以上小さいか、−60 dBFS 未満なら OK
+    //     SATURATION 24 dB（くり返すたびに持ち上がっていた）、44.1 / 96 kHz（48 kHz で合わせたフィルターの形が変わっていた）、
+    //     Ping-Pong・Rhythm（奇数回目の差が毎周積み上がっていた）
+    {
+        struct Case { const char* what; double rate; int mode; float fb, sat; };
+        const Case cases[] = { { "no ringing: SAT 24 dB, FEEDBACK 60% (48 kHz)", 48000, 0, 0.6f, 24 },
+                               { "no ringing: FEEDBACK 80% at 44.1 kHz", 44100, 0, 0.8f, 0 },
+                               { "no ringing: FEEDBACK 80% at 96 kHz", 96000, 0, 0.8f, 0 },
+                               { "no ringing: ping-pong FEEDBACK 60%", 48000, 2, 0.6f, 0 },
+                               { "no ringing: rhythm FEEDBACK 60%", 48000, 3, 0.6f, 0 } };
+        for (const auto& c : cases)
+        {
+            int ringing = 0;
+            for (int s = 0; s < echo::numProfiles(); ++s)
+            {
+                echo::Params p; p.style = s; p.mode = c.mode; p.time1Ms = 300; p.time2Ms = 300; p.feedback = c.fb; p.mix = 1.0f; p.saturationDb = c.sat;
+                const size_t n = (size_t) (0.2 * c.rate);
+                std::vector<float> L (n), R (n);
+                unsigned int r = 12345u;
+                for (size_t i = 0; i < n; ++i)
+                {
+                    r = r * 1664525u + 1013904223u;
+                    const float w = 0.5f - 0.5f * (float) std::cos (2.0 * echo::kPi * (double) i / (double) (n - 1));
+                    L[i] = R[i] = 0.1f * w * ((float) (r >> 8) / 8388608.0f - 1.0f);
+                }
+                const Out o = run (p, c.rate, L, R, 12.0);
+                const size_t t4 = n + (size_t) (4 * c.rate), t8 = n + (size_t) (8 * c.rate), t12 = n + (size_t) (12 * c.rate);
+                const double m1 = std::max (peakDb (o.L, t4, t8), peakDb (o.R, t4, t8)), m2 = std::max (peakDb (o.L, t8, t12), peakDb (o.R, t8, t12));
+                if (m2 > -60.0 && m1 - m2 < 1.0) { ++ringing; std::printf ("     ringing: style %d (%.1f -> %.1f dBFS)\n", s, m1, m2); }
+            }
+            check (ringing == 0, c.what, ringing);
+        }
+    }
     std::printf (fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }
