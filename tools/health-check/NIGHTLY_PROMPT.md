@@ -31,6 +31,8 @@
    - プラグインのコードは `MyPlugins/<フォルダ>/Source`、共通部品は `MyPlugins/Shared`。説明は各フォルダの `README.md`・`NOTES.md`
    - 確かめたいときは、1 つだけ測り直してよい: `build/health/hc run <コード> <検査> /tmp/hc-check.json --seed <番号> [--set <番号>]`
    - `.claude/agents/dsp-inspector.md`（DSP 検査係）のチェック項目を参考にする
+   - ランダム設定の「15 秒聞いても減らない」は、raw の `tail_mid_max_db`（止めて 3〜9 秒の山）と `tail_late_max_db`（9〜15 秒の山）を見る。
+     間隔の長いエコーで減っている途中のものは、検査がもう数えない（2026-11-18 から）。FEEDBACK が 100% 未満なのに減らないものは仕様扱いにしない（KNOWN.md の Echo Drift の行）
    - CPU の「重い」「ときどき重くなる」は、ほかの作業で Mac が混んでいると大きめに出る（summary.md の「Mac の混み具合」、raw の `load_avg`）。
      `build/health/hc run <コード> basic /tmp/hc-check.json` で測り直し、空いている時にも出たときだけ不具合にする
      （2026-11-11 の初回は負荷平均 16〜19 で、Lumen Rooms 73% → 空いている時 14%、Hush Field 44〜53% → 15〜17% だった）

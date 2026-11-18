@@ -80,7 +80,7 @@ done
 RUN="$OUT/runs/$(date +%Y-%m-%d-%H%M)"
 [ -e "$RUN" ] && RUN="$RUN-$(date +%S)"
 START=$(date +%s)
-[ "$NIGHTLY" -eq 1 ] && say "検査を始めます（Logic: $LOGIC）"
+[ "$NIGHTLY" -eq 1 ] && say "検査を始めます（Logic: ${LOGIC}）"
 # 検査の間は Mac をスリープさせない
 /usr/bin/caffeinate -i "$BIN" all "$RUN" --repo "$REPO" ${ARGS[@]+"${ARGS[@]}"} 2> "$RUN.log"
 ln -sfn "$RUN" "$OUT/latest"

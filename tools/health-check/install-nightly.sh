@@ -52,5 +52,5 @@ cat > "$PLIST" <<EOF
 EOF
 /usr/bin/plutil -lint "$PLIST" >/dev/null
 /bin/launchctl bootstrap "$DOMAIN" "$PLIST"
-echo "毎晩 3:00 の健康診断を登録しました（$PLIST）"
+echo "毎晩 3:00 の健康診断を登録しました（${PLIST}）"
 /bin/launchctl print "$DOMAIN/$LABEL" | grep -E '^\s*(state|path) =' | head -2

@@ -24,6 +24,7 @@
 #include <spawn.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
@@ -429,6 +430,37 @@ static std::unique_ptr<Host> makeHost (AudioComponent c, double sr, UInt32 inCh,
     return h;
 }
 
+// ---------------------------------------------------------------- 音源の素材の読み込みを待つ
+// 素材（録音）を裏のスレッドで読む音源がある（Hybrid Kit は Logic の Drum Kit Designer の録音を読み、つなぎ方を整えるまで数秒）。
+// 読み終わる前に鳴らすと、音が出ない・試すたびに結果が変わる（2026-11-17: Hybrid Kit の「MIDI を送っても音が出ない」「ブロック差 1 dB」）。
+// Logic では読み終わってから再生するので、検査も待つ。読み終わった＝このプロセスの CPU が 0.2 秒ずつ 2 回続けて 1 コアの 5% 未満。
+// メインのループを回しながら待つので、JUCE のタイマーで読み込みを始めるもの（Hybrid Kit のキットの切り替え）も動く。
+// 音を鳴らして確かめる方法は取らない（叩くたびに替わる録音の順番が進んで、同じ設定でも音が変わるため）。
+// 効果のプラグインは待たない（検査の時間を増やさない）
+static constexpr double kSettleMax = 20.0;
+static double cpuSecSelf()
+{
+    rusage ru {}; getrusage (RUSAGE_SELF, &ru);
+    return (double) ru.ru_utime.tv_sec + (double) ru.ru_utime.tv_usec * 1e-6 + (double) ru.ru_stime.tv_sec + (double) ru.ru_stime.tv_usec * 1e-6;
+}
+static double settleLoad (Host& h)
+{
+    if (! h.instrument()) return 0.0;
+    const double t0 = nowSec();
+    int calm = 0;
+    while (calm < 2 && nowSec() - t0 < kSettleMax)
+    {
+        const double c0 = cpuSecSelf(), w0 = nowSec();
+        pump (0.2);
+        const double rest = 0.2 - (nowSec() - w0);   // ループに何もつながっていないと pump はすぐ戻るので、残りは眠る
+        if (rest > 0.001) usleep ((useconds_t) (rest * 1e6));
+        const double busy = (cpuSecSelf() - c0) / std::max (1e-3, nowSec() - w0);
+        calm = busy < 0.05 ? calm + 1 : 0;
+        if (std::getenv ("HC_DEBUG_SETTLE")) printf ("settle %.1f s: CPU %.0f%%\n", nowSec() - t0, busy * 100.0);
+    }
+    return nowSec() - t0;
+}
+
 // ---------------------------------------------------------------- 音を通す
 struct Out { Chans y; std::vector<double> cpu; int bad = 0; double firstBad = -1; OSStatus err = 0; double errAt = 0; };
 using BlockFn = std::function<UInt32 (size_t)>;
@@ -600,6 +632,11 @@ static void testBasic (AudioComponent comp, Json& j)
     if (! hp) { addF ("異常", "読み込めない・初期化できない: " + err); j.ks ("error", err); return; }
     Host& h = *hp;
     double initMs = (nowSec() - t0) * 1000.0;
+    // 音源は、裏で素材を読み終わるまで待つ（読み込み時間 init_ms には入れない。Logic でも曲を開くのは待たせない）
+    double loadWait = settleLoad (h);
+    j.kn ("load_wait_s", loadWait);
+    if (loadWait >= kSettleMax)
+        addF ("参考", fmt ("音源の素材の読み込みが %.0f 秒たっても終わらない（裏で CPU を使い続けている）", kSettleMax));
     int lat = (int) std::llround (h.latencySec() * 48000.0);
     double tail = h.tailSec();
     j.kn ("init_ms", initMs); j.kn ("latency_samples", lat); j.kn ("tail_sec", tail); j.kb ("instrument", h.instrument());
@@ -728,6 +765,7 @@ static void testClick (AudioComponent comp, Json& j)
     auto hp = makeHost (comp, sr, 2, 2, err);
     if (! hp) { addF ("異常", "読み込めない: " + err); return; }
     Host& h = *hp;
+    settleLoad (h);
     auto ps = h.params();
     double ph1 = 0, ph2 = 0;
     auto chunk = [&] (double sec)
@@ -887,6 +925,7 @@ static void testRandom (AudioComponent comp, Json& j, uint32_t seed, int onlySet
         auto vals = randomValues (h.params(), rk, moderate, false);
         for (auto& [p, v] : vals) h.set (p.id, v);
         pump (0.05);
+        settleLoad (h);   // 音源が、この設定で別の素材を読み直すなら、読み終わるまで待つ
         size_t off = (size_t) ((k % 4) * 1.25 * 48000), len = 72000, total = len + 3 * 48000;
         Chans x (2, std::vector<float> (len));
         for (int c = 0; c < 2; ++c) for (size_t i = 0; i < len; ++i) x[(size_t) c][i] = P.x[(size_t) c][off + i];
@@ -896,8 +935,38 @@ static void testRandom (AudioComponent comp, Json& j, uint32_t seed, int onlySet
         auto tw = winDb (o.y, len, total, 12000);
         double te = tw.empty() ? -200 : tw.back(), sl = slopePerSec (tw, tw.size() > 6 ? tw.size() - 6 : 0, 0.25);
         double avg, p99, mx; cpuStats (o.cpu, 4, o.cpu.size(), avg, p99, mx);
-        bool nan = o.bad > 0 || o.err != 0, hot = pk > 12, ring = te > -60 && sl > -0.5;
+        bool ring = te > -60 && sl > -0.5;
+        // 3 秒では決められないもの（1〜数秒ごとに鳴り直す、間隔の長いエコーなど）は、無音をあと 12 秒聞いて決める。
+        // 止めて 3〜9 秒の山と 9〜15 秒の山を比べ、9〜15 秒が −60 dBFS 未満か、1 dB 以上下がっていれば「減っている」として数えない
+        // （2026-11-18: Echo Drift の FEEDBACK 37〜89%・間隔の長い設定を、減っている途中なのに「鳴り止まない」と数えていた）
+        double midMax = NAN, lateMax = NAN;
+        if (ring && o.bad == 0 && o.err == 0)
+        {
+            auto o2 = run (h, nullptr, 0, 12 * 48000, fixed512);
+            o.bad += o2.bad;
+            if (o2.err) { o.err = o2.err; o.errAt = (double) total / 48000.0 + o2.errAt; }
+            if (o2.bad == 0 && o2.err == 0)
+            {
+                Chans tl (o.y.size());
+                for (size_t c = 0; c < o.y.size(); ++c)
+                {
+                    tl[c].assign (o.y[c].begin() + (long) len, o.y[c].end());
+                    tl[c].insert (tl[c].end(), o2.y[c].begin(), o2.y[c].end());
+                }
+                auto tw2 = winDb (tl, 0, tl[0].size(), 12000);   // 0.25 秒ごと（止めてから 15 秒）
+                auto maxIn = [&] (double a, double b)
+                {
+                    double m = -200.0;
+                    for (size_t i = (size_t) (a * 4.0); i < std::min (tw2.size(), (size_t) (b * 4.0)); ++i) m = std::max (m, tw2[i]);
+                    return m;
+                };
+                midMax = maxIn (3.0, 9.0); lateMax = maxIn (9.0, 15.0);
+                ring = lateMax > -60.0 && midMax - lateMax < 1.0;
+            }
+        }
+        bool nan = o.bad > 0 || o.err != 0, hot = pk > 12;
         j.open ('{'); j.kn ("set", k); j.kb ("moderate", moderate); j.kn ("peak_db", pk); j.kn ("tail_end_db", te); j.kn ("tail_slope", sl);
+        if (std::isfinite (lateMax)) { j.kn ("tail_ext_s", 12); j.kn ("tail_mid_max_db", midMax); j.kn ("tail_late_max_db", lateMax); }
         j.kn ("bad", o.bad); j.kn ("err", o.err); j.kn ("cpu_avg", avg); j.kn ("cpu_p99", p99);
         if (nan || hot || ring || onlySet >= 0) writeValues (j, vals);
         j.close ('}');
@@ -906,7 +975,9 @@ static void testRandom (AudioComponent comp, Json& j, uint32_t seed, int onlySet
         if (o.bad) addF ("異常", fmt ("ランダム設定 %d（%s）で NaN・無限大が出る（%d 個）", k, how.c_str(), o.bad));
         if (pk > 40) addF ("異常", fmt ("ランダム設定 %d（%s）で出力のピークが %+.1f dBFS（壊れたような大きさ）", k, how.c_str(), pk));
         else if (hot) hotList.push_back (fmt ("%d（%s %+.1f dBFS）", k, how.c_str(), pk));
-        if (ring) ringList.push_back (fmt ("%d（%s 3 秒後 %.0f dBFS・%+.1f dB/秒）", k, how.c_str(), te, sl));
+        if (ring) ringList.push_back (std::isfinite (lateMax)
+            ? fmt ("%d（%s 止めて 3〜9 秒の山 %.0f → 9〜15 秒の山 %.0f dBFS）", k, how.c_str(), midMax, lateMax)
+            : fmt ("%d（%s 3 秒後 %.0f dBFS・%+.1f dB/秒）", k, how.c_str(), te, sl));
         if (avg > 40) heavyList.push_back (fmt ("%d（%s %.0f%%）", k, how.c_str(), avg));
         if (nan || hot || ring) ++flagged;
     }
@@ -914,7 +985,7 @@ static void testRandom (AudioComponent comp, Json& j, uint32_t seed, int onlySet
     metric ("random_flagged", flagged);
     auto join = [] (const std::vector<std::string>& v) { std::string s; for (size_t i = 0; i < v.size(); ++i) s += (i ? "、" : "") + v[i]; return s; };
     if (! ringList.empty())
-        addF ("注意", fmt ("音を止めても鳴り止まないランダム設定が %zu 個（発振の疑い。フィードバックを上げきった時など仕様のこともある）: ", ringList.size()) + join (ringList));
+        addF ("注意", fmt ("音を止めて 15 秒聞いても減らないランダム設定が %zu 個（発振の疑い。フィードバックを上げきった時など仕様のこともある）: ", ringList.size()) + join (ringList));
     if (! hotList.empty())
         addF ("注意", fmt ("出力のピークが +12 dBFS を超えたランダム設定が %zu 個（GAIN・OUTPUT を上げきった時など仕様のこともある）: ", hotList.size()) + join (hotList));
     if (! heavyList.empty())
@@ -937,6 +1008,7 @@ static void testState (AudioComponent comp, Json& j, uint32_t seed)
     OSStatus rs = B->setState (st);
     CFRelease (st);
     pump (0.2);
+    settleLoad (*A);   // 音源は、3 つとも素材を読み終わるまで待つ（CPU はプロセス全体で見る）
     if (rs != noErr) addF ("異常", fmt ("保存した状態を読み込めない（エラー %d）", (int) rs));
     std::vector<std::string> mism;
     j.key ("mismatch"); j.open ('[');
@@ -982,6 +1054,7 @@ static void testBlock (AudioComponent comp, Json& j)
     std::string err;
     auto D = makeHost (comp, 48000, 2, 2, err), E = makeHost (comp, 48000, 2, 2, err), F = makeHost (comp, 48000, 2, 2, err);
     if (! D || ! E || ! F) { addF ("異常", "読み込めない: " + err); return; }
+    settleLoad (*D);   // 音源は、3 つとも素材を読み終わるまで待つ
     auto P = makeProgram (48000); auto midi = makeMidi (48000);
     size_t len = P.seg[4], total = len + 48000;
     static const UInt32 seq[] = { 1, 3, 64, 17, 512, 4096, 999, 2, 128, 2048, 333, 1, 1024, 7, 4096, 255 };
@@ -1015,6 +1088,7 @@ static void testRates (AudioComponent comp, Json& j)
         j.open ('{'); j.kn ("sr", sr);
         if (! hp) { j.ks ("error", err); j.close ('}'); addF ("注意", fmt ("%.1f kHz で開けない（%s）", sr / 1000, err.c_str())); continue; }
         Host& h = *hp;
+        settleLoad (h);
         auto P = makeProgram (sr); auto midi = makeMidi (sr);
         size_t total = P.len + (size_t) (8 * sr);
         int lat = (int) std::llround (h.latencySec() * sr);
