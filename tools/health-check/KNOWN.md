@@ -9,7 +9,7 @@
 - Echo Drift | ランダム設定 | 音を止めても鳴り止まない（15 秒聞いても減らない） | FEEDBACK は 0〜125%、100% を超えると鳴り続けるのは仕様（README）。ただし OUTPUT を除いても +6 dBFS の天井を大きく超えるなら不具合として調べる（2026-11-11、README から）。
   **FEEDBACK が 100% 未満なのに減らないものは仕様ではない**（2026-11-18: SATURATION を上げると FEEDBACK 40〜60% でも鳴り続けていた → 1.3.2 で直した。
   1.3.2 では 44.1 / 96 / 192 kHz・Ping-Pong・Rhythm も直した。ただし FEEDBACK 90〜95% くらいからは、Cheap Cassette・Bucket Dark は鳴り続ける（手本の機材も同じ））
-- Echo Drift | ランダム設定 | 出力のピークが +12 dBFS を超えた | OUTPUT は −24〜+24 dB。OUTPUT の分を引いて +6 dBFS 以下なら仕様（2026-11-18、健康診断の報告から）
+- Echo Drift | ランダム設定 | 出力のピークが +12 dBFS を超えた | OUTPUT・INPUT は −24〜+24 dB。OUTPUT の分を引いて +6 dBFS 以下、または INPUT を +15 dB 以上に上げたときなら仕様（2026-11-18、健康診断の報告から。2026-11-19: INPUT +22 dB の設定は 1.3.1 と同じピークだった）
 - My Filter | ランダム設定 | 音を止めても鳴り止まない | RES 95% くらいから上は自己発振（README）。RES が高い設定のときだけ仕様（2026-11-11、README から）
 - Hush Field | ランダム設定 | 出力のピークが +12 dBFS を超えた | Out Trim・Wet Trim は −18〜+18 dB。上げたときだけなら仕様（2026-11-18、健康診断の報告から）
 - Porch Drive・Wool Fuzz | ランダム設定 | 出力のピークが +12 dBFS を超えた | Porch Drive の LEVEL は −30〜+12 dB、Wool Fuzz の VOLUME は −36〜+6 dB。上げたときだけなら仕様（2026-11-18、健康診断の報告から）
