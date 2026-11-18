@@ -94,7 +94,15 @@ public:
     std::atomic<bool>   uiHostPlaying { false }, uiPreview { false };
     std::atomic<double> hostBpm { 120.0 };
     std::atomic<bool>   fxSleeping { false };   // UI: effects and amp are resting (nothing playing)
+    std::atomic<bool>   uiWindmillOn { false }; // UI: WINDMILL is running (its speed lamp)
     float wahPosition() const { return rig.wah.get().shownPosition(); }   // UI: where the WAH is (0 heel .. 1 toe)
+    float windmillSweep() const { return rig.phase.get().shownSweep(); }  // UI: where the WINDMILL's sweep is (0..1, its LED)
+    bool windmillRunning() const { return uiWindmillOn.load(); }
+    int routeKeyNow() const   // the whole row (Rig.h): fxChain + WAH's place + WINDMILL's place
+    {
+        return rig::routeKey ((int) apvts.getRawParameterValue ("fxChain")->load(), (int) apvts.getRawParameterValue ("wahAt")->load(),
+                              (int) apvts.getRawParameterValue ("phAt")->load());
+    }
     std::atomic<int>    hostNum { 4 }, hostDen { 4 };
 
     // ---- RECORD GUIDE (stand-alone app only: the guitar comes in through the audio interface)

@@ -137,8 +137,27 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOGuitarProcessor::createLa
     l.add (std::make_unique<APF> (juce::ParameterID { "whQ", 6 }, "Wah Q", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
     l.add (std::make_unique<APF> (juce::ParameterID { "whSpeed", 6 }, "Wah Auto Speed", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 7.0f, fmt ("", 1)));
     l.add (std::make_unique<APB> (juce::ParameterID { "whAuto", 6 }, "Wah Auto", false));
-    l.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "wahAt", 6 }, "Wah Place", 0, rig::numBlocks - 1, rig::kDefaultWahAt,
+    l.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "wahAt", 6 }, "Wah Place", 0, rig::numWahRow - 1, rig::kDefaultWahAt,
                                                       juce::AudioParameterIntAttributes().withAutomatable (false)));
+    // WINDMILL (0.8.0, PhaserDSP.h): PHASE / VIBE. Version hint 7: at the end of the AU list. SPEED (Hz) / RATE (SYNC) / DEPTH / COLOR
+    // are automatable; the type and its place in the row (phAt 0..6 in the row of seven) are not, like the drives' model and the order
+    {
+        juce::StringArray rates, types;
+        for (int i = 0; i < pedal::PhaserDSP::kNumRates; ++i) rates.add (pedal::PhaserDSP::rateName (i));
+        for (int i = 0; i < pedal::PhaserDSP::numTypes; ++i) types.add (pedal::PhaserDSP::typeName (i));
+        juce::NormalisableRange<float> hz (pedal::PhaserDSP::kMinHz, pedal::PhaserDSP::kMaxHz, 0.01f);
+        hz.setSkewForCentre (1.0f);
+        l.add (std::make_unique<APB> (juce::ParameterID { "phOn", 7 }, "Windmill On", false));
+        l.add (std::make_unique<APC> (juce::ParameterID { "phType", 7 }, "Windmill Type", types, pedal::PhaserDSP::phase,
+                                      juce::AudioParameterChoiceAttributes().withAutomatable (false)));
+        l.add (std::make_unique<APF> (juce::ParameterID { "phSpeed", 7 }, "Windmill Speed", hz, 0.8f, fmt (" Hz", 2)));
+        l.add (std::make_unique<APC> (juce::ParameterID { "phRate", 7 }, "Windmill Rate", rates, 2));
+        l.add (std::make_unique<APB> (juce::ParameterID { "phSync", 7 }, "Windmill Sync", true));
+        l.add (std::make_unique<APF> (juce::ParameterID { "phDepth", 7 }, "Windmill Depth", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 10.0f, fmt ("", 1)));
+        l.add (std::make_unique<APF> (juce::ParameterID { "phColor", 7 }, "Windmill Color", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f, fmt ("", 1)));
+        l.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "phAt", 7 }, "Windmill Place", 0, rig::numBlocks - 1, rig::kDefaultPhAt,
+                                                          juce::AudioParameterIntAttributes().withAutomatable (false)));
+    }
     l.add (std::make_unique<APF> (juce::ParameterID { "kitVelSens", 1 }, "Velocity Sensitivity",
                                   juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.7f, fmt ("", 2)));
 
@@ -262,7 +281,7 @@ void AIOGuitarProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     expectedPpq = -1.0;
     volume.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (get ("gtVolume")));
     readParams();
-    rig.prepare (sampleRate, samplesPerBlock, rig::routeKey ((int) get ("fxChain"), (int) get ("wahAt")), fx);
+    rig.prepare (sampleRate, samplesPerBlock, routeKeyNow(), fx);
     rig.drive.get().setModel ((int) get ("pdModel"), true);
     rig.fuzz.get().setModel ((int) get ("wfModel"), true);
     rig.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));
@@ -272,6 +291,8 @@ void AIOGuitarProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     lastWahParam = get ("whPedal"); wahFromCC = false;
     rig.wah.snapParams (lastWahParam, get ("whQ"), get ("whSpeed"));
     rig.wah.get().setAuto (get ("whAuto") > 0.5f);
+    rig.phase.get().setType ((int) get ("phType"), true);
+    rig.phase.snapParams (get ("phDepth"), get ("phColor"), get ("phSpeed"));
     setLatencySamples (rig.latency());   // the same for every order
     quietSamples = 0;
     lastOutPeak = 1.0f;
@@ -406,7 +427,8 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             tableChanged = false;
         }
     }
-    double ppq = 0.0, bpm = 120.0;
+    double ppq = 0.0, bpm = 120.0, lastBarPpq = -1.0;
+    long long barCount = -1;
     bool playing = false, havePpq = false;
     juce::int64 timeInSamples = -1;
     if (auto* ph = getPlayHead())
@@ -416,6 +438,8 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             if (auto ts = pos->getTimeInSamples()) timeInSamples = *ts;
             if (auto b = pos->getBpm()) bpm = juce::jlimit (20.0, 400.0, *b);
             if (auto q = pos->getPpqPosition()) { ppq = *q; havePpq = true; }
+            if (auto lb = pos->getPpqPositionOfLastBarStart()) lastBarPpq = *lb;
+            if (auto bc = pos->getBarCount()) barCount = (long long) *bc;
             if (auto ts = pos->getTimeSignature()) { hostNum.store (ts->numerator); hostDen.store (ts->denominator); }
         }
     hostBpm.store (bpm);
@@ -546,16 +570,29 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     }
     // TREM の時計: SYNC 中は Logic の拍（止まっている間は Logic のテンポで自分で回る）。単体アプリは Logic がないので Hz だけ
     rig.trem.get().setClock (! isStandaloneApp() && get ("trSync") > 0.5f, get ("trHz"), playing, havePpq, ppq, bpm);
+    // WINDMILL: the type (a new one: 5 ms out, 10 ms in), the knobs, and its clock: SYNC = Logic's beats, Hz = the song's seconds
+    // when playback starts / jumps (then on its own, so SPEED automation never jumps). The standalone app: Hz on its own
+    rig.phase.setOn (get ("phOn") > 0.5f);
+    rig.phase.get().setType ((int) get ("phType"));
+    rig.phase.setParams (get ("phDepth"), get ("phColor"), get ("phSpeed"));
+    {
+        const double songSec = timeInSamples >= 0 ? (double) timeInSamples / sr : (havePpq ? ppq * 60.0 / bpm : 0.0);
+        const bool phSync = ! isStandaloneApp() && get ("phSync") > 0.5f;
+        const double beatsPerBar = hostNum.load() * 4.0 / juce::jmax (1, hostDen.load());   // "1 Bar" in 3/4 = 3 quarter notes, in 6/8 = 3
+        rig.phase.get().setClock (phSync, (int) get ("phRate"), playing && ! isStandaloneApp(),
+                                  phSync ? havePpq : (havePpq || timeInSamples >= 0), ppq, bpm, songSec, beatsPerBar, lastBarPpq, barCount);
+    }
 
     const bool silentIn = buffer.getMagnitude (0, n) < 1.0e-6f && (buffer.getNumChannels() < 2 || buffer.getMagnitude (1, 0, n) < 1.0e-6f);
     quietSamples = (silentIn && ! notesHere) ? quietSamples + n : 0;
     // rest once nothing comes in for 0.5 s AND what comes out (the cabinet's tail) has died away
     const bool sleeping = quietSamples > (int) (sr * 0.5) && lastOutPeak < 1.0e-5f;
     fxSleeping.store (sleeping);
+    uiWindmillOn.store (! sleeping && rig.phase.isRunning());   // the panel's speed lamp (read on the UI thread)
     if (sleeping)
     {
         fx.offline = isNonRealtime();
-        rig.rest (fx, rig::routeKey ((int) get ("fxChain"), (int) get ("wahAt")), n);
+        rig.rest (fx, routeKeyNow(), n);
         rig.drive.get().setModel ((int) get ("pdModel"), true);
         rig.fuzz.get().setModel ((int) get ("wfModel"), true);
         rig.comp.snapParams (get ("ccComp"), get ("ccLevel"), get ("ccBlend"));    // the next note starts as set
@@ -563,12 +600,14 @@ void AIOGuitarProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         rig.fuzz.snapParams (get ("wfSustain"), get ("wfTone"), get ("wfVolume"));
         rig.trem.snapParams (get ("trDepth"), get ("trRate"), get ("trShape"));
         rig.wah.snapParams (wahFromCC ? wahCC : get ("whPedal"), get ("whQ"), get ("whSpeed"));
+        rig.phase.get().setType ((int) get ("phType"), true);
+        rig.phase.snapParams (get ("phDepth"), get ("phColor"), get ("phSpeed"));
         buffer.clear();
         return;
     }
     fx.offline = isNonRealtime();
     if (buffer.getNumChannels() >= 2)
-        rig.process (buffer, n, fx, rig::routeKey ((int) get ("fxChain"), (int) get ("wahAt")));
+        rig.process (buffer, n, fx, routeKeyNow());
 
     // safety on the way out: linear up to -6 dBFS, rounded off above, never over 0 dBFS
     // (the pedals alone reach +26 dBFS, a clean amp turned all the way up +7)
@@ -1065,6 +1104,22 @@ void AIOGuitarProcessor::setStateInformation (const void* data, int sizeInBytes)
     }
     // projects / presets from before 0.4.0: the old orders -> the order of all five blocks (TREM right after the AMP)
     migrateOrder (tree);
+    // a parameter the state does not have (a song, .aupreset or pasted setting from an older version, e.g. no WINDMILL before 0.8.0):
+    // its default, not whatever this instance had (JUCE's replaceState keeps the current value; DSP inspection 2026-11-18)
+    for (auto* p : getParameters())
+        if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
+        {
+            const auto id = rp->getParameterID();
+            bool has = false;
+            for (auto c : tree) if (c.hasType ("PARAM") && c["id"].toString() == id) { has = true; break; }
+            if (! has)
+            {
+                juce::ValueTree m ("PARAM");
+                m.setProperty ("id", id, nullptr);
+                m.setProperty ("value", rp->convertFrom0to1 (rp->getDefaultValue()), nullptr);
+                tree.appendChild (m, nullptr);
+            }
+        }
     const auto irTree = tree.getChildWithName ("CABIR");
     tree.removeChild (irTree, nullptr);
     if (! irTree.isValid())

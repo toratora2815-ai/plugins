@@ -1,13 +1,14 @@
 #pragma once
 // EFFECTS ページのペダル 1 台分。中身は DRIVE A / B（DriveSlot.h: 単体プラグインと同じ PORCH DRIVE / WOOL FUZZ と
 // AIO Guitar だけの HEARTH DRIVE / BRASS BOOST / BARN DIST から 1 つ）と、AIO Guitar だけのコンプ（CottonCompDSP）、
-// My Tremolo の小型版（TremPedalDSP）。並べる順番は Rig.h。
+// My Tremolo の小型版（TremPedalDSP）、フェイザー / ヴァイブ（PhaserDSP、0.8.0）。並べる順番は Rig.h。
 // OFF のペダルは計算しない（タイミングをそろえる短い遅らせだけ）。ON/OFF は 15 ms でつなぐ。
 #include <JuceHeader.h>
 #include "DriveSlot.h"
 #include "WahDSP.h"
 #include "CottonCompDSP.h"
 #include "TremPedalDSP.h"
+#include "PhaserDSP.h"
 
 template <typename DSP>
 class PedalSlot
@@ -40,6 +41,15 @@ public:
     }
 
     bool isRunning() const { return on || mix.isSmoothing(); }
+
+    // the rig rests (nothing playing): an ON / OFF made meanwhile takes effect now, not as a 15 ms fade at the next note
+    // (the note would meet the fade at a place that depends on the block size: playback and bounce would differ; DSP inspection 2026-11-18)
+    void settle()
+    {
+        mix.setCurrentAndTargetValue (on ? 1.0f : 0.0f);
+        if (on && ! wasRunning) dsp.reset();
+        wasRunning = on;
+    }
 
     // a broken sample went through: start clean
     void reset()

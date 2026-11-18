@@ -1,7 +1,9 @@
 #pragma once
-// 音の流れ全体（EFFECTS ページの並び）: IN → [COMP / DRIVE A / DRIVE B / AMP / TREM / WAH を好きな順に] → CAB → OUTPUT
+// 音の流れ全体（EFFECTS ページの並び）: IN → [COMP / DRIVE A / DRIVE B / AMP / TREM / WAH / WINDMILL を好きな順に] → CAB → OUTPUT
 //  - WAH（0.7.0）: 並びは「前の 5 箱の並び fxChain（そのまま）＋ WAH の場所 wahAt（0〜5）」で持つ。前の曲・前のプリセットは
-//    読み替えなしで WAH がいちばん前（OFF）。並びの鍵 = fxChain × 6 + wahAt（0〜719）
+//    読み替えなしで WAH がいちばん前（OFF）
+//  - WINDMILL（0.8.0、フェイザー / ヴァイブ）: さらに「全体（7 箱）の中の WINDMILL の場所 phAt（0〜6）」。前の曲・前のプリセットは
+//    読み替えなしで 5 番目（初期の並びなら DRIVE B の後ろ・AMP の前、OFF）。並びの鍵 = (fxChain × 6 + wahAt) × 7 + phAt（0〜5039）
 //  - DRIVE A / B（0.6.0）は 0.5.0 までの DRIVE（PORCH DRIVE）と FUZZ（WOOL FUZZ）の箱。どちらでも 5 機種から選べる（DriveSlot.h）。
 //    並びの番号（fxChain）は 0.5.0 と同じ: DRIVE A = 前の DRIVE の位置、DRIVE B = 前の FUZZ の位置
 //  - TREM（0.4.0）は My Tremolo の小型版。初期位置は AMP の直後（本物のアンプのトレモロと同じ所）
@@ -17,14 +19,16 @@
 
 namespace rig
 {
-    enum Block { blkComp = 0, blkDrive, blkFuzz, blkAmp, blkTrem, blkWah, numBlocks };   // numBlocks = 6 (all movable blocks)
-    constexpr int numChainBlocks = 5;                       // the blocks whose order is fxChain (all but WAH)
+    enum Block { blkComp = 0, blkDrive, blkFuzz, blkAmp, blkTrem, blkWah, blkPhase, numBlocks };   // numBlocks = 7 (all movable blocks)
+    constexpr int numChainBlocks = 5;                       // the blocks whose order is fxChain (all but WAH and WINDMILL)
+    constexpr int numWahRow = 6;                            // fxChain + WAH (wahAt counts in this row)
     using Order = std::array<int, numChainBlocks>;          // fxChain
     using Route = std::array<int, numBlocks>;               // the whole row, left to right
     constexpr int kNumOrders = 120;  // 5 blocks: 5! orders（パラメーター fxChain の番号）
     constexpr int kDefault = 0;      // Comp > Drive > Fuzz > Amp > Trem
     constexpr int kDefaultWahAt = 0; // WAH first (straight from the guitar, like most pedalboards)
-    constexpr int kNumRoutes = kNumOrders * numBlocks;
+    constexpr int kDefaultPhAt = 4;  // WINDMILL 5th: after DRIVE B, before the AMP (fuzz -> vibe -> amp)
+    constexpr int kNumRoutes = kNumOrders * numWahRow * numBlocks;
 
     inline Order orderAt (int index)
     {
@@ -38,7 +42,7 @@ namespace rig
         for (int k = 0; k < kNumOrders; ++k) { if (p == o) return k; std::next_permutation (p.begin(), p.end()); }
         return kDefault;
     }
-    inline const char* blockName (int b) { static const char* n[] { "Comp", "Drive A", "Drive B", "Amp", "Trem", "Wah" }; return n[juce::jlimit (0, numBlocks - 1, b)]; }
+    inline const char* blockName (int b) { static const char* n[] { "Comp", "Drive A", "Drive B", "Amp", "Trem", "Wah", "Windmill" }; return n[juce::jlimit (0, numBlocks - 1, b)]; }
     inline juce::StringArray orderNames()
     {
         juce::StringArray s;
@@ -71,24 +75,37 @@ namespace rig
         for (int k = 0, j = 0; k < (int) N; ++k) r[(size_t) k] = k == to ? block : rest[j++];
         return r;
     }
-    // the whole row: the five of fxChain with WAH put in at wahAt
-    inline Route routeOf (int chainIndex, int wahAt)
+    // the whole row: the five of fxChain with WAH put in at wahAt (in the row of six), then WINDMILL at phAt (in the row of seven)
+    inline Route routeOf (int chainIndex, int wahAt, int phAt)
     {
         const auto o = orderAt (chainIndex);
-        wahAt = juce::jlimit (0, numBlocks - 1, wahAt);
+        wahAt = juce::jlimit (0, numWahRow - 1, wahAt);
+        phAt = juce::jlimit (0, numBlocks - 1, phAt);
+        std::array<int, numWahRow> w {};
+        for (int k = 0, j = 0; k < numWahRow; ++k) w[(size_t) k] = k == wahAt ? (int) blkWah : o[(size_t) j++];
         Route r {};
-        for (int k = 0, j = 0; k < numBlocks; ++k) r[(size_t) k] = k == wahAt ? (int) blkWah : o[(size_t) j++];
+        for (int k = 0, j = 0; k < numBlocks; ++k) r[(size_t) k] = k == phAt ? (int) blkPhase : w[(size_t) j++];
         return r;
     }
-    inline void splitRoute (const Route& r, int& chainIndex, int& wahAt)
+    inline void splitRoute (const Route& r, int& chainIndex, int& wahAt, int& phAt)
     {
-        Order o {}; int j = 0;
-        for (int b : r) if (b != blkWah) o[(size_t) j++] = b;
+        std::array<int, numWahRow> w {}; int j = 0;
+        for (int b : r) if (b != blkPhase) w[(size_t) j++] = b;
+        Order o {}; j = 0;
+        for (int b : w) if (b != blkWah) o[(size_t) j++] = b;
         chainIndex = indexOf (o);
-        wahAt = posOf (r, blkWah);
+        wahAt = posOf (w, blkWah);
+        phAt = posOf (r, blkPhase);
     }
-    inline int routeKey (int chainIndex, int wahAt) { return juce::jlimit (0, kNumOrders - 1, chainIndex) * numBlocks + juce::jlimit (0, numBlocks - 1, wahAt); }
-    inline Route routeAtKey (int key) { key = juce::jlimit (0, kNumRoutes - 1, key); return routeOf (key / numBlocks, key % numBlocks); }
+    inline int routeKey (int chainIndex, int wahAt, int phAt)
+    {
+        return (juce::jlimit (0, kNumOrders - 1, chainIndex) * numWahRow + juce::jlimit (0, numWahRow - 1, wahAt)) * numBlocks + juce::jlimit (0, numBlocks - 1, phAt);
+    }
+    inline Route routeAtKey (int key)
+    {
+        key = juce::jlimit (0, kNumRoutes - 1, key);
+        return routeOf (key / (numWahRow * numBlocks), (key / numBlocks) % numWahRow, key % numBlocks);
+    }
     // projects from before 0.3.0: "Pedal Order" (Drive > Fuzz / Fuzz > Drive), the comp first, then the amp and the trem
     inline int fromOldPedalOrder (bool fuzzFirst) { return fuzzFirst ? indexOf ({ blkComp, blkFuzz, blkDrive, blkAmp, blkTrem }) : kDefault; }
 }
@@ -103,6 +120,7 @@ public:
     PedalSlot<pedal::DriveSlotDSP>  fuzz;    // DRIVE B (WOOL FUZZ by default; params wf*)
     PedalSlot<pedal::TremDSP>       trem;    // TREM（My Tremolo の小型版）
     PedalSlot<pedal::WahDSP>        wah;     // BELLOWS WAH (0.7.0)
+    PedalSlot<pedal::PhaserDSP>     phase;   // WINDMILL (0.8.0): PHASE / VIBE
     FXChain chain;                           // AMP / CAB / OUTPUT
 
     void prepare (double sampleRate, int maxBlockSize, int orderIndex, const FXParams& p)
@@ -110,7 +128,7 @@ public:
         chain.prepare (sampleRate, maxBlockSize);
         maxBlock = chain.getMaxBlock();
         comp.prepare (sampleRate, maxBlock); drive.prepare (sampleRate, maxBlock); fuzz.prepare (sampleRate, maxBlock); trem.prepare (sampleRate, maxBlock);
-        wah.prepare (sampleRate, maxBlock);
+        wah.prepare (sampleRate, maxBlock); phase.prepare (sampleRate, maxBlock);
         fadeLen = juce::jmax (1, (int) (sampleRate * 0.005));
         fadeInLen = juce::jmax (1, (int) (sampleRate * 0.008));
         warmLen = juce::jmax (1, (int) (sampleRate * 0.020));
@@ -119,11 +137,11 @@ public:
         setOrderNow (orderIndex, p);
     }
 
-    int latency() const { return comp.latency() + drive.latency() + fuzz.latency() + trem.latency() + wah.latency() + chain.getLatencySamples(); }
-    bool anyPedalRunning() const { return comp.isRunning() || drive.isRunning() || fuzz.isRunning() || trem.isRunning() || wah.isRunning(); }
+    int latency() const { return comp.latency() + drive.latency() + fuzz.latency() + trem.latency() + wah.latency() + phase.latency() + chain.getLatencySamples(); }
+    bool anyPedalRunning() const { return comp.isRunning() || drive.isRunning() || fuzz.isRunning() || trem.isRunning() || wah.isRunning() || phase.isRunning(); }
     int orderIndex() const { return orderIdx; }
 
-    // prepare / load / resting: this order at once, no fade. index = rig::routeKey (fxChain, wahAt)
+    // prepare / load / resting: this order at once, no fade. index = rig::routeKey (fxChain, wahAt, phAt)
     void setOrderNow (int index, const FXParams& p)
     {
         orderIdx = juce::jlimit (0, rig::kNumRoutes - 1, index);
@@ -137,7 +155,9 @@ public:
     {
         chain.rest (p, numSamples);
         setOrderNow (orderIndex, p);
+        comp.settle(); drive.settle(); fuzz.settle(); trem.settle(); wah.settle(); phase.settle();   // ON / OFF made while resting: done now
         trem.reset();   // 弾き始めたら、古い揺れの位置からではなく Logic の今の位置から（SYNC OFF なら頭から。つなぎもなし）
+        phase.reset();  // WINDMILL も同じ（Hz なら曲の秒の位置から）
     }
 
     void process (juce::AudioBuffer<float>& buffer, int numSamples, const FXParams& p, int wantOrder)
@@ -167,7 +187,7 @@ private:
     void resetAll()
     {
         chain.reset();
-        comp.reset(); drive.reset(); fuzz.reset(); trem.reset(); wah.reset();
+        comp.reset(); drive.reset(); fuzz.reset(); trem.reset(); wah.reset(); phase.reset();
     }
 
     // the AMP output brought to the guitar's own level (up or down), only when pedals follow it
@@ -185,7 +205,7 @@ private:
         {
             orderIdx = wantOrder; order = rig::routeAtKey (orderIdx);
             pad.setCurrentAndTargetValue (padTarget (p));
-            comp.reset(); drive.reset(); fuzz.reset(); trem.reset(); wah.reset(); chain.resetAmp();
+            comp.reset(); drive.reset(); fuzz.reset(); trem.reset(); wah.reset(); phase.reset(); chain.resetAmp();
             fadeState = 4; holdLeft = warmLen; fadePos = 0;
         }
         if (fadeState == 0 && wantOrder != orderIdx) { fadeState = 1; fadePos = fadeLen; }
@@ -207,6 +227,7 @@ private:
                 case rig::blkFuzz:  fuzz.process (d, n); break;
                 case rig::blkTrem:  trem.process (d, n); break;
                 case rig::blkWah:   wah.process (d, n); break;
+                case rig::blkPhase: phase.process (d, n); break;
                 default:
                     chain.processAmp (L, R, n, p);
                     if (usePad) for (int i = 0; i < n; ++i) { L[i] *= padBuf[(size_t) i]; R[i] *= padBuf[(size_t) i]; }
@@ -232,8 +253,8 @@ private:
     }
 
     int maxBlock = 512;
-    rig::Route order = rig::routeAtKey (rig::routeKey (rig::kDefault, rig::kDefaultWahAt));
-    int orderIdx = rig::routeKey (rig::kDefault, rig::kDefaultWahAt);
+    rig::Route order = rig::routeAtKey (rig::routeKey (rig::kDefault, rig::kDefaultWahAt, rig::kDefaultPhAt));
+    int orderIdx = rig::routeKey (rig::kDefault, rig::kDefaultWahAt, rig::kDefaultPhAt);
     int fadeLen = 240, fadeInLen = 384, warmLen = 960, holdLeft = 0, fadePos = 0;
     int fadeState = 0;   // 0 steady, 1 fading out, 3 silent (swap next chunk), 4 silent (settling), 2 fading in
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> pad { 1.0f };

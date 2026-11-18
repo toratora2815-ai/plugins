@@ -20,7 +20,7 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
   normalise（層ごとに中央値へ ±12 dB まで、ピッキングの層は全部 −21 dB RMS にそろえる。下の MEDIUM の項）、candidates（同じ弦優先、下げ 0〜3 半音優先、開放の録音は開放だけ）、FLAC で保存
 - KitVoice.h … 48 ボイス、Hermite、奏法ピッチ、2 段 1 極ローパス、choke 12 ms、params.lastTake で同じ録音の連続を避ける
 - Articulations.h … VoiceParams、奏法、StringAllocator（手の位置 hand、和音は 50 ms 以内に始まった弦を避ける、チャンネル 11〜16 = 画面の試聴で弦指定）、GuitarSynth
-- Rig.h … 音の流れ全体（COMP / DRIVE / FUZZ / AMP を fxOrder の順に → CAB → OUTPUT、下の「並べ替え」の項）
+- Rig.h … 音の流れ全体（COMP / DRIVE A / DRIVE B / AMP / TREM / WAH / WINDMILL を並びの鍵の順に → CAB → OUTPUT、下の「並べ替え」「WAH」「WINDMILL」の項）
 - FXChain.h … AMP の部品（processAmp = 4 倍 OS の AMP、processCabOut = CAB → OUTPUT、AMP / CAB の ON/OFF は S 字 15 ms クロスフェード）。中身は Amp.h（下の AMP の項）
 - AmpPad.h … AMP の後ろにペダルがあるときのそろえる量の表（RenderTest --padtable で作る）
 - 状態: "AIOG" マジック＋APVTS＋キットの ValueTree（FLAC）。99 音で約 8 MB
@@ -248,6 +248,55 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
 - DSP 検査 2 回目「渡してよい」（休み明け 28/28、ランダム 240 音すべて開く、CC はブロック 1〜4096 で同じ）。CC が 1 ブロックに 128 個を超えたら最後を上書き（1 行）。
   残り（急がない）: Q のオートメーションは 30 ms の SmoothedValue のまま（ブロック 2048 で少し階段）
 
+## WINDMILL（2026-11-18 本人「フェイザーを作る」、mix-engineer「作る価値あり」）
+- 手本: Guitar Rig 無料版のフェイザー系（Phaser Nine・Stoned Phaser・Phasis・Vintage Vibrato）は 4 つとも捨てられる（DUMP で確認）。
+  本人の Mac の Soundtoys PhaseMistress（aufx "PM  " SToy、build/phaselab/pm = 測定ホスト）は型（Style 69 個）が段の組み方だけで、
+  「Phase 90」と「Classic 4」は同じ値なら波形まで同じ（切れ込みの範囲・揺れの形は共通のつまみで決まる）→ 範囲と動き方は回路から決めた
+- PHASE: DAFx 2024（Giampiccolo ほか、MXR Phase 90 の WDF）の値。段 = C2 47 nF ＋ (R5 24 kΩ ∥ JFET)、2N5952 Vp −2.021 V・IS0 5.367 mA。
+  JFET は三極管領域の式で、伝導度 = 2·IS0/Vp²·(vgs − Vp) → 段の境目 fb = 141 Hz + 8.9 kHz/V·(vgs − Vp)（ゲート電圧に対してまっすぐ）。
+  揺れ = 論文の LFO（3.25 V ± 0.15 V、Vref 5.1 V → vgs −1.85 ± 0.15 V、上り 65 %）→ fb 328 Hz〜3.0 kHz、切れ込み 136 Hz〜1.24 kHz と 792 Hz〜7.2 kHz。
+  DEPTH は振れ幅（中心 −1.85 V のまま）と混ぜる量（0〜3 で 0 → 1）。COLOR = R28（4 段目 → 2 段目の − 入力）。a = R4/R28: 0 / 0.4167（24 kΩ）/ 0.75、
+  2〜4 段目のループは TPT の 1 次を A·u + B に書いて遅れなしで解く（1 + a·A3·A4 > 1 − a > 0 なので発振しない）。
+  JFET を信号でも変わる式のまま入れると（1 サンプル前の vds）、揺れのいちばん下（vgs − Vp = 0.02 V）で −12 dBFS でも倍音 −14 dB、濁りが揺れに合わせて脈打った。
+  vds を 0.1 倍・ゲートへの帰還（直線化）でも −20 dB → 入れないことにした（本物は「hot な信号で歪みやすい」と言われる所）
+- VIBE: 4 段 C = 15 nF / 220 nF / 470 pF / 4.7 nF（Uni-Vibe の値、DIY Stompboxes ほかで確認）、LDR のずれ 1.0 / 1.12 / 0.9 / 1.05。
+  正弦の LFO → ランプ（電力 = drive²、温まる 15 ms・冷める 15·(1 + 1.5·asym) ms）→ 光 = T^(1 + 0.6·asym) → LDR（明るくなる 8 ms・暗くなる 8·(1 + 6.5·asym) ms）
+  → R = 3.4 kΩ·((1 + 0.104)/(G + 0.104))^0.75（3.4〜20 kΩ）。asym = COLOR/5。段 = lp − gc·hp（gc = 1 − 0.12·asym = 音量の揺れ）、原音 0.55 : 0.45。
+  1 Hz・COLOR 5 で「明るくなる」のは 40 %、8 Hz では LDR が戻りきらず 0.7 オクターブ（1 Hz は 2.5）
+- 低い所: Linkwitz-Riley 24 dB で 200 Hz から下は原音（LP4 + HP4 = 全域通過なので DEPTH 0 は平ら）。E の開放コード・COLOR 10 で 150 Hz より下 −1.2〜+0.7 dB
+  （170 Hz だと −1.5 dB でちょうど境目だった）
+- 音量: 本人の DI（build/amp_shootout/0_素の音、24 秒）で補正なしの「失った dB」を DEPTH × COLOR の表に（SPEED 1 Hz）、補間して高い方の帯域にだけ掛ける。
+  VIBE は速いと暗い側へ戻りきらず余計に下がるので 0.6·fcol·(DEPTH/10)^0.8·clamp(log2(Hz)/2) を足す（全部足すと明るいテストの DI で +2 dB になった）。
+  本人の DI で ON − OFF: PHASE −0.5〜+0.3 dB、VIBE 0.3〜3 Hz は −1.3〜0 dB、8 Hz は −1.5〜0 dB
+- 時計: SYNC = Logic の拍（毎ブロック合わせ、0.002 周以上ずれたら 10 ms でつなぐ）。Hz = 再生開始・頭出し（曲の秒が 5 ms 以上ずれた）の瞬間だけ曲の秒 × Hz に合わせて、
+  あとは自分で進む（SPEED のオートメーションで飛ばない）。止まっている間は自分で回る（SYNC は Logic のテンポで）。単体アプリは Hz だけ・曲の位置なし
+- 型の切り替え: 5 ms で原音へ → まっさらから → 10 ms で戻す（dryHold、1 回 4096 サンプルまで）。左右が同じなら 1 回だけ計算（memcmp）
+- 並び: さらに phAt（全体 7 箱の中の WINDMILL の場所、0〜6、オートメーション不可）。鍵 = (fxChain × 6 + wahAt) × 7 + phAt（5040 通り）。
+  前の曲・プリセット（.mypreset も）は読み替えなしで 5 番目（初期の並びなら DRIVE B の後ろ・AMP の前）・OFF。wahAt の範囲は rig::numWahRow − 1（0〜5 のまま）
+- パラメーター（版のヒント 7）: phOn / phType（オートメーション不可）/ phSpeed（0.1〜10 Hz、真ん中 1 Hz）/ phRate（4 Bars〜1/16、初期 1 Bar）/ phSync（初期 ON）/
+  phDepth（初期 10）/ phColor（初期 5）/ phAt
+- 画面: エディター 1280 → 1400 幅（箱 1 つ約 151 px。本人のモニター 2560、MacBook 1512 で入る）。WindmillPanel = 「型 ▾」・SYNC（SYNC 中は phRate、OFF は phSpeed のつまみ）・
+  ON の横の小さいランプ（揺れに合わせて光る）。PHASE はライム、VIBE は紫
+- 聴き比べ WAV（build/phaser_ab、本人の DI → British Crunch GAIN 6、AMP の前 / 後ろ）を本人に送った（mix-engineer「違いが出るのは歪ませたときだけ。分からなければ作る理由は薄い」）
+- プリセット（最後に追加）: Phase Crunch、Fuzz Vibe
+- DSP 検査 1 回目（2026-11-18）「直してから」（事故る所はなし）→ 直した:
+  VIBE のランプが休みの後ブロックの頭で合わせ直していた（再生とバウンスで弾き始め −18 dB 違う）→ 最初に 1e-6 以上の音が来たサンプルで合わせる。
+  あわせて音量補正 mk が reset 後ブロックの頭から 30 ms で動いていた → mkSnap で最初の run() にそろえる（ブロック 128 / 441 / 1024 でビット単位で同じ）。
+  VIBE の COLOR を飛ばすとブロックの境目で段（3 kHz 以上 −45〜−65 dBFS）→ vibeGc を毎サンプル、ランプの時定数は stepLamp で COLOR が変わったら作り直す（−102 dBFS）。
+  型の切り替えの 15 ms に 200 Hz 付近が −7〜−15 dB へこむ（原音と LR4 の全域通過を混ぜていた）→ 分け目を通った音 through とつなぐ（ON/OFF の PedalSlot 側はそのまま）。
+  古い設定（.aupreset・ペースト）を WINDMILL ON のトラックに読むと ON のまま（JUCE の replaceState は状態にない値を今のまま残す。WAH も同じだった）
+  → setStateInformation で、状態にないパラメーターは初期値の PARAM を足す（全部が対象）。SYNC の小節は拍子どおり（hostNum × 4 / hostDen）。
+  windmillRunning は atomic（uiWindmillOn）。左右は「入力か左右のフィルターの状態が違えば」別々に計算。Hz で SPEED を動かす曲は再生位置で揺れが変わる、を説明に足した
+  （残り: Hz の SPEED オートメーションは設計どおり）
+- DSP 検査 2 回目（2026-11-18）「渡してよい」（前回の 7 つは数値で直っている。本物の Rig で VIBE を 5 番目・歪み / COMP / WAH / AMP の後でも、休みの後の再生とバウンスの差は
+  WINDMILL なしと同じ大きさ）。急がない 3 つも直した: 休み中に ON/OFF したペダルは 15 ms のつなぎが起きたブロックの頭から始まり、次の音の頭が再生とバウンスで
+  −9〜−21 dB 違った（ペダル全部、前から）→ PedalSlot::settle() を Rig::rest で 6 個に（AMP / CAB の FXChain の rest と同じ形）。ランプの「最初の音」1e-6 は
+  高ゲインの AMP の残り（pad 込み −119〜−124 dBFS）とぎりぎり → 1e-4（−80 dBFS）。拍子が途中で変わると SYNC の小節の頭が小節線とずれた →
+  Logic の最後の小節線（getPpqPositionOfLastBarStart）から数える（AU は小節番号 getBarCount を渡さないので、番号は小節線 ÷ 拍子で数える）
+- テスト（RenderTest の「== windmill ==」23 個、全体 205 個）: 回路どおりの切れ込み（44.1 / 48 / 96 / 192 kHz）、COLOR の山、COLOR 10 の衝撃が消える、DEPTH 0 平ら、ON/OFF、低い所、
+  SYNC・Hz の曲の位置、型の切り替え、左右、ブロックの大きさ、ランダム、VIBE の非対称、CPU（約 0.1 %）、休みの後の VIBE（ブロックの大きさ）、VIBE の COLOR の段、
+  3/4 の 1 Bar、4/4 → 3/4 の小節線、休み中に ON（Rig を直接、ブロック 128 と 1024 でビット単位で同じ）、古い設定を読んだとき、初期値・保存・並び（全部で 23 個）。道具は build/phaselab（proto/phtest.cpp、JUCE なし）、検査係の道具は build/windinspect
+
 ## まだ直していないこと（DSP 検査 2026-11-10、急がない）
 - COMP を AMP の後ろに置いたまま、鳴らしながら AMP の機種・プリセットを替えると 20〜26 ms だけ +4〜5 dB（コンプのピック抜け +5 dB と、
   pad の 15 ms・機種切替の 5 ms 下げ 10 ms 上げ・GAIN の 30 ms のずれ、表の +12 dB 頭打ち）。出口のクリップで 0 dBFS は超えない。pad を 30 ms にすると GAIN 0→10 が悪化したので、時間合わせだけでは直らない
@@ -258,6 +307,7 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
 `RenderTest <出力> [弦の硬さ 0〜0.0004]`、`RenderTest --padtable`（AmpPad.h の表を出す、約 1 分）、`RenderTest --amp ...`（AMP の音を WAV で）
 
 ## 版
+- 0.8.0（2026-11-18）… EFFECTS に WINDMILL（7 個目の箱、フェイザー PHASE / ヴァイブ VIBE）。エディターの幅 1400。上の「WINDMILL」の節
 - 0.7.0（2026-11-17）… EFFECTS に BELLOWS WAH（6 個目の箱、AUTO・CC11 / CC4）。エディターの幅 1280。上の「WAH」の節
 - 0.6.0（2026-11-11）… DRIVE A / B（5 機種から選ぶ: Porch Drive・Wool Fuzz・Hearth Drive・Brass Boost・Barn Dist）。上の「DRIVE A / B」の節
 - 0.5.0（2026-11-10）… ビビり補正（Fix Buzz）。上の「ビビり補正」の節

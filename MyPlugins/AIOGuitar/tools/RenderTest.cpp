@@ -10,6 +10,8 @@
 #include "../Source/RecordGuide.h"
 #include "../Source/DrivePedals.h"
 #include "../Source/WahDSP.h"
+#include "../Source/PhaserDSP.h"
+#include <map>
 
 namespace
 {
@@ -1578,16 +1580,16 @@ int main (int argc, char** argv)
             proc.prepareToPlay (sr, 256);
             const auto after = render (proc, note ({}), 1.0, sr);
             check (allFinite (after) && rmsDb (after, 0.05, 0.8, sr) > -45.0f && proc.getLatencySamples() == lat0
-                   && rig::routeOf (rig::kDefault, 4)[4] == rig::blkWah && rig::routeOf (rig::kDefault, 4)[3] == rig::blkAmp,
+                   && rig::posOf (rig::routeOf (rig::kDefault, 4, rig::kDefaultPhAt), (int) rig::blkWah) > rig::posOf (rig::routeOf (rig::kDefault, 4, rig::kDefaultPhAt), (int) rig::blkAmp),
                    "WAH after the AMP: plays, the same latency (" + juce::String (lat0) + ")");
             bool keysOk = true;
             for (int k = 0; k < rig::kNumRoutes; ++k)
             {
-                int c = 0, a = 0;
-                rig::splitRoute (rig::routeAtKey (k), c, a);
-                keysOk = keysOk && rig::routeKey (c, a) == k;
+                int c = 0, a = 0, ph = 0;
+                rig::splitRoute (rig::routeAtKey (k), c, a, ph);
+                keysOk = keysOk && rig::routeKey (c, a, ph) == k;
             }
-            check (keysOk, "720 rows (fxChain x WAH place): every one round-trips");
+            check (keysOk && rig::kNumRoutes == 5040, "5040 rows (fxChain x WAH place x WINDMILL place): every one round-trips");
 
             juce::MemoryBlock mb; proc.getStateInformation (mb);
             AIOGuitarProcessor p2; p2.setStateInformation (mb.getData(), (int) mb.getSize());
@@ -1599,6 +1601,565 @@ int main (int argc, char** argv)
             for (auto* id : { "whOn", "whAuto" }) setP (proc, id, 0);
             setP (proc, "wahAt", 0); setP (proc, "whPedal", 5); setP (proc, "whQ", 5);
             setP (proc, "ampOn", 1); setP (proc, "cabOn", 1); setP (proc, "kitHuman", 0.5f); setP (proc, "strumOn", 1);
+            proc.prepareToPlay (sr, 256);
+        }
+    }
+
+    // ---- WINDMILL (0.8.0, PhaserDSP.h): PHASE / VIBE
+    std::cout << "== windmill ==" << std::endl;
+    {
+        using PH = pedal::PhaserDSP;
+        auto make = [] (int type, double rate, float depth, float color, float hz)
+        {
+            auto p = std::make_unique<PH>();
+            p->prepare (rate, 512, 2); p->setType (type, true); p->setParams (depth, color, hz, true);
+            return p;
+        };
+        // both channels the same unless xr is given; the clock stopped (the sweep runs on its own) unless beforeBlock sets it
+        auto runPh = [] (PH& p, const std::vector<float>& x, int bs, std::function<void (int pos, int n)> beforeBlock = {}, const std::vector<float>* xr = nullptr)
+        {
+            juce::AudioBuffer<float> out (2, (int) x.size());
+            out.copyFrom (0, 0, x.data(), (int) x.size());
+            out.copyFrom (1, 0, xr != nullptr ? xr->data() : x.data(), (int) x.size());
+            for (int pos = 0; pos < (int) x.size(); pos += bs)
+            {
+                const int k = juce::jmin (bs, (int) x.size() - pos);
+                if (beforeBlock) beforeBlock (pos, k); else p.setClock (false, 2, false, false, 0.0, 120.0, 0.0);
+                float* ch[2] { out.getWritePointer (0) + pos, out.getWritePointer (1) + pos };
+                p.process (ch, 2, k);
+            }
+            return out;
+        };
+        // the magnitude response (dB per FFT bin) of an impulse; bin k = k * rate / 65536
+        auto response = [&] (PH& p)
+        {
+            const int N = 1 << 16;
+            std::vector<float> x ((size_t) N, 0.0f); x[0] = 1.0f;
+            const auto y = runPh (p, x, 512);
+            juce::dsp::FFT fft (16);
+            std::vector<float> buf ((size_t) N * 2, 0.0f);
+            for (int i = 0; i < N; ++i) buf[(size_t) i] = y.getSample (0, i);
+            fft.performFrequencyOnlyForwardTransform (buf.data());
+            std::vector<float> db ((size_t) N / 2);
+            for (int k = 0; k < N / 2; ++k) db[(size_t) k] = juce::Decibels::gainToDecibels (buf[(size_t) k], -200.0f);
+            return db;
+        };
+        auto deepest = [] (const std::vector<float>& db, double rate, double fLo, double fHi)
+        {
+            const double binHz = rate / 65536.0; int best = -1;
+            for (int k = (int) (fLo / binHz); k <= (int) (fHi / binHz) && k < (int) db.size(); ++k) if (best < 0 || db[(size_t) k] < db[(size_t) best]) best = k;
+            return best * binHz;
+        };
+        auto highest = [] (const std::vector<float>& db, double rate, double fLo, double fHi)
+        {
+            const double binHz = rate / 65536.0; float best = -300.0f;
+            for (int k = (int) (fLo / binHz); k <= (int) (fHi / binHz) && k < (int) db.size(); ++k) best = juce::jmax (best, db[(size_t) k]);
+            return best;
+        };
+
+        // PHASE: the two notches where the circuit puts them (the gate at -2.0 V and -1.7 V), at every sample rate
+        {
+            const double fbLo = PH::phaseBreakHz (-2.0f), fbHi = PH::phaseBreakHz (-1.7f);
+            const double n2Lo = fbLo * 2.41421, n1Hi = fbHi * 0.41421, n2Hi = fbHi * 2.41421;
+            bool ok = true; juce::String txt;
+            for (double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+            {
+                auto lo = make (PH::phase, rate, 10, 0, 1); lo->freezeSweep (0.0f);
+                auto hi = make (PH::phase, rate, 10, 0, 1); hi->freezeSweep (1.0f);
+                const auto rl = response (*lo), rh = response (*hi);
+                const double a = deepest (rl, rate, 500, 1200), b = deepest (rh, rate, 900, 1800), c = deepest (rh, rate, 5000, 10000);
+                ok = ok && std::abs (a / n2Lo - 1.0) < 0.03 && std::abs (b / n1Hi - 1.0) < 0.03 && std::abs (c / n2Hi - 1.0) < 0.07;
+                txt << juce::String (a, 0) << "/" << juce::String (b, 0) << "/" << juce::String (c, 0) << " ";
+            }
+            check (ok, "PHASE notches as the circuit says (" + juce::String (n2Lo, 0) + " at the bottom, " + juce::String (n1Hi, 0) + " and " + juce::String (n2Hi, 0)
+                   + " Hz at the top) at 44.1 / 48 / 96 / 192 kHz: " + txt.trim());
+        }
+        // COLOR = the feedback: a peak between the notches that grows, never rings on, the same at every rate
+        {
+            bool ok = true; juce::String txt;
+            for (double rate : { 44100.0, 96000.0 })
+            {
+                float pk[3] {};
+                for (int i = 0; i < 3; ++i)
+                {
+                    auto p = make (PH::phase, rate, 10, (float) (i * 5), 1); p->freezeSweep (0.5f);
+                    pk[i] = highest (response (*p), rate, 300, 6000);
+                }
+                ok = ok && pk[1] - pk[0] > 1.5f && pk[1] - pk[0] < 8.0f && pk[2] - pk[0] > 6.0f && pk[2] - pk[0] < 15.0f;
+                txt << juce::String (pk[1] - pk[0], 1) << " / " << juce::String (pk[2] - pk[0], 1) << " dB  ";
+            }
+            check (ok, "COLOR 5 / 10 raise the peak over COLOR 0 by " + txt.trim());
+            float worst = -300.0f;
+            for (double rate : { 44100.0, 192000.0 })
+                for (float m : { 0.0f, 0.5f, 1.0f })
+                {
+                    auto p = make (PH::phase, rate, 10, 10, 1); p->freezeSweep (m);
+                    std::vector<float> x ((size_t) (rate * 1.0), 0.0f); x[0] = 1.0f;
+                    const auto y = runPh (*p, x, 512);
+                    const int tail = (int) (rate * 0.5);
+                    worst = juce::jmax (worst, juce::Decibels::gainToDecibels (y.getRMSLevel (0, tail, y.getNumSamples() - tail), -300.0f));
+                }
+            check (worst < -120.0f, "COLOR 10: an impulse dies away (the last 0.5 s at " + juce::String (worst, 0) + " dB)");
+        }
+        // DEPTH 0 = through: flat within 0.1 dB (only the crossover's all-pass)
+        {
+            bool ok = true; float worst = 0.0f;
+            for (int t = 0; t < 2; ++t)
+            {
+                auto p = make (t, 48000, 0, 5, 1);
+                const auto r = response (*p);
+                for (double f : { 40.0, 80.0, 150.0, 170.0, 300.0, 1000.0, 3000.0, 8000.0, 16000.0 })
+                {
+                    const float d = r[(size_t) std::lround (f / (48000.0 / 65536.0))];
+                    worst = juce::jmax (worst, std::abs (d)); ok = ok && std::abs (d) < 0.1f;
+                }
+            }
+            check (ok, "DEPTH 0: flat (worst " + juce::String (worst, 3) + " dB from 40 Hz to 16 kHz)");
+        }
+        // a DI as bright as a real guitar's, notes and chords (as the wah test)
+        auto brightDI = [] (double rate, double seconds)
+        {
+            std::vector<float> x ((size_t) (rate * seconds), 0.0f);
+            int k0 = 0;
+            for (double t = 0.0; t < seconds - 0.7; t += 0.6, ++k0)
+            {
+                const double nn = 40.0 + (k0 * 5) % 30;
+                const double f0 = noteHz (nn); const int at = (int) (t * rate);
+                for (int h = 1; h * f0 < 6000.0; ++h)
+                    for (int i = 0; i < (int) (0.6 * rate) && at + i < (int) x.size(); ++i)
+                        x[(size_t) (at + i)] += (float) (0.05 / std::sqrt ((double) h) * std::exp (-i / (0.3 * rate)) * std::sin (6.283185307 * h * f0 * i / rate + h));
+            }
+            return x;
+        };
+        // ON as loud as OFF (the average over many sweeps)
+        {
+            const auto x = brightDI (48000.0, 12.0);
+            double e = 0; for (float v : x) e += (double) v * v;
+            const float off = (float) (10.0 * std::log10 (e / (double) x.size()));
+            bool ok = true; juce::String txt;
+            for (int t = 0; t < 2; ++t)
+                for (auto [d, c, hz] : { std::tuple<float, float, float> { 10.0f, 5.0f, 0.8f }, { 10.0f, 0.0f, 0.5f }, { 10.0f, 10.0f, 2.0f }, { 4.0f, 5.0f, 1.0f }, { 10.0f, 5.0f, 6.0f } })
+                {
+                    auto p = make (t, 48000.0, d, c, hz);
+                    const auto y = runPh (*p, x, 512);
+                    const float dl = rmsDb (y, 0.0, 11.9, 48000.0) - off;
+                    ok = ok && std::abs (dl) < 1.5f;
+                    txt << juce::String (dl, 1) << " ";
+                }
+            check (ok, "on vs off within 1.5 dB (PHASE then VIBE: " + txt.trim() + " dB)");
+        }
+        // the low strings stay put: an open E chord, COLOR 10, DEPTH 10 -> below 150 Hz within +-1.5 dB over the sweep
+        {
+            const double rate = 48000.0;
+            std::vector<float> x ((size_t) (rate * 10.0), 0.0f);
+            juce::Random rng (21);
+            for (double nn : { 40.0, 47.0, 52.0, 56.0, 59.0, 64.0 })
+            {
+                const double f0 = noteHz (nn);
+                for (int h = 1; h * f0 < 8000.0; ++h)
+                {
+                    const double ph = rng.nextDouble() * 6.28;
+                    for (size_t i = 0; i < x.size(); ++i) x[i] += (float) (0.01 / std::sqrt ((double) h) * std::sin (6.283185307 * h * f0 * (double) i / rate + ph));
+                }
+            }
+            auto coeffs = juce::dsp::FilterDesign<float>::designIIRLowpassHighOrderButterworthMethod (150.0f, rate, 8);
+            auto lowBand = [&] (const float* d, int n)
+            {
+                std::vector<float> o ((size_t) n);
+                std::vector<juce::dsp::IIR::Filter<float>> f;
+                for (auto& c : coeffs) { f.emplace_back(); f.back().coefficients = c; }
+                for (int i = 0; i < n; ++i) { float v = d[i]; for (auto& s : f) v = s.processSample (v); o[(size_t) i] = v; }
+                return o;
+            };
+            const auto xl = lowBand (x.data(), (int) x.size());
+            bool ok = true; juce::String txt;
+            for (int t = 0; t < 2; ++t)
+            {
+                auto p = make (t, rate, 10, 10, 0.5f);
+                const auto y = runPh (*p, x, 512);
+                const auto yl = lowBand (y.getReadPointer (0), y.getNumSamples());
+                float lo = 100, hi = -100;
+                for (int s = (int) (2 * rate); s + 2400 < (int) yl.size(); s += 2400)
+                {
+                    double a = 0, b = 0;
+                    for (int i = s; i < s + 2400; ++i) { a += (double) yl[(size_t) i] * yl[(size_t) i]; b += (double) xl[(size_t) i] * xl[(size_t) i]; }
+                    const float d = (float) (10.0 * std::log10 (a / b));
+                    lo = juce::jmin (lo, d); hi = juce::jmax (hi, d);
+                }
+                ok = ok && lo > -1.5f && hi < 1.5f;
+                txt << (t == 0 ? "PHASE " : "VIBE ") << juce::String (lo, 1) << ".." << juce::String (hi, 1) << " dB  ";
+            }
+            check (ok, "open E chord, COLOR 10: below 150 Hz " + txt.trim());
+        }
+        // SYNC: the same song position = the same place in the sweep, wherever playback started (a locate: joined in 10 ms)
+        {
+            const double rate = 48000.0, bpm = 120.0; const int bs = 480;
+            const double beatsPerBlock = bs / rate * bpm / 60.0;
+            std::map<int, float> first;   // block -> where the sweep is after it, playing from the start
+            auto p2 = make (PH::phase, rate, 10, 5, 1);
+            for (int blk = 0; blk < 2000; ++blk)
+            {
+                p2->setClock (true, 2, true, true, blk * beatsPerBlock, bpm, blk * bs / rate);
+                juce::AudioBuffer<float> b (2, bs); b.clear(); float* ch[2] { b.getWritePointer (0), b.getWritePointer (1) };
+                p2->process (ch, 2, bs);
+                first[blk] = p2->shownSweep();
+            }
+            auto p3 = make (PH::phase, rate, 10, 5, 1);
+            bool ok = true; float worst = 0;
+            for (int j = 0; j < 600; ++j)
+            {
+                const int at = 815 + j;   // playback started at beat 16.3
+                p3->setClock (true, 2, true, true, at * beatsPerBlock, bpm, at * bs / rate);
+                juce::AudioBuffer<float> b (2, bs); b.clear(); float* ch[2] { b.getWritePointer (0), b.getWritePointer (1) };
+                p3->process (ch, 2, bs);
+                if (j >= 2) { const float d = std::abs (p3->shownSweep() - first[at]); worst = juce::jmax (worst, d); ok = ok && d < 1.0e-3f; }
+            }
+            check (ok, "SYNC: playback from beat 16.3 sweeps exactly as from the start (worst " + juce::String (worst, 5) + ")");
+        }
+        // Hz: playback starts at the song's seconds; SPEED automation never makes the sweep jump
+        {
+            const double rate = 48000.0; const int bs = 480;
+            auto shape = [] (double ph) { return ph < 0.65 ? ph / 0.65 : (1.0 - ph) / 0.35; };
+            bool ok = true; juce::String txt;
+            for (double t0 : { 3.0, 7.55 })
+            {
+                auto p = make (PH::phase, rate, 10, 5, 0.8f);
+                p->setClock (false, 2, true, true, t0 * 2.0, 120.0, t0);
+                juce::AudioBuffer<float> b (2, bs); b.clear(); float* ch[2] { b.getWritePointer (0), b.getWritePointer (1) };
+                p->process (ch, 2, bs);
+                const double ph = std::fmod (t0 * 0.8 + (bs - 1) / rate * 0.8, 1.0);
+                const float d = (float) std::abs (p->shownSweep() - shape (ph));
+                ok = ok && d < 2.0e-3f; txt << juce::String (d, 5) << " ";
+            }
+            auto p = make (PH::phase, rate, 10, 5, 0.8f);
+            float prev = -1.0f, worstStep = 0.0f;
+            for (int blk = 0; blk < 800; ++blk)
+            {
+                const float hz = blk < 400 ? 0.8f : 5.0f;   // the knob jumps at 4 s
+                p->setParams (10, 5, hz);
+                p->setClock (false, 2, true, true, blk * bs / rate * 2.0, 120.0, blk * bs / rate);
+                juce::AudioBuffer<float> b (2, bs); b.clear(); float* ch[2] { b.getWritePointer (0), b.getWritePointer (1) };
+                p->process (ch, 2, bs);
+                const float m = p->shownSweep();
+                if (prev >= 0.0f) worstStep = juce::jmax (worstStep, std::abs (m - prev));
+                prev = m;
+            }
+            // the fastest honest step: 5 Hz, one block, the steeper (down) side of the triangle
+            const float allowed = (float) (5.0 * bs / rate / 0.35) + 0.01f;
+            check (ok && worstStep <= allowed, "Hz: playback from 3.0 / 7.55 s lands on the song's place (" + txt.trim() + "); SPEED 0.8 -> 5 Hz: no jump (largest step "
+                   + juce::String (worstStep, 3) + ", the sweep itself " + juce::String (allowed, 3) + ")");
+        }
+        // changing the type while playing: no click
+        {
+            const double rate = 48000.0;
+            std::vector<float> x ((size_t) rate, 0.0f);
+            for (size_t i = 0; i < x.size(); ++i) x[i] = 0.25f * (float) std::sin (6.283185307 * 220.0 * (double) i / rate);
+            auto p = make (PH::phase, rate, 10, 5, 1.0f);
+            const auto y = runPh (*p, x, 256, [&] (int pos, int) { p->setClock (false, 2, false, false, 0, 120, 0); if (pos >= (int) (0.5 * rate)) p->setType (PH::vibe); });
+            const float around = maxJump (y, (int) (0.49 * rate), (int) (0.53 * rate)), before = maxJump (y, (int) (0.2 * rate), (int) (0.45 * rate));
+            check (allFinite (y) && around < before * 1.6f + 0.002f, "PHASE -> VIBE while playing: no click (largest step " + juce::String (around, 4) + " vs "
+                   + juce::String (before, 4) + " before)");
+        }
+        // the same on both sides when the guitar is the same; left and right apart when they differ (one sweep for both)
+        {
+            const double rate = 48000.0;
+            juce::Random rng (8);
+            std::vector<float> l ((size_t) rate * 2), r ((size_t) rate * 2);
+            for (size_t i = 0; i < l.size(); ++i) { l[i] = 0.2f * (float) std::sin (6.283185307 * 330.0 * (double) i / rate); r[i] = 0.1f * (rng.nextFloat() * 2.0f - 1.0f); }
+            bool ok = true;
+            for (int t = 0; t < 2; ++t)
+            {
+                auto p = make (t, rate, 10, 5, 1.0f);
+                const auto same = runPh (*p, l, 512);
+                for (int i = 0; i < same.getNumSamples(); ++i) ok = ok && same.getSample (0, i) == same.getSample (1, i);
+                auto q = make (t, rate, 10, 5, 1.0f), solo = make (t, rate, 10, 5, 1.0f);
+                const auto both = runPh (*q, l, 512, {}, &r);
+                const auto alone = runPh (*solo, r, 512);
+                float d = 0; for (int i = 0; i < both.getNumSamples(); ++i) d = juce::jmax (d, std::abs (both.getSample (1, i) - alone.getSample (0, i)));
+                ok = ok && allFinite (both) && d < 1.0e-5f;
+            }
+            check (ok, "left = right in, left = right out; a different right side is processed on its own with the same sweep");
+        }
+        // block sizes do not change the sound
+        {
+            const auto x = brightDI (48000.0, 3.0);
+            bool ok = true; float worst = 0;
+            for (int t = 0; t < 2; ++t)
+            {
+                auto ref = make (t, 48000.0, 9, 6, 1.7f);
+                const auto a = runPh (*ref, x, 512);
+                for (int bs : { 1, 64, 1000, 4096 })
+                {
+                    auto p = make (t, 48000.0, 9, 6, 1.7f);
+                    const auto b = runPh (*p, x, bs);
+                    for (int i = 0; i < a.getNumSamples(); ++i) worst = juce::jmax (worst, std::abs (a.getSample (0, i) - b.getSample (0, i)));
+                }
+            }
+            ok = worst < 1.0e-5f;
+            check (ok, "block sizes 1 / 64 / 512 / 1000 / 4096 sound the same (worst difference " + juce::String (worst, 7) + ")");
+        }
+        // everything at once: random knobs, types, SYNC, jumps of the song position, loud noise -> finite, never wild
+        {
+            juce::Random rng (77);
+            auto p = make (PH::phase, 44100.0, 10, 5, 1);
+            bool ok = true; float peak = 0;
+            double ppq = 0;
+            for (int blk = 0; blk < 3000; ++blk)
+            {
+                const int n = 1 + rng.nextInt (700);
+                if (rng.nextInt (10) == 0) p->setType (rng.nextInt (2));
+                p->setParams (rng.nextFloat() * 10.0f, rng.nextFloat() * 10.0f, 0.1f + rng.nextFloat() * 9.9f);
+                if (rng.nextInt (40) == 0) ppq = rng.nextDouble() * 200.0;
+                p->setClock (rng.nextInt (3) > 0, rng.nextInt (7), rng.nextInt (4) > 0, true, ppq, 60.0 + rng.nextDouble() * 140.0, ppq * 0.5);
+                ppq += n / 44100.0 * 2.0;
+                juce::AudioBuffer<float> b (2, n);
+                for (int i = 0; i < n; ++i) { b.setSample (0, i, 2.0f * (rng.nextFloat() * 2.0f - 1.0f)); b.setSample (1, i, rng.nextInt (2) ? b.getSample (0, i) : 2.0f * (rng.nextFloat() * 2.0f - 1.0f)); }
+                float* ch[2] { b.getWritePointer (0), b.getWritePointer (1) };
+                p->process (ch, 2, n);
+                ok = ok && allFinite (b);
+                peak = juce::jmax (peak, b.getMagnitude (0, n));
+            }
+            check (ok && peak < 20.0f, "random knobs / types / SYNC / jumps, noise at +6 dBFS: finite, peak " + juce::String (peak, 1));
+        }
+        // VIBE: brighter fast, darker slowly (COLOR 5), even at COLOR 0; faster = a narrower sweep
+        {
+            auto trace = [&] (float color, float hz)
+            {
+                auto p = make (PH::vibe, 48000.0, 10, color, hz);
+                std::vector<float> rr;
+                const int blocks = (int) (100.0 * (4.0 / hz + 4.0));
+                for (int b = 0; b < blocks; ++b)
+                {
+                    p->setClock (false, 2, false, false, 0, 120, 0);
+                    juce::AudioBuffer<float> buf (2, 480);   // a quiet tone (the lamp starts with the first sound)
+                    for (int i = 0; i < 480; ++i) { const float v = 0.01f * (float) std::sin (6.283185307 * 440.0 * (b * 480 + i) / 48000.0); buf.setSample (0, i, v); buf.setSample (1, i, v); }
+                    float* ch[2] { buf.getWritePointer (0), buf.getWritePointer (1) };
+                    p->process (ch, 2, 480);
+                    rr.push_back (p->vibeOhms());
+                }
+                const int per = (int) std::lround (100.0 / hz), from = (int) rr.size() - 2 * per;
+                float lo = 1e9f, hi = 0; int down = 0, up = 0;
+                for (int i = from; i < (int) rr.size(); ++i) { lo = juce::jmin (lo, rr[(size_t) i]); hi = juce::jmax (hi, rr[(size_t) i]); if (i > from) (rr[(size_t) i] < rr[(size_t) i - 1] ? down : up)++; }
+                return std::pair<float, float> { (float) down / (float) juce::jmax (1, down + up), std::log2 (hi / lo) };
+            };
+            const auto c5 = trace (5, 1), c0 = trace (0, 1), fast = trace (5, 8);
+            check (c5.first < 0.45f && c0.first > 0.45f && fast.second < c5.second * 0.6f,
+                   "VIBE: brighter in " + juce::String (c5.first * 100.0f, 0) + " % of the sweep (COLOR 0: " + juce::String (c0.first * 100.0f, 0)
+                   + " %); 8 Hz sweeps " + juce::String (fast.second, 2) + " vs " + juce::String (c5.second, 2) + " octaves of the photocell at 1 Hz");
+        }
+        // CPU: the worst case (left and right different), both types
+        {
+            const double rate = 48000.0; juce::Random rng (3);
+            std::vector<float> l ((size_t) (rate * 20.0)), r (l.size());
+            for (size_t i = 0; i < l.size(); ++i) { l[i] = 0.2f * (rng.nextFloat() * 2.0f - 1.0f); r[i] = 0.2f * (rng.nextFloat() * 2.0f - 1.0f); }
+            juce::String txt; bool ok = true;
+            for (int t = 0; t < 2; ++t)
+            {
+                auto p = make (t, rate, 10, 5, 1.0f);
+                const auto t0 = juce::Time::getMillisecondCounterHiRes();
+                const auto y = runPh (*p, l, 512, {}, &r);
+                const double ms = juce::Time::getMillisecondCounterHiRes() - t0;
+                const double pct = ms / 20000.0 * 100.0;
+                ok = ok && pct < 2.0 && allFinite (y);
+                txt << (t == 0 ? "PHASE " : "VIBE ") << juce::String (pct, 2) << " %  ";
+            }
+            check (ok, "CPU (stereo, 48 kHz, one core): " + txt.trim());
+        }
+        // VIBE after a rest: the lamp is set at the first sound, so playback (small blocks) and bounce (big blocks) sweep the same
+        {
+            const double rate = 48000.0;
+            const int onset = (int) (rate * 2.3137);   // the note comes here (song time), after a rest
+            std::vector<float> tone ((size_t) (rate * 1.5));
+            for (size_t i = 0; i < tone.size(); ++i) tone[i] = 0.2f * (float) std::sin (6.283185307 * 196.0 * (double) i / rate) * (float) std::exp (-(double) i / (0.8 * rate));
+            float worst = 0.0f;
+            for (bool syncOn : { false, true })
+            {
+                std::vector<std::vector<float>> outs;
+                for (int bs : { 128, 441, 1024 })
+                {
+                    auto p = make (PH::vibe, rate, 10, 10, 1.3f);   // a fresh pedal = the rig's reset when it wakes up
+                    const int start = (onset / bs) * bs;            // the rig wakes at the start of the block with the note
+                    std::vector<float> got;
+                    for (int pos = start; pos < onset + (int) tone.size(); pos += bs)
+                    {
+                        p->setClock (syncOn, 4, true, true, pos / rate * 2.0, 120.0, pos / rate);
+                        juce::AudioBuffer<float> b (2, bs);
+                        for (int i = 0; i < bs; ++i) { const int k = pos + i - onset; const float v = k >= 0 && k < (int) tone.size() ? tone[(size_t) k] : 0.0f; b.setSample (0, i, v); b.setSample (1, i, v); }
+                        float* ch[2] { b.getWritePointer (0), b.getWritePointer (1) };
+                        p->process (ch, 2, bs);
+                        for (int i = 0; i < bs; ++i) if (pos + i >= onset && pos + i < onset + (int) tone.size()) got.push_back (b.getSample (0, i));
+                    }
+                    outs.push_back (got);
+                }
+                for (size_t k = 1; k < outs.size(); ++k)
+                    for (size_t i = 0; i < juce::jmin (outs[0].size(), outs[k].size()); ++i) worst = juce::jmax (worst, std::abs (outs[k][i] - outs[0][i]));
+            }
+            check (worst < 1.0e-6f, "VIBE after a rest: blocks 128 / 441 / 1024 sound the same from the first note (Hz and SYNC, worst " + juce::String (worst, 8) + ")");
+        }
+        // VIBE: COLOR jumping 0 -> 10 (a preset, UNDO, a double click) glides, no click (energy above 3 kHz of a 220 Hz tone)
+        {
+            const double rate = 48000.0;
+            std::vector<float> x ((size_t) rate);
+            for (size_t i = 0; i < x.size(); ++i) x[i] = 0.25f * (float) std::sin (6.283185307 * 220.0 * (double) i / rate);
+            auto hp = juce::dsp::FilterDesign<float>::designIIRHighpassHighOrderButterworthMethod (3000.0f, rate, 8);
+            auto peakAbove3k = [&] (const juce::AudioBuffer<float>& y, double a, double e)
+            {
+                std::vector<juce::dsp::IIR::Filter<float>> f;
+                for (auto& c : hp) { f.emplace_back(); f.back().coefficients = c; }
+                float pk = 0.0f;
+                for (int i = 0; i < (int) (e * rate); ++i)
+                {
+                    float v = y.getSample (0, i);
+                    for (auto& s : f) v = s.processSample (v);
+                    if (i >= (int) (a * rate)) pk = juce::jmax (pk, std::abs (v));
+                }
+                return juce::Decibels::gainToDecibels (pk, -200.0f);
+            };
+            float worst = -200.0f;
+            for (int bs : { 64, 512, 2048 })
+            {
+                auto p = make (PH::vibe, rate, 10, 0, 1.0f);
+                const auto y = runPh (*p, x, bs, [&] (int pos, int) { p->setClock (false, 2, false, false, 0, 120, 0); p->setParams (10, pos >= (int) (0.5 * rate) ? 10.0f : 0.0f, 1.0f); });
+                worst = juce::jmax (worst, peakAbove3k (y, 0.45, 0.75));
+            }
+            check (worst < -80.0f, "VIBE COLOR 0 -> 10 in one step: above 3 kHz at most " + juce::String (worst, 1) + " dBFS (blocks 64 / 512 / 2048)");
+        }
+        // SYNC "1 Bar" follows the time signature: in 3/4 the sweep repeats every 3 beats
+        {
+            const double rate = 48000.0; const int bs = 480;
+            auto p = make (PH::phase, rate, 10, 5, 1);
+            std::map<int, float> at;   // in 1/100 beat
+            for (int blk = 0; blk < 1200; ++blk)
+            {
+                const double ppq = blk * bs / rate * 2.0;
+                p->setClock (true, 2, true, true, ppq, 120.0, blk * bs / rate, 3.0);
+                juce::AudioBuffer<float> b (2, bs); b.clear(); float* ch[2] { b.getWritePointer (0), b.getWritePointer (1) };
+                p->process (ch, 2, bs);
+                at[(int) std::lround ((ppq + bs / rate * 2.0) * 100.0)] = p->shownSweep();
+            }
+            const float same = std::abs (at[1500] - at[1800]), half = std::abs (at[1500] - at[1650]);
+            check (same < 0.01f && half > 0.3f, "SYNC 1 Bar in 3/4: the sweep repeats every 3 beats (difference " + juce::String (same, 4) + ", half a bar apart " + juce::String (half, 2) + ")");
+        }
+        // SYNC bars from Logic's last bar line: 5 bars of 4/4, then 3/4 -> the sweep starts again at every bar line
+        {
+            const double rate = 48000.0; const int bs = 480;
+            auto p = make (PH::phase, rate, 10, 5, 1);
+            float worst = 0.0f; int seen = 0;
+            for (int blk = 0; blk < 2000; ++blk)
+            {
+                const double ppq = blk * bs / rate * 2.0;   // 120 bpm: 0.02 beat per block
+                const double bpb = ppq < 20.0 - 1.0e-9 ? 4.0 : 3.0;
+                const double bar = ppq < 20.0 - 1.0e-9 ? 4.0 * std::floor (ppq / 4.0 + 1.0e-9) : 20.0 + 3.0 * std::floor ((ppq - 20.0) / 3.0 + 1.0e-9);
+                p->setClock (true, 2, true, true, ppq, 120.0, blk * bs / rate, bpb, bar);
+                juce::AudioBuffer<float> b (2, bs); b.clear(); float* ch[2] { b.getWritePointer (0), b.getWritePointer (1) };
+                p->process (ch, 2, bs);
+                if (ppq > 25.0 && std::abs (ppq - bar) < 1.0e-6) { worst = juce::jmax (worst, p->shownSweep()); ++seen; }   // a block starting on a bar line
+            }
+            check (seen >= 5 && worst < 0.03f, "SYNC 1 Bar after 4/4 -> 3/4: the sweep starts at every new bar line (largest " + juce::String (worst, 3) + " over "
+                   + juce::String (seen) + " bars)");
+        }
+        // a pedal switched on while the rig rests (automation in a pause): the next note sounds the same for playback and bounce
+        {
+            const double rate = 48000.0;
+            const int key = rig::routeKey (rig::kDefault, rig::kDefaultWahAt, rig::kDefaultPhAt);
+            int restsSwitchedOn = 0;   // rest blocks after the switch (the test is about an ON made while resting)
+            auto runRig = [&] (int bs)
+            {
+                auto r = std::make_unique<Rig>();
+                FXParams fx; fx.ampOn = false; fx.cabOn = false;
+                r->prepare (rate, bs, key, fx);
+                r->phase.get().setType (PH::vibe, true);
+                r->phase.snapParams (9.0f, 10.0f, 1.3f);
+                const int total = (int) (rate * 3.5), onset = (int) (2.3137 * rate);
+                std::vector<float> in ((size_t) total, 0.0f), out ((size_t) total, 0.0f);
+                auto addTone = [&] (int at, double f)
+                {
+                    for (int i = 0; i < (int) (rate * 0.8) && at + i < total; ++i)
+                        in[(size_t) (at + i)] += 0.2f * (float) std::sin (6.283185307 * f * i / rate) * (float) std::exp (-i / (0.25 * rate));
+                };
+                addTone ((int) (0.1 * rate), 196.0); addTone (onset, 220.0);
+                int quiet = 0; float lastPeak = 1.0f;
+                for (int pos = 0; pos < total; pos += bs)
+                {
+                    const int n = juce::jmin (bs, total - pos);
+                    juce::AudioBuffer<float> b (2, n);
+                    for (int i = 0; i < n; ++i) { b.setSample (0, i, in[(size_t) (pos + i)]); b.setSample (1, i, in[(size_t) (pos + i)]); }
+                    r->phase.setOn (pos >= (int) (1.5 * rate));   // switched on in the pause
+                    r->phase.get().setType (PH::vibe);
+                    r->phase.setParams (9.0f, 10.0f, 1.3f);
+                    r->phase.get().setClock (false, 2, true, true, pos / rate * 2.0, 120.0, pos / rate);
+                    r->trem.get().setClock (true, 5.5f, true, true, pos / rate * 2.0, 120.0);
+                    quiet = b.getMagnitude (0, 0, n) < 1.0e-6f ? quiet + n : 0;
+                    if (quiet > (int) (0.5 * rate) && lastPeak < 1.0e-5f)   // the processor's rest
+                    {
+                        r->rest (fx, key, n);
+                        if (pos >= (int) (1.5 * rate)) ++restsSwitchedOn;
+                        r->phase.get().setType (PH::vibe, true);
+                        r->phase.snapParams (9.0f, 10.0f, 1.3f);
+                        continue;
+                    }
+                    r->process (b, n, fx, key);
+                    lastPeak = b.getMagnitude (0, 0, n);
+                    for (int i = 0; i < n; ++i) out[(size_t) (pos + i)] = b.getSample (0, i);
+                }
+                return std::pair<std::vector<float>, int> { out, onset };
+            };
+            const auto [a, onset] = runRig (128);
+            const auto b = runRig (1024).first;
+            double d = 0, e = 0;
+            for (int i = onset; i < onset + (int) (0.15 * rate); ++i) { d += (double) (a[(size_t) i] - b[(size_t) i]) * (a[(size_t) i] - b[(size_t) i]); e += (double) a[(size_t) i] * a[(size_t) i]; }
+            const float diffDb = (float) (10.0 * std::log10 (d / juce::jmax (1.0e-20, e) + 1.0e-30));
+            check (e > 1.0e-6 && restsSwitchedOn > 0 && diffDb < -100.0f, "WINDMILL switched on during a rest: the next note is the same at blocks 128 and 1024 (difference "
+                   + juce::String (diffDb, 1) + " dB, " + juce::String (restsSwitchedOn) + " resting blocks with it on)");
+        }
+        // an older setting loaded into a pedal that is on (Logic's menu, a pasted setting): WINDMILL off and 5th, not left as it was
+        {
+            AIOGuitarProcessor older, target;
+            auto tree = older.apvts.copyState();
+            for (int i = tree.getNumChildren(); --i >= 0;)
+                if (tree.getChild (i)["id"].toString().startsWith ("ph")) tree.removeChild (i, nullptr);
+            juce::MemoryBlock mb;
+            {
+                juce::MemoryOutputStream mos (mb, false);
+                mos.writeInt (0x47494f41); mos.writeInt (3);
+                tree.writeToStream (mos);
+                juce::ValueTree ("NOKIT").writeToStream (mos);
+            }
+            setP (target, "phOn", 1); setP (target, "phAt", 1); setP (target, "phType", 1);
+            target.setStateInformation (mb.getData(), (int) mb.getSize());
+            check (target.apvts.getRawParameterValue ("phOn")->load() < 0.5f && (int) target.apvts.getRawParameterValue ("phAt")->load() == rig::kDefaultPhAt
+                   && (int) target.apvts.getRawParameterValue ("phType")->load() == 0,
+                   "a setting from before 0.8.0 loaded over WINDMILL on: off, 5th, PHASE (the defaults)");
+        }
+        // in the plugin: off and 5th by default (and in songs from before 0.8.0), saved, plays anywhere, adds no delay
+        {
+            AIOGuitarProcessor fresh;
+            check (fresh.apvts.getRawParameterValue ("phOn")->load() < 0.5f && (int) fresh.apvts.getRawParameterValue ("phAt")->load() == rig::kDefaultPhAt
+                   && rig::routeAtKey (fresh.routeKeyNow())[(size_t) rig::kDefaultPhAt] == rig::blkPhase
+                   && rig::routeAtKey (fresh.routeKeyNow())[(size_t) rig::kDefaultPhAt + 1] == rig::blkAmp,
+                   "defaults (and songs from before 0.8.0): WINDMILL off, after DRIVE B and before the AMP");
+            const int lat0 = proc.getLatencySamples();
+            setP (proc, "strumOn", 0); setP (proc, "kitHuman", 0.0f);
+            setP (proc, "phOn", 1); setP (proc, "phType", 1); setP (proc, "phSync", 0); setP (proc, "phSpeed", 2.0f); setP (proc, "phDepth", 10); setP (proc, "phColor", 7);
+            bool ok = true;
+            for (int at : { 0, 4, 6 })
+            {
+                setP (proc, "phAt", (float) at);
+                proc.prepareToPlay (sr, 256);
+                const auto y = render (proc, { { 0.01, juce::MidiMessage::noteOn (1, 52, 0.8f) }, { 0.9, juce::MidiMessage::noteOff (1, 52) } }, 1.0, sr);
+                ok = ok && allFinite (y) && rmsDb (y, 0.05, 0.8, sr) > -45.0f && proc.getLatencySamples() == lat0;
+            }
+            check (ok, "WINDMILL first, 5th and last in the row: plays, the same latency (" + juce::String (lat0) + ")");
+            setP (proc, "phAt", 2);
+            juce::MemoryBlock mb; proc.getStateInformation (mb);
+            AIOGuitarProcessor p2; p2.setStateInformation (mb.getData(), (int) mb.getSize());
+            check ((int) p2.apvts.getRawParameterValue ("phAt")->load() == 2 && p2.apvts.getRawParameterValue ("phOn")->load() > 0.5f
+                   && (int) p2.apvts.getRawParameterValue ("phType")->load() == 1 && std::abs (p2.apvts.getRawParameterValue ("phColor")->load() - 7.0f) < 0.01f
+                   && p2.apvts.getRawParameterValue ("phSync")->load() < 0.5f, "WINDMILL and its place are saved with the song");
+            for (auto [id, v] : { std::pair<const char*, float> { "phOn", 0 }, { "phType", 0 }, { "phSync", 1 }, { "phSpeed", 0.8f }, { "phColor", 5 },
+                                  { "phAt", (float) rig::kDefaultPhAt } })
+                setP (proc, id, v);
+            setP (proc, "kitHuman", 0.5f); setP (proc, "strumOn", 1);
             proc.prepareToPlay (sr, 256);
         }
     }
@@ -2695,6 +3256,11 @@ int main (int argc, char** argv)
         for (int i = 0; i < 4; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
         snap ("editor_wah.png");
         setP (proc, "whOn", 0); setP (proc, "wahAt", 0); setP (proc, "whAuto", 0);
+        // WINDMILL (0.8.0): VIBE, Hz, on, first in the row
+        setP (proc, "phOn", 1); setP (proc, "phType", 1); setP (proc, "phSync", 0); setP (proc, "phAt", 0);
+        for (int i = 0; i < 4; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
+        snap ("editor_windmill.png");
+        setP (proc, "phOn", 0); setP (proc, "phType", 0); setP (proc, "phSync", 1); setP (proc, "phAt", (float) rig::kDefaultPhAt);
     }
 
 

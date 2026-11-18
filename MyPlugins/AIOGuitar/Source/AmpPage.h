@@ -202,10 +202,10 @@ public:
 
         // the chain, with the amp lit: where it sits
         auto fl = flowArea.toFloat();
-        const auto order = rig::routeOf ((int) proc.apvts.getRawParameterValue ("fxChain")->load(), (int) proc.apvts.getRawParameterValue ("wahAt")->load());
+        const auto order = rig::routeAtKey (proc.routeKeyNow());
         juce::StringArray names { "IN" };
         for (int b : order) names.add (b == rig::blkComp ? "COMP" : b == rig::blkDrive ? "DRIVE A" : b == rig::blkFuzz ? "DRIVE B" : b == rig::blkTrem ? "TREM"
-                                       : b == rig::blkWah ? "WAH" : "AMP");
+                                       : b == rig::blkWah ? "WAH" : b == rig::blkPhase ? "WINDMILL" : "AMP");
         names.add ("CAB"); names.add ("OUT");
         g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
         float x = fl.getX() + 10.0f;
@@ -285,7 +285,7 @@ private:
         const auto key = juce::String (m) + "/" + juce::String (proc.apvts.getRawParameterValue ("cabPos")->load()) + "/"
                        + juce::String (proc.apvts.getRawParameterValue ("cabDist")->load()) + "/" + juce::String (proc.apvts.getRawParameterValue ("cabType")->load())
                        + (ampOn.getToggleState() ? "1" : "0") + "/" + juce::String (proc.apvts.getRawParameterValue ("fxChain")->load())
-                       + "/" + juce::String (proc.apvts.getRawParameterValue ("wahAt")->load());
+                       + "/" + juce::String (proc.routeKeyNow());
         if (key != shown)
         {
             shown = key;

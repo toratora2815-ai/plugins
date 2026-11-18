@@ -14,7 +14,7 @@ struct Preset
 inline const std::vector<Preset>& getFactoryPresets()
 {
     // pedals: Cotton Comp = cc*, DRIVE A = pd* (pdModel: 0 Porch Drive, 1 Wool Fuzz, 2 Hearth Drive, 3 Brass Boost, 4 Barn Dist; default Porch),
-    //         DRIVE B = wf* (wfModel, default Wool Fuzz), TREM = tr*
+    //         DRIVE B = wf* (wfModel, default Wool Fuzz), TREM = tr*, WAH = wh*, WINDMILL = ph*
     //   trRate 0 1/2, 1 1/4, 2 1/4T, 3 1/8, 4 1/8T, 5 1/16, 6 1/16T, 7 1/32; trShape 0 Sine, 1 Triangle, 2 Vintage, 3 Soft Square, 4 Square
     // amp: ampModel 0 American Clean, 1 Tweed, 2 British Chime, 3 British Crunch, 4 Modern High Gain
     // cab: 0 1x12 Open, 1 2x12 Open, 2 4x12 Closed, 3 4x12 Modern, 4 4x10 Open; mic 0 Dynamic, 1 Condenser, 2 Ribbon
@@ -129,7 +129,24 @@ inline const std::vector<Preset>& getFactoryPresets()
             { "pdModel", 2 }, { "pdOn", 1 }, { "pdGain", 4 }, { "pdTone", 5 }, { "pdLevel", 0 },
             { "ampOn", 1 }, { "ampModel", 3 }, { "ampGain", 6 }, { "ampBass", 5 }, { "ampMid", 6 }, { "ampTreble", 5 },
             { "ampPresence", 5 }, { "ampMaster", 6 },
-            { "cabOn", 1 }, { "cabType", 2 }, { "cabMicType", 2 }, { "cabPos", 3 }, { "cabDist", 2 } } }
+            { "cabOn", 1 }, { "cabType", 2 }, { "cabMicType", 2 }, { "cabPos", 3 }, { "cabDist", 2 } } },
+
+        // 0.8.0: WINDMILL (phType 0 Phase, 1 Vibe; phRate 0 4 Bars, 1 2 Bars, 2 1 Bar, 3 1/2, 4 1/4, 5 1/8, 6 1/16).
+        // Its place (phAt) is 5th unless set: after DRIVE B, before the AMP
+        // the 4-stage phaser in front of a crunchy amp: the slow swoosh inside the distortion (one sweep per bar)
+        { "Phase Crunch", {
+            { "phOn", 1 }, { "phType", 0 }, { "phSync", 1 }, { "phRate", 2 }, { "phDepth", 10 }, { "phColor", 2 },
+            { "ampOn", 1 }, { "ampModel", 3 }, { "ampGain", 6 }, { "ampBass", 5 }, { "ampMid", 6 }, { "ampTreble", 5.5f },
+            { "ampPresence", 5.5f }, { "ampMaster", 5.5f },
+            { "cabOn", 1 }, { "cabType", 2 }, { "cabMicType", 0 }, { "cabPos", 3 }, { "cabDist", 2 } } },
+
+        // fuzz -> vibe -> a warm amp: the lamp's throb on a fat fuzz
+        { "Fuzz Vibe", {
+            { "wfOn", 1 }, { "wfSustain", 6 }, { "wfTone", 5 }, { "wfVolume", -12 },
+            { "phOn", 1 }, { "phType", 1 }, { "phSync", 0 }, { "phSpeed", 1.3f }, { "phDepth", 9 }, { "phColor", 5 },
+            { "ampOn", 1 }, { "ampModel", 1 }, { "ampGain", 5 }, { "ampBass", 5 }, { "ampMid", 5.5f }, { "ampTreble", 5 },
+            { "ampPresence", 5 }, { "ampMaster", 6 },
+            { "cabOn", 1 }, { "cabType", 0 }, { "cabMicType", 2 }, { "cabPos", 3 }, { "cabDist", 2 } } }
     };
     return presets;
 }

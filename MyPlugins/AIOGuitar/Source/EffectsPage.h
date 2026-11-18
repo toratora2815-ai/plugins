@@ -1,5 +1,6 @@
 #pragma once
-// EFFECTS ページ: IN → [COTTON COMP / DRIVE A / DRIVE B / AMP / TREM / WAH を好きな順に] → CAB（いつも最後）→ OUT。
+// EFFECTS ページ: IN → [COTTON COMP / DRIVE A / DRIVE B / AMP / TREM / WAH / WINDMILL を好きな順に] → CAB（いつも最後）→ OUT。
+// WINDMILL（0.8.0）はフェイザー / ヴァイブ（PhaserDSP.h）。
 // DRIVE A / B（0.6.0）は「機種 ▾」で PORCH DRIVE / WOOL FUZZ / HEARTH DRIVE / BRASS BOOST / BARN DIST から選ぶ（DriveSlot.h）。
 // TREM（0.4.0）は My Tremolo の小型版。つまみは DEPTH / RATE / SHAPE と小さい SYNC だけ（細かく作るときは後ろに My Tremolo）。
 // 箱をドラッグするか ◀ ▶ で並べ替え。AMP の箱は小さく、押すと AMP ページ（つまみはそちら）。CAB の箱も押すと AMP ページ。
@@ -450,6 +451,180 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> syncAtt;
 };
 
+// WINDMILL（0.8.0）: フェイザー / ヴァイブ。「型 ▾」で PHASE / VIBE。つまみは SPEED（SYNC 中は音符の長さ phRate、OFF・単体アプリは Hz phSpeed）
+// / DEPTH / COLOR と SYNC。名前の横の小さいランプが揺れに合わせて明るくなる（本物のフェイザーの速さのランプと同じ）
+class WindmillPanel : public PedalPanel, private juce::Timer
+{
+public:
+    struct Face { const char* sub; const char* desc; Look look; };
+    static const Face& face (int t)
+    {
+        static const Face f[pedal::PhaserDSP::numTypes] {
+            { "PHASE", u8"4 段のフェイザー（定番の小箱の回路を式にしたもの）。COLOR 0 = 帰還なしの初期の型（なめらか）、5 = 帰還ありの型（鳴きが強い）。"
+                       u8"歪んだアンプの前で、歪みの中で「シュワー」と回る",
+              { juce::Colour (0xffa9bd4a), juce::Colour (0xff1e2a0b), juce::Colour (0xff43601a) } },
+            { "VIBE",  u8"ランプと光センサーで揺らすヴァイブ（原音と混ぜる CHORUS の音）。速く上がってゆっくり戻る「うねり」。COLOR 5 = 本物どおり、0 = なめらか、10 = 強く。"
+                       u8"ファズの後ろ・アンプの前が定番",
+              { juce::Colour (0xff4b3a63), juce::Colour (0xfff3e9d6), juce::Colour (0xffe9b96e) } },
+        };
+        return f[juce::jlimit (0, pedal::PhaserDSP::numTypes - 1, t)];
+    }
+
+    WindmillPanel (AIOGuitarProcessor& p, int blockId)
+        : PedalPanel (p.apvts, blockId, "WINDMILL", "", "phOn", { { "phRate", "SPEED" }, { "phDepth", "DEPTH" }, { "phColor", "COLOR" } }, face (0).look),
+          proc (p), state (p.apvts)
+    {
+        knobs[0]->textFromValueFunction = [] (double v) { return juce::String (pedal::PhaserDSP::rateName ((int) std::lround (v))); };
+        for (auto& k : knobs) k->updateText();
+
+        hz.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        hz.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 16);
+        hz.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        hz.setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
+        hz.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
+        hz.setDoubleClickReturnValue (true, 0.8);
+        addChildComponent (hz);
+        hzAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, "phSpeed", hz);
+        hz.textFromValueFunction = [] (double v) { return juce::String (v, v < 1.0 ? 2 : 1) + " Hz"; };
+        hz.updateText();
+
+        sync.setButtonText ("SYNC");
+        sync.setClickingTogglesState (true);
+        sync.setTooltip (FxUI::jp (u8"ON = Logic のテンポに合わせる（SPEED は 4 小節〜1/16、小節は曲の拍子どおり）、OFF = SPEED を Hz で（0.1〜10）。"
+                                    u8"揺れは曲の位置に固定（どこから再生しても、バウンスしても同じ所で同じ揺れ）。"
+                                    u8"ただし Hz の SPEED をオートメーションで動かしている曲は、再生を始めた位置で揺れの位置が変わる（SYNC ON なら変わらない）"));
+        addAndMakeVisible (sync);
+        syncAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, "phSync", sync);
+        if (AIOGuitarProcessor::isStandaloneApp())   // no Logic tempo in the standalone app: always Hz
+        {
+            sync.setEnabled (false);
+            sync.setTooltip (FxUI::jp (u8"単体アプリでは SPEED は Hz だけ（Logic のテンポがないため）"));
+        }
+
+        pick.setButtonText (FxUI::jp (u8"型 ▾"));
+        pick.setTooltip (FxUI::jp (u8"PHASE（4 段のフェイザー）か VIBE（ランプのヴァイブ）か（つまみの値はそのまま）"));
+        pick.onClick = [this] { showTypes(); };
+        addAndMakeVisible (pick);
+
+        knobs[0]->setTooltip (FxUI::jp (u8"揺れの速さ（SYNC ON = 音符の長さ）"));
+        hz.setTooltip (FxUI::jp (u8"揺れの速さ（Hz）。オートメーションで動かしても揺れは飛ばない"));
+        knobs[1]->setTooltip (FxUI::jp (u8"揺れの幅と混ぜる量。0 = 素通し、10 = 本物の幅"));
+        knobs[2]->setTooltip (FxUI::jp (u8"クセの強さ。PHASE = 帰還（鳴き。10 でも勝手に鳴り出さない所まで）、VIBE = うねり（5 が本物どおり）"));
+        applyFace (type());
+        swapRate();
+        startTimerHz (30);
+    }
+
+    void resized() override
+    {
+        PedalPanel::resized();
+        hz.setBounds (knobs[0]->getBounds());
+        auto p = plate.toNearestInt();
+        // the type under the name, SYNC under it (the plate is 90 px: name 18..48, type 46..66, SYNC 70..90)
+        pick.setBounds (p.withSizeKeepingCentre (juce::jmin (90, p.getWidth() - 20), 20).withY (p.getY() + 46));
+        sync.setBounds (p.withSizeKeepingCentre (64, 20).withY (p.getY() + 70));
+        lamp = juce::Rectangle<float> (9.0f, 9.0f).withCentre ({ plate.getCentreX() + 20.0f, plate.getY() + 6.0f });   // beside the ON light
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        PedalPanel::paint (g);
+        // the speed lamp (beside the ON light): lights with the sweep while the pedal runs
+        const juce::Colour c (0xffffc94a);
+        const float a = running ? 0.2f + 0.8f * shownSweep : 0.0f;
+        g.setColour (juce::Colours::black.withAlpha (0.35f));
+        g.fillEllipse (lamp);
+        if (a > 0.0f)
+        {
+            g.setColour (c.withAlpha (a * 0.35f));
+            g.fillEllipse (lamp.expanded (4.0f * a));
+            g.setColour (c.withAlpha (a));
+            g.fillEllipse (lamp);
+        }
+        g.setColour (look.ink.withAlpha (0.35f));
+        g.drawEllipse (lamp, 1.0f);
+    }
+
+private:
+    int type() const { return juce::jlimit (0, pedal::PhaserDSP::numTypes - 1, (int) state.getRawParameterValue ("phType")->load()); }
+    bool hzMode() const { return AIOGuitarProcessor::isStandaloneApp() || state.getRawParameterValue ("phSync")->load() < 0.5f; }
+    void swapRate()
+    {
+        const bool h = hzMode();
+        hz.setVisible (h);
+        knobs[0]->setVisible (! h);
+    }
+
+    void applyFace (int t)
+    {
+        shownType = t;
+        const auto& f = face (t);
+        sub = {};
+        look = f.look;
+        for (auto* k : { knobs[0].get(), knobs[1].get(), knobs[2].get(), &hz })
+        {
+            k->setColour (juce::Slider::rotarySliderFillColourId, look.knob);
+            k->setColour (juce::Slider::textBoxTextColourId, look.ink);
+        }
+        for (auto& l : labels) l->setColour (juce::Label::textColourId, look.ink);
+        for (auto* b : { &sync, &pick })
+        {
+            b->setColour (juce::TextButton::buttonColourId, juce::Colours::black.withAlpha (0.22f));
+            b->setColour (juce::TextButton::textColourOffId, look.ink);
+        }
+        sync.setColour (juce::TextButton::buttonOnColourId, look.knob);
+        sync.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+        pick.setButtonText (juce::String (f.sub) + FxUI::jp (u8" ▾"));
+        FxUI::styleArrow (left, look.ink); FxUI::styleArrow (right, look.ink);
+        setTooltip (FxUI::jp (f.desc));
+        repaint();
+    }
+
+    void showTypes()
+    {
+        juce::PopupMenu menu;
+        const int cur = type();
+        for (int t = 0; t < pedal::PhaserDSP::numTypes; ++t)
+            menu.addItem (t + 1, juce::String (face (t).sub) + juce::String::fromUTF8 (u8"  —  ") + FxUI::jp (face (t).desc), true, t == cur);
+        juce::Component::SafePointer<WindmillPanel> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&pick), [safe] (int r)
+        {
+            if (safe != nullptr && r > 0) safe->choose (r - 1);
+        });
+    }
+
+    void choose (int t)
+    {
+        if (auto* p = state.getParameter ("phType"))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) t));
+            p->endChangeGesture();
+        }
+        applyFace (t);
+    }
+
+    void timerCallback() override
+    {
+        if (hz.isVisible() != hzMode()) swapRate();
+        if (type() != shownType) applyFace (type());   // a preset, undo or Logic changed it
+        const bool r = proc.windmillRunning();
+        const float s = proc.windmillSweep();
+        if (r != running || std::abs (s - shownSweep) > 0.02f) { running = r; shownSweep = s; repaint (lamp.expanded (8.0f).toNearestInt()); }
+    }
+
+    AIOGuitarProcessor& proc;
+    juce::AudioProcessorValueTreeState& state;
+    juce::Slider hz;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> hzAtt;
+    juce::TextButton sync, pick;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> syncAtt;
+    juce::Rectangle<float> lamp;
+    int shownType = -1;
+    bool running = false;
+    float shownSweep = 0.0f;
+};
+
 // the amp in the chain: a small head. Its knobs are on the AMP page (clicking the head goes there)
 class AmpBlock : public MovableBlock
 {
@@ -563,7 +738,8 @@ public:
           fuzz (p.apvts, rig::blkFuzz, "DRIVE B", "wfOn", "wfSustain", "wfTone", "wfVolume", "wfModel"),
           ampBlock (p),
           trem (p.apvts, rig::blkTrem, { juce::Colour (0xff24504b), juce::Colour (0xffe8f3f1), juce::Colour (0xff7fd6c8) }),
-          wah (p, rig::blkWah)
+          wah (p, rig::blkWah),
+          windmill (p, rig::blkPhase)
     {
         for (auto* b : blocks())
         {
@@ -671,18 +847,19 @@ public:
 private:
     static constexpr int kInW = 34, kOutW = 40, kGap = 12, kCabW = 104;
 
-    std::array<MovableBlock*, rig::numBlocks> blocks() { return { &comp, &drive, &fuzz, &ampBlock, &trem, &wah }; }   // index = rig::Block
+    std::array<MovableBlock*, rig::numBlocks> blocks() { return { &comp, &drive, &fuzz, &ampBlock, &trem, &wah, &windmill }; }   // index = rig::Block
     MovableBlock* blockFor (int id) { return blocks()[(size_t) juce::jlimit (0, rig::numBlocks - 1, id)]; }
 
-    int routeKey() const { return rig::routeKey ((int) proc.apvts.getRawParameterValue ("fxChain")->load(), (int) proc.apvts.getRawParameterValue ("wahAt")->load()); }
+    int routeKey() const { return proc.routeKeyNow(); }
     rig::Route currentOrder() const { return rig::routeAtKey (routeKey()); }
 
-    // the row is kept as the five of fxChain + WAH's place (wahAt)
+    // the row is kept as the five of fxChain + WAH's place (wahAt) + WINDMILL's place (phAt)
     void setOrder (const rig::Route& o)
     {
-        int chain = 0, at = 0;
-        rig::splitRoute (o, chain, at);
-        for (auto [id, v] : { std::pair<const char*, int> { "fxChain", chain }, std::pair<const char*, int> { "wahAt", at } })
+        int chain = 0, at = 0, ph = 0;
+        rig::splitRoute (o, chain, at, ph);
+        for (auto [id, v] : { std::pair<const char*, int> { "fxChain", chain }, std::pair<const char*, int> { "wahAt", at },
+                              std::pair<const char*, int> { "phAt", ph } })
             if (auto* p = proc.apvts.getParameter (id))
             {
                 p->beginChangeGesture();
@@ -781,6 +958,7 @@ private:
     AmpBlock ampBlock;
     TremPanel trem;
     WahPanel wah;
+    WindmillPanel windmill;
     std::array<juce::Rectangle<int>, rig::numBlocks> slots;
     juce::Rectangle<int> row, cabBox;
     MovableBlock* dragBlock = nullptr;

@@ -89,7 +89,7 @@
 - リバーブ: Lumen Rooms = 細かく作り込む部屋・ホール、長い響き / Elder Verb = 昔のデジタル機材の色付き / Meld Verb = ボーカルやミックスで自動で引っ込む実用リバーブ
 - 聴き比べ: Reference Monitor = 他人の曲と / Mix Time Machine = 自分の前のバウンスと（マスタリング段階で使う） / Balance Scope = トラックに挿す測定器・Plugin Link の配り役
 - 揺らす: トレモロ・オートパン・刻みは My Tremolo（中のプラグインのつまみを揺らすのは Mod Host）。フィルターを動かす（オートワウ・スイープ・S&H）は My Filter。
-  AIO Guitar の中で歪み・AMP の前に踏むワウ = AIO の WAH（それ以外のフィルターの動きは My Filter）
+  AIO Guitar の中で歪み・AMP の前に踏むワウ = AIO の WAH（それ以外のフィルターの動きは My Filter）。AIO の AMP の前のフェイザー・ヴァイブ = AIO の WINDMILL
 - 古っぽくする（Lo-Fi）: ノイズ・揺れ・歪み・ビット落とし・響き・劣化・エコーをまとめて = Retro Retro（歪みだけは Deca Satu、揺らすだけは My Tremolo）。Lo-Fi の新機能は Retro Retro に足す
 - エコー: 普通のエコー（テープ・BBD など）= Echo Drift / 逆再生・音程が変わるエコー・シマー = My Crystal
 - 声: Vox Chop = 声を別の声に変える・声を切って鍵盤で弾く（ボーカルチョップ） / Sample Sculptor = 1 つの音を整える。声の加工の新機能は Vox Chop に足す
@@ -118,9 +118,10 @@
 - Fire Box（FireBox）1.2.1 … 太く・大きくする全部入り（本人の持っている市販プラグインを測って、音の処理を同じ動きに合わせ込み）。IN / BASS / THICK / BODY / COMP⇄OTT / SOFT CLIP / CRUNCH / MIX / LOUD / OUT、GAIN MATCH（ID unity、4 秒平均で追う。1.2.1 から IN・OUT の分も戻す）・LIVE・192k・BYPASS。測定の道具は build/fuellab（コミットしない）。Plugin Link は Gain Stage で MATCH
   v1.1.0: OTT 作り直し（88 Hz の分割は Q の違う 2 段ずつ、dB 型検出器を持ち上げ用・下げ用に、OTT 時の MIX のドライも帯域分けを通す、量の表 29 段階）。FUEL との差 量24 dB で −33 dB
 - Mod Host（ModHost）1.2.0 … 好きな AU を中に読み込み、MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS / LINK）でつまみを動かす。3 帯域・DRIVE・MORPH・前後の解析
-- AIO Guitar（AIOGuitar）0.7.0 … 本人のエレキをライン録りした音で鳴らす全部入りギター音源（AU 音源 aumu Aiog ＋単体アプリ、CMakeLists の ALSO_APP で AIOGuitar-App.zip も）。
+- AIO Guitar（AIOGuitar）0.8.0 … 本人のエレキをライン録りした音で鳴らす全部入りギター音源（AU 音源 aumu Aiog ＋単体アプリ、CMakeLists の ALSO_APP で AIOGuitar-App.zip も）。
   MY GUITAR（カポで録った数十音 → 弦・フレットを自動判定、音程・音量を自動補正、録音のビビり（途中で弦がフレットに当たる音）を見つけて増えた分だけ下げる Fix Buzz（0.5.0、BuzzFix.h）、ダウン/アップ交互、1 弦 1 音、強さ SOFT / MEDIUM / HARD の 3 層、STRUM で和音を弦の順にずらす、単体アプリは RECORD GUIDE で 1 音ずつ案内しながら録る）/ SCORE（タブ譜で 1 音ずつ奏法、FOLLOW LOGIC と PLAY IN SYNC）/ EFFECTS / AMP の 4 ページ。
-  2026-11-08 本人の判断で全部入り。EFFECTS は BELLOWS WAH（0.7.0、ワウ。AUTO・CC11 / CC4、WahDSP.h）・Cotton Comp（AIO Guitar だけ）・DRIVE A / B（0.6.0、どちらも 5 機種から選ぶ: Porch Drive・Wool Fuzz（単体と同じ DSP を WoolFuzzDSP.h・PorchDriveDSP.h で共有。変えたら AIO Guitar もビルド）と AIO だけの Hearth Drive（TS 系）・Brass Boost（トレブルブースター）・Barn Dist（RAT 系）、回路をそのまま式に、DrivePedals.h・DriveSlot.h）と AMP・TREM（0.4.0、My Tremolo の小型版。MyTremoloDSP.h を共有。My Tremolo の Source を変えたら AIO Guitar もビルド）を好きな順に並べる（ドラッグ / ◀ ▶、CAB はいつも最後、Rig.h）。ディレイ・リバーブは入れない（内蔵リバーブも 0.3.0 で外した。自作を後ろに）。
+  2026-11-08 本人の判断で全部入り。EFFECTS は BELLOWS WAH（0.7.0、ワウ。AUTO・CC11 / CC4、WahDSP.h）・WINDMILL（0.8.0、フェイザー PHASE（定番 4 段の回路の値）/ ヴァイブ VIBE（ランプと光センサー）、
+  SPEED・SYNC・DEPTH・COLOR、揺れは曲の位置に固定、200 Hz から下は揺らさない、PhaserDSP.h。これで箱は 7 個で打ち止め。ほかのトラック用のフェイザーが欲しくなったら My Filter に足す）・Cotton Comp（AIO Guitar だけ）・DRIVE A / B（0.6.0、どちらも 5 機種から選ぶ: Porch Drive・Wool Fuzz（単体と同じ DSP を WoolFuzzDSP.h・PorchDriveDSP.h で共有。変えたら AIO Guitar もビルド）と AIO だけの Hearth Drive（TS 系）・Brass Boost（トレブルブースター）・Barn Dist（RAT 系）、回路をそのまま式に、DrivePedals.h・DriveSlot.h）と AMP・TREM（0.4.0、My Tremolo の小型版。MyTremoloDSP.h を共有。My Tremolo の Source を変えたら AIO Guitar もビルド）を好きな順に並べる（ドラッグ / ◀ ▶、CAB はいつも最後、Rig.h）。ディレイ・リバーブは入れない（内蔵リバーブも 0.3.0 で外した。自作を後ろに）。
   AMP は 5 種類＋キャビ 5 種類（か IR）＋マイク 3 種類・位置・距離。Logic の Amp Designer を 57 通りバウンスして合わせ込み（build/AmpLab、AmpTables.h は自動生成）。Plugin Link は LINK 欄だけ（Kind 17 は未登録）
   2026-11-11 本人: AIO に入れるのは AMP の前の足元のペダルだけ（2 回目ワウ、3 回目フェイザー／ヴァイブ、箱は 7 個・歪みは 6〜7 機種まで）、アンプは今の 5 種類を残して足す（Guitar Rig は無料版だけなので見送り）。DOUBLE は AIO に作らず、AIO の後ろに Twin Take（2026-11-12 本人）。
   この Mac の Guitar Rig 7 は無料版（Player）で、Pro の部品は測れない（NOTES.md の DRIVE A / B）
