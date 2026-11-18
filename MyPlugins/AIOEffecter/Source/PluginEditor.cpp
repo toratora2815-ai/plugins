@@ -75,6 +75,7 @@ AIOEffecterEditor::Row::Row (AIOEffecterEditor& e, int slot) : owner (e), index 
         att[k] = std::make_unique<Attachment> (p.apvts, AIOEffecterProcessor::knobId (slot, k), s);
         name[k].setJustificationType (juce::Justification::centred);
         name[k].setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        name[k].setMinimumHorizontalScale (0.6f);   // 長い名前（SATURATION など）は横を詰める
         name[k].setColour (juce::Label::textColourId, owner.text.withAlpha (0.8f));
         name[k].setInterceptsMouseClicks (false, false);
         addChildComponent (name[k]);
@@ -105,6 +106,7 @@ void AIOEffecterEditor::Row::syncType()
         }
     }
     onBtn.setEnabled (t != 0);
+    if (nk != shownKnobs) { shownKnobs = nk; resized(); }
     repaint();
 }
 
@@ -143,12 +145,14 @@ void AIOEffecterEditor::Row::resized()
     r.removeFromLeft (8);
     type.setBounds (r.removeFromLeft (180).withSizeKeepingCentre (180, 28));
     r.removeFromLeft (20);   // メーター
-    const int kw = juce::jmin (78, r.getWidth() / aiofx::kMaxKnobs);
+    // つまみの数で幅を割る（12 本までは 78 px、それより多い部品は狭く）
+    const int kw = juce::jmin (78, r.getWidth() / juce::jmax (12, shownKnobs));
     for (int k = 0; k < aiofx::kMaxKnobs; ++k)
     {
         auto c = r.removeFromLeft (kw);
         name[k].setBounds (c.removeFromTop (13));
         knob[k].setBounds (c);
+        knob[k].setTextBoxStyle (juce::Slider::TextBoxBelow, false, juce::jmax (40, kw - 4), 15);
     }
 }
 

@@ -69,6 +69,53 @@ aufx Aifx Mypl。2026-11-18 本人「guitar rig 7 pro … いろいろ実験し�
   0.2.0 でアンプ・歪みと一緒に、共通の 4 倍（遅れの申告をラックでそろえる）を作って入れる
 - 検査係のテスト一式は build/aiofx/test（run_all.sh、test_spring.cpp など。コミットしない）
 
+## 0.2.0（2026-11-19）抑える系の残り
+- 本人「一旦、大まかにエフェクター作っていって、いらんくなった測定結果を消して、さらに細かい測定」→ まず全部を大まかに作る。0.2.0 は抑える系の残り 12 部品（Gater は保留）
+- **測り直し**: Guitar Rig はでたらめに（1 割前後）部品を間違った値で組み立てる（VC 76 が素通し、VC 2A が固まるなど。DUMP の読み戻しは正しいので気づけない）。
+  2026-11-18 の記録（並列 1 回）は信用できない → 13 部品 509 件を「状態をエンジンの準備より前に読ませる」gh4 で、2 回測ってビット単位で同じものだけ採用（capone2.sh）。14 件は 3 回目で一致。
+  追加で測ったもの: Supercharger GT のモード違い（SATURATION 0.5・CHARACTER 0.5 で）、Maximizer の本当の範囲（THRESHOLD / CEILING は dB、−20〜0）、
+  Volume Pedal の MIN / HALF、Solid Dynamics のゲート（RANGE 1 で）、Gater（テンポ 120、gh5）
+- **共通エンジン（fx/DynEngine.h）＋表（fx/DynTables.h、自動生成）**: エンジンの値（PRE・THR・RATIO・KNEE・ATT・REL・MAKEUP・DRY・WET・SAT1/2・SCHP・RMS・棚・ゲート・先読み・OUT）を、
+  つまみ 1 本ずつの記録に合わせ込んで表にする。つまみの効き目は「初期値の点との差」を足し合わせる（つまみ同士の組み合わせは測っていない = 大まか）。
+  合わせ込みは build/aiofx/fit（fitkit.py = 共有ライブラリを ctypes で、dynfit.py = 静的な曲線の多点スタート＋Powell、gentable.py → DynTables.h、部品ごとの *.py）。
+  目標 = 31 段の階段の大きさ・3 種類の段差の動き（1 ms ごと、最初の 1 ms は除く）・2 次 / 3 次の歪み・ピンクノイズの帯域・同相の利得（極性）
+- 飽和の段がある部品は 4 倍（fx/Oversampler.h、IIR のハーフバンド 2 段、遅れ約 4 サンプル・申告しない）をいつも通し、**ドライも同じフィルターを通して位相をそろえる**（MIX の途中でずれていた）
+- つまみを回してもプチッとしないよう、しきい値・ニー・傾き・ゲートのしきい値と深さも 20 ms でならす
+- 先読み（MAXIMIZER 429 サンプル = 先読み 353 ＋ 4 倍 4 ＋ 天井を守る 72）: Rack が段ごとにドライも遅らせ（OFF の間も）、入れ替えで遅れが変わるときは 15 ms でつなぎ替え。合計をプロセッサーがホストに申告
+- **DSP 検査 1 回目（0.2.0）「直してから」** → 直したこと:
+  表 1 本の値の数 6 → 10（VC 76 の RATIO が 8 個で配列の外に書いて落ちた。gentable.py で数を確かめる）/ TRANSIENT の CLIP はいつも 4 倍を通して効き具合を 20 ms でならす（ON/OFF のプチッ 818 → 1）/
+  MAXIMIZER は窓 [今 − 353, 今] の最大 → 353 サンプルの箱形の平均（音が届く前に下げ終わる。最後の頭打ちに頼らない）、荒さ（CHARACTER 2.5 未満）は天井を最大 +6 dB 上げて 4 倍のやわらかいクリップで削る（折り返し −22 → −72〜−92 dB）/
+  新しいつまみ k13〜16 の版のヒント 11 / 飽和の偏りは |d·b| ≤ 1.5（片側が何倍にもならない）、tanh(d·b) は元の 1 サンプルに 1 回（CPU 約半分）/
+  先読みのバッファーをステレオ分・ドライは 4 倍を通したものを遅らせる / 棚は動いている間だけ毎サンプル計算（ジッパー）/ 2 段の戻りはいつも両方回して割合をならす / ゲートが OFF になってもなめらかに開く /
+  4 倍の遅れ（1 段約 4 サンプル）を latency() で申告 / ラック: 遅れのある部品は OFF の間も回す（ON にした瞬間に先読みが空で抜けない）、reset でドライの遅れの中身も消す
+- **DSP 検査 2 回目「直してから」（MAXIMIZER の天井だけ）** → 荒さありで 4 倍から戻した波形が天井を最大 +8 dB 超えていた・荒さなしでも使わない 4 倍フィルターの位相で clamp にかかっていた。
+  荒さなしの道を 4 サンプルの整数の遅れにし（荒さありの 4 倍クリップと 20 ms で入れ替え）、最後に 1.5 ms の短い先読み（同じ箱形）で天井 1.0 を守る。clamp を外しても天井ちょうど 1.0000、遅れ 429（48 kHz）。
+  ほか: 響きのない部品は ON のとき入口をフェードインしない（−2.3 dB の谷）、入口・MAKEUP・出口の音量のならし 60 ms。
+  **3 回目「直してから」**: 窓の最大を覚える列が 1 つ短かった（W = look + 3 に。34 Hz より下で山を見誤り低音の歪みが 10 dB 増えていた）、
+  再生中に MAXIMIZER を選ぶと空の先読みからいきなり音が出てプチッ（目安 775）→ 動かし始めた部品は先読みが埋まるまで（lat サンプル）ドライのまま（Rack の prime）
+  **4 回目「直してから」**: 入口・MAKEUP・出口を倍率でならしていたので、逆向きに動く 2 つ（DIRT の ON/OFF、INPUT と OUT）が途中でふくらんだ（TUBE PUSH の INPUT 0→1 で +20.9 dBFS が 0.1 秒）
+  → dB でならして使うときに倍率へ（ふくらみ 1 dB 超え 38 → 3 / 840 通り）。prepare で prime・running を 0 に、ドライの遅れのつなぎ替えが終わるまで次の入れ替えを待たせる。
+  検査係の道具: tools/test_inspect.cpp（ti）・tools/test_jump.cpp（tj）
+  **5 回目「渡してよい」**。持ち越し（任意）: dB でならしたので、音量のつまみを「いちばん下」（−98〜−124 dB）へ一気に飛ばすと下がり始めに角（2 kHz より上へ −50.7 dB、プチッの目安 4.6〜6.8）。
+  2 段ならし（9 ms＋51 ms、Smooth2）で消えるが PEDAL COMP SUSTAIN 0→1 の山が +0.5 dB 悪くなる（検査係の写し scratchpad/r5/casc2）2 回目に見つかった 0.1.0 からの TUBE COMP の全開（+100 dBFS 近く → ラックの頭打ち）は持ち越し
+- 合わせ込みで分かったこと: TUBE PUSH / XL の INPUT は「コンプへの入口を上げて出口で戻す」（PRE と OUT。最初はしきい値で合わせたら INPUT × COMPRESS の組み合わせで最大 9 dB ずれた。組み合わせ 5 通りを測って確かめた）/
+  Guitar Rig の Supercharger GT は自分でも 8 サンプル遅れる → 比べるときは本物もずらす（dynfit.GRLAT）/ Solid Dynamics のゲートは「しきい値を下回っても HOLD の間は開いたまま」→ dpGHold を足した（開くときの待ち方はまだ合っていない）
+- kMaxKnobs 12 → 16（Solid Dynamics が 14 本）。0.1.0 はビルドされていない（GitHub の Mac が動かなかった）ので、パラメーターの数を変えても困る人はいない
+
+### 部品ごとの合い具合（0.2.0、build/aiofx/fit/verify.py = 出来上がった部品を本物のつまみ 1 本ずつの記録と比べた中央値）
+- TUBE PUSH（Supercharger）静的 0.16 dB・動き 0.24 dB（DIRT ON 1.6 dB）。INPUT × COMPRESS の組み合わせは中くらい 0.3〜0.8 dB、端（INPUT 0 / 1 と COMPRESS 0 / 1）2〜5 dB
+- TUBE PUSH XL（Supercharger GT）0.15 / 0.13 dB。SAT MODE・CHAR MODE は SATURATION 0.5・CHARACTER 0.5 で測って、モード 2 との差を足す（gtmodes.py）
+- FET COMP（VC 76）0.31 / 0.47 dB。DRY は「元の音を足す量」（100 % = 並列コンプ。下げると大きい音ほど小さくなる、本物と同じ）
+- OPTO COMP（VC 2A）0.31 / 1.2 dB（2 段の戻りがまだ大まか。GAIN 1 は真空管の歪みで 3 dB）
+- VCA COMP（VC 160）0.11 / 0.18 dB
+- BUS COMP（Solid Buscomp）0.84 / 1.0 dB（ATTACK の速い段で 2.3 dB。本物は ATTACK で静的な曲線も変わる）
+- CHANNEL DYN（Solid Dynamics）0.48 / 0.29 dB。ゲートは RANGE 1 で測った別の表（sdgate.py）、静的 0.7 dB・開くときの動きはまだ 7 dB ずれる
+- QUICK COMP（Fast Comp）0.41 / 0.91 dB、PEDAL COMP（Stomp Compressor）0.21 / 0.31 dB（RELEASE SLOW 3.6 dB）
+- TRANSIENT（Transient Master）静的 0.2〜1.1 dB（tmfit.py で 21 通りをまとめて）
+- VOLUME PEDAL: 本物と 0.01 dB で同じ（放物線）。MAXIMIZER: 静的 0.0〜0.15 dB、CHARACTER 0 の 3 次の歪み −13.8 dB（本物 −14）、1 は −15.9 dB（本物 −30、こちらが荒い）
+- 保留: Gater（テンポ 120 で測ったが RATE が効かない。刻みは 1 拍ごと）→ 細かい測定のときに
+- CPU: 1 段 1〜2 %、8 段全部 FET COMP で 16.5 %（48 kHz）。重いのは 4 倍のフィルター（ドライも通す）と tanh
+
 ## 次に
 - 部品を足す（全部の記録が cap/ にある）: アンプ（Fire Seeker・Jump・ICM の新しいアンプ）とキャビ、歪み、揺れもの、フィルター、ピッチ。足すたびに Registry の後ろへ
 - AIO Guitar のエフェクター欄へ移す（本人の将来の希望）

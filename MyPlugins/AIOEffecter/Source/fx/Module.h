@@ -12,7 +12,7 @@
 
 namespace aiofx
 {
-constexpr int kMaxKnobs = 12;
+constexpr int kMaxKnobs = 16;   // 0.2.0 で 12 → 16（Guitar Rig の部品はつまみが多いものがある）
 
 inline float dbToGain (float db) { return std::pow (10.0f, db * 0.05f); }
 inline float gainToDb (float g)  { return 20.0f * std::log10 (std::max (g, 1.0e-12f)); }
@@ -89,4 +89,15 @@ inline bool same (float a, float b) { return ! (a < b || b < a); }
 
 // 小さすぎる値（デノーマル）を 0 に
 inline float flush (float x) { return std::abs (x) < 1.0e-20f ? 0.0f : x; }
+
+// ---- 合わせ込み（測定の道具 tools/ だけが使う）: 名前 → 係数の場所 ----
+// 部品のヘッダーで inline FitAdd xxx { { "部品.名前", &Fit().値 }, ... }; と並べておくと、道具が名前で書き換えられる
+struct FitEntry { const char* name; float* p; };
+inline std::vector<FitEntry>& fitEntries() { static std::vector<FitEntry> v; return v; }
+struct FitAdd { FitAdd (std::initializer_list<FitEntry> l) { for (auto& e : l) fitEntries().push_back (e); } };
+inline float* findFit (const std::string& name)
+{
+    for (auto& e : fitEntries()) if (name == e.name) return e.p;
+    return nullptr;
+}
 } // namespace aiofx

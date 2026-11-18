@@ -8,6 +8,10 @@
 #include "StudioReverb.h"
 #include "SpringReverb.h"
 #include "TwinDelay.h"
+#include "DynParts.h"
+#include "Transient.h"
+#include "VolumePedal.h"
+#include "Maximizer.h"
 
 namespace aiofx
 {
@@ -30,6 +34,19 @@ inline const std::vector<Entry>& registry()
         { &StudioReverb::info,   &makeModule<StudioReverb> },     // 5
         { &SpringReverb::info,   &makeModule<SpringReverb> },     // 6
         { &TwinDelay::info,      &makeModule<TwinDelay> },        // 7
+        // 0.2.0（抑える系の残り）
+        { &TubePush::info,       &makeModule<TubePush> },         // 8
+        { &TubePushXL::info,     &makeModule<TubePushXL> },       // 9
+        { &FetComp::info,        &makeModule<FetComp> },          // 10
+        { &OptoComp::info,       &makeModule<OptoComp> },         // 11
+        { &VcaComp::info,        &makeModule<VcaComp> },          // 12
+        { &Transient::info,      &makeModule<Transient> },        // 13
+        { &BusComp::info,        &makeModule<BusComp> },          // 14
+        { &ChannelDyn::info,     &makeModule<ChannelDyn> },       // 15
+        { &QuickComp::info,      &makeModule<QuickComp> },        // 16
+        { &PedalComp::info,      &makeModule<PedalComp> },        // 17
+        { &VolumePedal::info,    &makeModule<VolumePedal> },      // 18
+        { &Maximizer::info,      &makeModule<Maximizer> },        // 19
     };
     return r;
 }

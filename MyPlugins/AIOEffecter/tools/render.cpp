@@ -22,8 +22,9 @@ static void setFit (const std::string& name, float v)
     auto& N = NoiseReduction::fit();
     m["scHz"] = &N.scHz; m["ldDb"] = &N.ldDb; m["ldPow"] = &N.ldPow; m["fcPow"] = &N.fcPow;
     auto it = m.find (name);
-    if (it == m.end()) { std::cerr << "unknown fit " << name << "\n"; std::exit (2); }
-    *it->second = v;
+    if (it != m.end()) { *it->second = v; return; }
+    if (float* q = findFit (name)) { *q = v; return; }
+    std::cerr << "unknown fit " << name << "\n"; std::exit (2);
 }
 
 int main (int argc, char** argv)

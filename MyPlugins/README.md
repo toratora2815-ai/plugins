@@ -28,7 +28,7 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 | Fader Pilot | FaderPilot | ボーカルの音量を自動でフェーダーを動かして揃える |
 | Balance Scope | BalanceScope | 帯域バランスとラウドネスの測定器。Plugin Link の配り役 |
 | Mod Host | ModHost | 好きな AU を中に入れて、どのつまみでも LFO などで動かす |
-| AIO Effecter | AIOEffecter | ゲート・ノイズリダクション・コンプ・リミッター・リバーブ・スプリング・ディレイを 8 段に好きな順で並べるラック（Guitar Rig 7 Pro を測って合わせ込み。部品はこれから増える） |
+| AIO Effecter | AIOEffecter | ゲート・ノイズリダクション・いろいろなコンプ・トランジェント・マキシマイザー・ボリュームペダル・リバーブ・スプリング・ディレイを 8 段に好きな順で並べるラック（Guitar Rig 7 Pro を測って合わせ込み。部品はこれから増える） |
 | Sample Sculptor | SampleSculptor | サンプルを落として加工し、ドラッグで Logic に戻す（AU 音源） |
 | AIO Guitar | AIOGuitar | 自分のエレキを録った音で鳴らす全部入りギター音源（AU 音源＋単体アプリ） |
 | Vox Chop | VoxChop | 自分の声を別の声（女性・男性・中性・子ども・ささやき・ロボット…）に変えて、切って鍵盤で弾く（AU 音源） |

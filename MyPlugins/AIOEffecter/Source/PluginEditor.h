@@ -29,6 +29,7 @@ private:
         AIOEffecterEditor& owner;
         int index;
         int shownType = -1;
+        int shownKnobs = 0;                 // 今の部品のつまみの数（幅の割り振りに使う）
         float meter = -1.0f;
         juce::TextButton up { "^" }, down { "v" }, onBtn { "ON" };
         juce::ComboBox type;

@@ -79,7 +79,7 @@ private:
     std::array<std::array<std::atomic<float>*, aiofx::kMaxKnobs>, aiofx::kSlots> pKnob {};
     std::atomic<float>* pGainMatch = nullptr;
     std::atomic<float>* pLinkMatch = nullptr;
-    int tVerb = 0, tSpring = 0, tDelay = 0, tLimit = 0;   // GAIN MATCH の判断に使う部品の番号
+    int tVerb = 0, tSpring = 0, tDelay = 0, tLimit = 0, tMax = 0;   // GAIN MATCH の判断に使う部品の番号
 
     aiofx::Rack rack;
     std::array<aiofx::SlotKnobs, aiofx::kSlots> audioKnobs {};   // オーディオスレッド用（毎ブロック読み直す）

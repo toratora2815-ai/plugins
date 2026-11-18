@@ -16,7 +16,7 @@ AIOEffecterProcessor::AIOEffecterProcessor()
     }
     pGainMatch = apvts.getRawParameterValue (myp::GainMatch::paramId);
     pLinkMatch = apvts.getRawParameterValue ("linkMatch");
-    tVerb = aiofx::typeForId ("studiovb"); tSpring = aiofx::typeForId ("spring"); tDelay = aiofx::typeForId ("twindly"); tLimit = aiofx::typeForId ("limit");
+    tVerb = aiofx::typeForId ("studiovb"); tSpring = aiofx::typeForId ("spring"); tDelay = aiofx::typeForId ("twindly"); tLimit = aiofx::typeForId ("limit"); tMax = aiofx::typeForId ("maximizer");
     startTimerHz (20);
 }
 
@@ -40,9 +40,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout AIOEffecterProcessor::create
                 return juce::String ("-");
             })));
         params.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { onId (s), 1 }, n + " On", true));
+        // つまみ 13〜16 は 0.2.0 で足した（版のヒント 11 = 前からのパラメーターの番号をずらさない）
         for (int k = 0; k < aiofx::kMaxKnobs; ++k)
             params.push_back (std::make_unique<juce::AudioParameterFloat> (
-                juce::ParameterID { knobId (s, k), 1 }, n + " Knob " + juce::String (k + 1),
+                juce::ParameterID { knobId (s, k), k < 12 ? 1 : 11 }, n + " Knob " + juce::String (k + 1),
                 juce::NormalisableRange<float> (0.0f, 1.0f), 0.5f));
     }
     params.push_back (myp::GainMatch::makeParameter());
@@ -80,7 +81,7 @@ void AIOEffecterProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     rack.prepare (sampleRate, juce::jmax (16, samplesPerBlock), msgKnobs);
     monoTmp.assign ((size_t) juce::jmax (16, samplesPerBlock), 0.0f);
     prepared = true;
-    setLatencySamples (0);
+    setLatencySamples (rack.latency());   // 先読みのある部品（MAXIMIZER）があるときだけ遅れる
     gainMatch.prepare (sampleRate, juce::jmax (1, getTotalNumOutputChannels()), samplesPerBlock);
 }
 
@@ -90,6 +91,7 @@ void AIOEffecterProcessor::timerCallback()
     if (! sl.isLocked() || ! prepared) return;
     readSlots (msgKnobs);
     rack.service (msgKnobs);
+    if (rack.latency() != getLatencySamples()) setLatencySamples (rack.latency());   // 部品を選び直して遅れが変わった
 }
 
 void AIOEffecterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -126,7 +128,7 @@ void AIOEffecterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     const int numCh = juce::jmin (numOut, 2);
     // GAIN MATCH: リバーブ・ディレイを MIX 90〜100 % で使っている（センド使い）なら少しずつ効かなくする。
-    // 最後に効いている段が LIMITER なら上げない（決まり: 最後にリミッターがあるなら limitBoost (0)）
+    // 最後に効いている段が LIMITER / MAXIMIZER なら上げない（決まり: 最後にリミッターがあるなら limitBoost (0)）
     float amount = 1.0f;
     int lastType = 0;
     for (const auto& sk : audioKnobs)
@@ -136,7 +138,7 @@ void AIOEffecterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         const int mixIdx = sk.type == tVerb ? 0 : sk.type == tSpring ? 1 : sk.type == tDelay ? 10 : -1;
         if (mixIdx >= 0) amount = juce::jmin (amount, juce::jlimit (0.0f, 1.0f, (1.0f - sk.k[mixIdx]) / 0.1f));
     }
-    gainMatch.limitBoost (lastType == tLimit ? 0.0f : myp::GainMatch::maxBoostDb);
+    gainMatch.limitBoost ((lastType == tLimit || lastType == tMax) ? 0.0f : myp::GainMatch::maxBoostDb);
     gainMatch.process (buffer, numCh, getLatencySamples(), amount);
     const bool gmOn = pGainMatch->load() > 0.5f;
     match.process (link, ! gmOn && pLinkMatch->load() > 0.5f, buffer.getArrayOfWritePointers(), numCh, n, getSampleRate());
@@ -210,6 +212,13 @@ namespace
                                      { "nred", { 0.25f, 0.4f, 0.5f } },
                                      { "limit", { 0.47f, 0.2f, 0.0f, 0.5f } } } },
             { "Hiss Cleanup",      { { "nred", { 0.3f, 0.6f, 0.6f } } } },
+            // 0.2.0
+            { "Opto Vocal",        { { "optocomp", {} },
+                                     { "studiovb", { 0.25f, 0.1f, 0.5f, 0.6f, 0.6f, 1.0f } } } },
+            { "Drum Bus Glue",     { { "buscomp", {} },
+                                     { "transient", { 0.65f, 0.4f, 0.56f, 1.0f, 1.0f } } } },
+            { "Push + Maximize",   { { "tubepush", { 0.433333f, 0.35f, 0.0f, 0.0f, 0.0f, 0.5f } },
+                                     { "maximizer", {} } } },
         };
         return r;
     }
