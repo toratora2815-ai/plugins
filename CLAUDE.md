@@ -96,6 +96,7 @@
 - ドラム: Drummer の生ドラムに 808・クラップを重ねて鳴らす = Hybrid Kit（生だけなら Logic の Drum Kit Designer のまま）/ 1 発のサンプルを作る・整える = Sample Sculptor / 手元のサンプルを口マネで探す = Sound Sketch / 太く = Fire Box、突っ込んでもアタックを残す = Drum Transient。
   Hybrid Kit に入れるのはキットの中のこと（部品の VOLUME / TUNE / LENGTH・EDM の層・マイクの混ぜ具合）まで。コンプ・歪み・リバーブは作らない。ドラム音源の新機能は Hybrid Kit に足す（別のドラム音源は作らない。2026-11-12 整理係）
 - 鼻歌: Idea Catcher だけ（録ってから解析 → きれいな MIDI → Logic へドラッグ）。口ドラムは本人が「いらない」ので作らない
+- 声を文字に: 言ったことを「やること」に = Aside / 会議の記録（自分と相手、議事録）= 書記（Shoki）
 - リミッター: 普通のリミッター（2 ミックス・マスター）は本人の Pro-L2 / ドラムは Drum Transient / Forge Strip・Fire Box の最後のリミッターはそれぞれの中だけ
 - 抑える: 雑音（サーッ・ファン）・ハム・部屋鳴り・口のピチャ音・息・吹かれを取る = Noise Out / キツい響き・サ行 = Hush Field（Noise Out に De-ess は入れない）
 - ダブル・広げる: 1 本のまま広げる（モノにすると元に戻る）= Horizon Spread / 1 本録りの歌・ギターを 2 本録りに（音ごとにずれる別テイク。モノでも厚みが残る）= Twin Take /
@@ -186,6 +187,9 @@
   声の重心は voiceToLibrary（log2 Hz を 1.46 倍 − 5.37）で広げてから比べる。Library.h が裏でフォルダを読み ~/Library/Application Support/Sound Sketch/index.bin に保存。
   最初は ~/Splice/sounds（ダウンロード済みだけ。Splice の全カタログは API がないので探さない）。クリックで試聴・ドラッグで Logic・ダブルクリックで「これに似た音」。tools/test_engine.cpp
 - Aside（Aside）1.1.0 … ひとりごと秘書。言ったことから「やること」を拾ってリマインダー／カレンダーへ。標準は押したときだけ聞く（Num Deck の「一言メモ」か ⌃⌥M）
+- 書記（Shoki）1.0.0 … オンライン会議の書記（2026-11-18）。自分 = マイク、相手 = Mac から出る音（プロセスタップ、消音しない）を Mac の中だけで文字に（SpeechAnalyzer、日本語）。
+  1 行ずつ ~/議事録/<日時> 会議/ に書き足し、音声も残す（終わったら m4a に圧縮、ボタンでゴミ箱へ）。会議のあとに声のグループごとに聞いて名前を選ぶと「（名前）〜」の議事録。清書は本人が Claude に頼む（アプリに AI は入れない）。
+  Swift だけ・Xcode なしで `bash MyPlugins/Shoki/build.sh install`（CI ではビルドしない。SwiftUI の @State は使えない）。声紋は保存しない
 
 ### Plugin Link（MyPlugins/Shared/PluginLink.h・PluginLinkJuce.h）
 自作プラグイン同士の連携（共有メモリの掲示板、LINK 1〜4、FROM で相手選び）。詳しい並び・今つながっているもの・空き番号は `MyPlugins/Shared/NOTES.md`。

@@ -42,6 +42,7 @@ GitHub に push すると自動でビルドされ、Releases の「latest」に�
 | Sound Sketch | SoundSketch | 口マネで手元のサンプルを探す |
 | Num Deck | NumDeck | テンキーに Logic などの操作を割り当てる |
 | Aside | Aside | ひとりごとをリマインダー・カレンダーに入れる秘書 |
+| 書記 | Shoki | オンライン会議の自分と相手の声を Mac の中だけで文字に。会議のあとに声のグループごとに名前を選ぶと（名前）付きの議事録（この Mac で作る。Releases には置かない） |
 
 - `Shared` … プラグイン共通の部品（Plugin Link、プリセット保存・取り消しの帯、GAIN MATCH）。単体では使いません
 
