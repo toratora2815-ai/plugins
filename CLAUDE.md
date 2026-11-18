@@ -36,7 +36,7 @@
 - CMakeLists は既存プラグイン（`MyPlugins/WoolFuzz` など）と同じ形にする
   - `CMAKE_OSX_DEPLOYMENT_TARGET` 11.0、`COPY_AFTER_BUILD` オプション、`juce_generate_juce_header` を使う
   - `COMPANY_NAME "MyPlugins"`、`PLUGIN_MANUFACTURER_CODE Mypl`
-  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`, `Myfl`, `Mycr`, `Nzot`, `Twtk`, `Rtrt`, `Hbkt`
+  - `PLUGIN_CODE` は4文字でプラグインごとに別にする。使用済み: `Wlfz`, `Nbrv`（廃止）, `Pchd`, `Blsc`, `Rfrc`（廃止）, `Hzsp`, `Vltm`（廃止）, `Fdpl`, `Gnst`, `Hshf`, `Lmrm`, `Htsc`（廃止）, `Flps`（廃止）, `Smsc`, `Mldv`, `Mdhs`, `Frgs`, `Frgm`（廃止）, `Eldv`, `Ecdr`, `Frbx`, `Aiog`, `Vxch`, `Dcst`, `Drtr`, `Mytr`, `Myfl`, `Mycr`, `Nzot`, `Twtk`, `Rtrt`, `Hbkt`, `Aifx`
   - ビルドは `<名前>_AU` ターゲットだけ（arm64;x86_64 ユニバーサル、`codesign --sign -` のアドホック署名）
 - 歪み系は4倍オーバーサンプリング、パラメーターは APVTS ＋ SmoothedValue でスムージング
 - 実在製品の名前・ロゴ・見た目は使わず、音のキャラクターを参考にしたオリジナルとして作る
@@ -173,6 +173,11 @@
   部品 5 組の VOLUME / TUNE / LENGTH、ミキサー CLOSE / OH / ROOM / BLEED、キックの 808 サブ（低音を LR4 で入れ替え、遅れ・極性・大きさは自動）・スネアの EDM の層（Clap など、ゴーストとサイドスティックには付けない）、内蔵プリセット 7 個。
   0.2.0 でマルチアウト（7 出口 1 Main / 2 Kick / 3 Snare / 4 Room / 5 Toms / 6 Hi-Hat / 7 Cymbals、並びは固定。部品の出口にはその部品の全マイク＋EDM の層、
   ROOM は全部の部品のルームをまとめて、スイッチは曲の配線なのでプリセットで変えない。本人「マルチアウト作って」）。Plugin Link は LINK 欄だけ（Kind 27 は未登録）。試作・テストは tools/render.cpp・tools/test_inspect.cpp（DSP 検査係）
+
+- AIO Effecter（AIOEffecter）0.1.0 … 部品を 8 段に並べるラック型エフェクト（aufx Aifx。2026-11-18 本人「Guitar Rig 7 Pro をいろいろ実験して、響きとか抑制とか、そのまんま同じものを。名前は aio effecter」）。
+  部品は Guitar Rig 7 Pro を測って合わせ込み（見た目・名前はオリジナル、つまみは同じ数・同じ 0..1 の尺度）。0.1.0 は NOISE GATE（波形の差 −64 dB 以下）・NOISE REDUCTION・TUBE COMP・LIMITER・ROOM VERB・SPRING・DUAL DELAY。
+  音の処理は fx/ の JUCE なしの部品（Module.h・Registry.h・Rack.h）。**本人の希望で将来 AIO Guitar のエフェクター欄へ移す**ので、そのまま include できる形にしてある。
+  部品の番号は保存に使うので Registry の後ろへ足すだけ。Guitar Rig 7 Pro の全 140 部品の記録は build/aiofx/cap（コミットしない）。Plugin Link は Gain Stage の LEVEL MATCH だけ（Kind 28 は未登録）
 
 ### 単体 Mac アプリ（.app）
 - Reference Monitor（ReferenceMonitor）1.6.0 … 他人の曲との聴き比べ（macOS 14.2〜、プロセスタップで Logic とミュージックの音を受ける）。TONE / WIDTH / PUNCH / LOW 表示、SNAP、AVG、LISTEN AS。分散通知で Num Deck から操作

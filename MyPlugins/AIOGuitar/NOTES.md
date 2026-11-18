@@ -201,6 +201,9 @@ claude.ai のチャット（2026-11-08）で途中まで作られ、~/Music/AIOG
   最初に送ったアンプ聴き比べは Guitar Rig 側がキャビだけだった（本人に訂正済み、AIO 側の 5 本は正しい）。Helix Stadium Native（入っている）も測定ホストでは素通し。
   本人「無料版だけ」（2026-11-12）→ ペダルは回路どおり（TS 系だけ Skreamer で答え合わせ）、Guitar Rig のアンプを足すのは見送り（無料版で動くアンプは Jump だけ）。
   道具: build/grlab（gh・pack.py・mkrack.py・ngrr.py・ped/ = Skreamer の 23 通り）、build/hxlab
+  **2026-11-18 更新**: 無料版でも Fire Seeker（ICM のアンプ）と Red Fuzz は動いていた（無料で動くアンプは Jump だけではなかった）。
+  さらに本人が Native Access で Pro を有効にし、140 部品が測れるようになった。全部の記録は build/aiofx/cap（AIO Effecter の NOTES.md）。
+  本人「将来 AIO Effecter を AIO Guitar のエフェクター欄に移したい」→ アンプを足すときは AIO Effecter の fx/ の部品として作り、AIO Guitar から include する
 - 形: 0.5.0 の DRIVE（pd*）と FUZZ（wf*）の箱 = DRIVE A / B。ID はそのまま（表示名だけ Drive A … / Drive B …）、機種は pdModel / wfModel（版のヒント 5、オートメーション不可）。
   並び fxChain の番号も同じ（blkDrive = A、blkFuzz = B）。機種: 0 Porch Drive、1 Wool Fuzz、2 Hearth Drive、3 Brass Boost、4 Barn Dist。初期値 A = Porch、B = Wool
 - DriveSlot.h: 5 機種を全部 prepare して選んだ 1 つだけ process。LEVEL は「箱の初期値（A −6、B −12）で各機種の初期値の大きさ」になるよう ずらす
