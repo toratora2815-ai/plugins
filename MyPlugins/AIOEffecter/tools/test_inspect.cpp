@@ -134,7 +134,7 @@ inline double nowSec()
     return std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-static const char* kNew[] = { "electricfl", "multichorus", "vibeensemble", "scannervibe" };   // 0.6.0 のコーラス系（前の版の部品は kAll に）
+static const char* kNew[] = { "classicph", "sweepph", "tapewow", "rotary" };   // 0.7.0 のフェイザー・テープ・ロータリー（前の版の部品は kAll に）
 
 #include <cstring>
 #include <complex>
@@ -1365,7 +1365,8 @@ static const char* kAll[] = { "gate", "nred", "tubecomp", "limit", "studiovb", "
                               "spacevb", "classicvb", "shaperoom", "pickroom", "clubverb", "digihall", "digihallxl", "frostverb", "eightverb",
                               "warpdly", "bbdecho", "widedly", "clubdly", "styledly", "tapeheads",
                               "shelfeq", "consoleeq", "parameq", "graphiceq", "scoopeq", "tremolo", "ringmod", "flanger",
-                              "electricfl", "multichorus", "vibeensemble", "scannervibe" };
+                              "electricfl", "multichorus", "vibeensemble", "scannervibe",
+                              "classicph", "sweepph", "tapewow", "rotary" };
 
 
 // ============================================================================

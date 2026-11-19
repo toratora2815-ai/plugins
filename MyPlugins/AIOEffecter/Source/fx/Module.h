@@ -51,6 +51,11 @@ public:
     // ホストの曲の位置（このブロックの頭の拍の位置 ppq、再生中か）。揺れを小節にそろえる部品だけ使う（ppq < 0 = 分からない）
     virtual void setTransport (double /*ppq*/, bool /*playing*/) {}
     virtual int latency() const { return 0; }
+    // 画面で部品を選んだ直後に 1 回だけ（Rack::service）。prepareToPlay で作り直したときは呼ばない（回り始めの演出など）
+    virtual void startFresh() {}
+    // 出口に越えてはいけない天井がある部品（MAXIMIZER）。ラックは reset のあと、この部品の段ではドライを混ぜない。
+    // 先読み（遅れ）のあるリミッターを足すときは、必ず true を返すこと（DSP 検査 0.7.0 の 4 回目）
+    virtual bool hasCeiling() const { return false; }
     virtual double tailSeconds() const { return 0.0; }
     // 画面用（0..1、ゲートの開き具合・コンプの下げ量など。ないものは -1）
     virtual float meter() const { return -1.0f; }

@@ -17,6 +17,9 @@
 #include "EqParts.h"
 #include "ModParts.h"
 #include "ChorusParts.h"
+#include "PhaserParts.h"
+#include "TapeParts.h"
+#include "RotaryParts.h"
 
 namespace aiofx
 {
@@ -83,6 +86,11 @@ inline const std::vector<Entry>& registry()
         { &Choral::info,         &makeModule<Choral> },           // 44
         { &Ensemble::info,       &makeModule<Ensemble> },         // 45
         { &VintageVibe::info,    &makeModule<VintageVibe> },      // 46
+        // 0.7.0（フェイザー・テープ・ロータリー）
+        { &ClassicPhaser::info,  &makeModule<ClassicPhaser> },    // 47
+        { &SweepPhaser::info,    &makeModule<SweepPhaser> },      // 48
+        { &TapeWobble::info,     &makeModule<TapeWobble> },       // 49
+        { &Rotary::info,         &makeModule<Rotary> },           // 50
     };
     return r;
 }

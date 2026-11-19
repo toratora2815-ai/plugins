@@ -260,6 +260,12 @@ namespace
             { "Lush Chorus",       { { "multichorus", { 1.0f / 3.0f, 0.5f, 0.2f, 0.0f, 0.35f, 0.45f, 0.85f, 0.7f, 0.0f, 0.0f } } } },
             { "Vintage Ensemble",  { { "vibeensemble", { 0.0f, 0.5f, 0.0f, 0.34282f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.64f } } } },
             { "Organ Vibe",        { { "scannervibe", {} } } },
+            // 0.7.0（フェイザー・テープ・ロータリー）
+            { "Orange Phase",      { { "classicph", {} } } },
+            { "Deep Sweep",        { { "sweepph", { 0.0f, 3.0f / 12.0f, 0.42f, 0.0f, 0.4f, 0.5f, 0.35f, 0.65f, 0.5f, 0.0f } } } },
+            { "Worn Tape",         { { "tapewow", { 0.2f, 0.3f, 0.1f, 0.465f, 0.3f, 0.35f, 0.4f, 1.0f } } } },
+            { "Rotary Fast",       { { "rotary", {} } } },
+            { "Rotary Slow",       { { "rotary", { 0.0f, 0.365f, 0.59f, 0.895f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 1.0f, 0.655f } } } },
         };
         return r;
     }

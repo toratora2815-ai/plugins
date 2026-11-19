@@ -1,8 +1,8 @@
-# AIO Effecter（エーアイオー エフェクター）0.6.0
+# AIO Effecter（エーアイオー エフェクター）0.7.0
 
 いろいろなエフェクトを好きな順に並べて使う、ラック型のエフェクトです（Logic のトラックに挿すタイプ。AU）。
 中の部品は、Guitar Rig 7 Pro の部品を 1 つずつ測って、音の動きを合わせ込んで作りました（見た目・名前はオリジナルです）。
-0.1.0 は「響き」と「抑える」から 7 つの部品、0.2.0 で「抑える」の残り（コンプ・トランジェント・マキシマイザーなど）、0.3.0 でリバーブ 9 種類、0.4.0 でディレイ 6 種類（テープエコー・アナログ・ピンポンなど）、0.5.0 で EQ 5 種類と揺れもの 3 種類（トレモロ・リングモジュレーター・フランジャー）、0.6.0 でコーラス系 4 種類（昔のペダルふうフランジャー・コーラス・アンサンブル・オルガンのビブラート）を足しました。これから版を重ねて部品を増やします。
+0.1.0 は「響き」と「抑える」から 7 つの部品、0.2.0 で「抑える」の残り（コンプ・トランジェント・マキシマイザーなど）、0.3.0 でリバーブ 9 種類、0.4.0 でディレイ 6 種類（テープエコー・アナログ・ピンポンなど）、0.5.0 で EQ 5 種類と揺れもの 3 種類（トレモロ・リングモジュレーター・フランジャー）、0.6.0 でコーラス系 4 種類（昔のペダルふうフランジャー・コーラス・アンサンブル・オルガンのビブラート）、0.7.0 でフェイザー 2 種類・テープの揺れ・回るスピーカーを足しました。これから版を重ねて部品を増やします。
 音の処理は、将来 **AIO Guitar のエフェクター欄にもそのまま移せる**形で作ってあります。
 
 ## 使い方
@@ -159,6 +159,22 @@
   - MODE 1〜6（揺れの深さ）、RATE（0.75〜24 Hz）、BLEND（揺れない音を混ぜてコーラスに。0 = 揺れだけ）、COLOR（A / B / C。B・C は深い）
   - SPREAD ON で左右をずらす（WIDTH = 0〜180°）、MIX。STEREO OFF で左右の入口をまとめてから揺らす
 
+### フェイザー・テープ（0.7.0 で追加）
+- **CLASSIC PHASER** … 昔のオレンジ色の箱ふうのフェイザー（ゆったり「シュワー」）
+  - RATE（0.12〜10 Hz、SYNC ON で音符。速くすると揺れは浅くなる＝本物と同じ）、DEPTH（谷の動く幅、最大 4 オクターブ）、FREQUENCY（谷の位置。上は 5 kHz あたりで頭打ち）
+  - NOTCHES（段の数 2〜8。段が多いほど谷が増える。奇数の段は COLOR が低いと低音が少し下がり、COLOR を上げると逆に持ち上がる）、COLOR（くり返し。上げるほど鳴く）、DRY WET（0 でドライが +6 dB = 本物と同じ）
+  - ROTATE（右の揺れを左からずらす。50 % = 同じ）、INVERT（揺れた音の向き）
+- **SWEEP PHASER** … 谷が広い範囲を往復するフェイザー
+  - SWEEP MIN / SWEEP MAX（谷が動く下限 73 Hz〜1.7 kHz・上限 1.9〜20 kHz）、RATE（0.01〜10 Hz）、NOTCHES（段の数 2〜10）、MIX、ROTATE（右を 0〜180° ずらす）
+  - COLOR は谷の形が変わるスイッチ（まだ大まか）。MODE・INVERT は本物を測った範囲では音が変わらなかったので、こちらも変えていません
+- **TAPE WOW** … 古いテープの揺れ・歪み・こもり
+  - WOW（ゆっくりした音程の揺れ。TAPE SPEED で速さ 0.14〜2.8 Hz）、FLUTTER（速い揺れ 8.8 Hz）、SCRAPE（ざらっとした細かい揺れ）
+  - SATURATION（テープの歪み。上げるほど潰れて小さく・暗く）、TAPE AGE（帯域が狭くなる。古いほど雑音も）、STEREO（左右の揺れを少しずらす）、MIX（等パワーで混ぜる）
+- **ROTARY** … 回るスピーカー（オルガンでおなじみの「ウワンウワン」）。高音のホーンと低音のドラムが別々に回る
+  - SPEED（SLOW / FAST。切り替えると T / B ACCEL の速さで加速・減速）、T FAST・T SLOW（ホーンの速さ）、B FAST・B SLOW（ドラムの速さ）
+  - BALANCE（ホーンとドラムの大きさ）、PAN（ホーンとドラムの左右）、DISTANCE（マイクの距離。近いほど音量の揺れが大きい）、T / B SPREAD（左右のマイクの角度）
+  - CAB（ON = キャビの音色。OFF にすると揺れも小さくなる＝本物と同じ）、MIX
+
 ## おすすめ
 - **クリーンのギター**: NOISE GATE（THRESHOLD 20 %）→ TUBE COMP（初期値）→ SPRING（MIX 45 %）。RACKS の「Spring Clean」
 - **ハイゲインの刻み**: いちばん上に NOISE GATE（THRESHOLD 35 %、RELEASE 20 %）。弾き止めでピタッと止まる。RACKS の「Tight High Gain」
@@ -186,6 +202,10 @@
 - **厚いコーラス**: MULTI CHORUS の MODE を LUSH、VOICES 50 %、WIDTH 85 %、MIX 70 %。RACKS の「Lush Chorus」
 - **昔のアンサンブル**: VIBE ENSEMBLE の CHORUS（MIX 50 %）。RACKS の「Vintage Ensemble」。VIBRATO にすると音程が揺れる
 - **オルガンのビブラート**: SCANNER VIBE（初期値 = MODE 4・BLEND 50 % のコーラス寄り）。RACKS の「Organ Vibe」。BLEND 0 で揺れだけ
+- **昔のフェイザー**: CLASSIC PHASER（初期値 = 5 段・ほどよい鳴き）。RACKS の「Orange Phase」。COLOR を下げるとおとなしく、NOTCHES を 4 にすると定番の 4 段
+- **ゆったり深いフェイザー**: SWEEP PHASER の NOTCHES 6 段・SWEEP を広く・RATE ゆっくり。RACKS の「Deep Sweep」
+- **古いテープ**: TAPE WOW（WOW 30 %・FLUTTER 20 %・TAPE AGE 35 %・SATURATION 40 %）。RACKS の「Worn Tape」。ローファイの仕上げにはさらに Retro Retro を
+- **回るスピーカー**: ROTARY（初期値 = FAST）。RACKS の「Rotary Fast」「Rotary Slow」。SPEED をオートメーションで切り替えると、ゆっくり加速・減速する
 
 ## 気をつけること
 - **TUBE COMP の SATURATION・INPUT・OUTPUT は ±48 dB と幅が広い**（本物と同じ）。全部を上げると、とても大きな音になります。
@@ -232,6 +252,14 @@
   3 本とも上げきると揺れた音の中低域が約 +12 dB、VOLUME も上げきると約 +27 dB になります（本物と同じ）。少しずつ上げてください
 - MULTI CHORUS・VIBE ENSEMBLE・SCANNER VIBE は、本物のギター用の入口（左だけ）で測りました。ステレオの音を入れたときは、左の音から左寄りの声、右の音から右寄りの声を作ります
 - SCANNER VIBE はまだ大まかな版です（揺れの幅・音色は 2〜3 dB 以内で合わせましたが、COLOR B / C の音色の違いは細かい測定で詰めます）
+- **CLASSIC PHASER の COLOR を上げきると、鳴きの山が +27 dB になります**（本物と同じ）。DRY WET 0 はドライが +6 dB（本物と同じ）。
+  NOTCHES が奇数（3・5・7 段。初期値の 5 段も）だと、COLOR を上げたときの山は **低音（20〜100 Hz）にも出ます**（COLOR 1 で 20 Hz +20〜26 dB。本物と同じ）。
+  20 Hz より下（直流）は止めてあります。歪みの後ろで COLOR を上げきるときは、出口の音量に気をつけてください
+- SWEEP PHASER の COLOR（ON）と ROTARY はまだ大まかな版です（ROTARY は左右のマイクの違いなどを細かい測定で詰めます）
+- **TAPE WOW は無音でも小さなサーッという音（−66 dBFS）を出します**（本物と同じ。TAPE AGE を上げると別の雑音に変わる）。
+  歪み（SATURATION）を 4 倍の細かさで計算するので、**4 サンプル（0.1 ms）遅れます**（Logic に伝えます）。MIX を 50 % 前後にすると 7 kHz あたりに谷ができます（本物と同じ）
+- **ROTARY の初期値は、1.9 kHz あたりの音が大きく出ます**（キャビの山。−12 dBFS の単音が +1 dBFS まで。本物と同じ）。
+  内蔵ラックの音量はギターで Orange Phase +4.3 dB、Rotary Fast / Slow +5.6 dB、Deep Sweep −0.4 dB、Worn Tape +0.7 dB です（GAIN MATCH を ON にすればそろいます）
 
 ## 入れ方（インストール）
 Releases の latest から `AIOEffecter.zip`（または Actions の Artifacts「AIOEffecter-macOS」）を解凍して:

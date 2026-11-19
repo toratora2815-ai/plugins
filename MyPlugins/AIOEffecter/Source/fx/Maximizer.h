@@ -68,6 +68,7 @@ struct Maximizer final : Module
         k[i] = v; recalc (false);
     }
     int latency() const override { return look + 4 + safe.L; }   // 先読み 353 ＋ 4 倍のクリップ 4 ＋ 天井を守る先読み 72（48 kHz）
+    bool hasCeiling() const override { return true; }   // 天井を守る部品（ラックの reset でドライを混ぜない）
     void process (float* L, float* R, int n) override
     {
         for (int s = 0; s < n; ++s)
