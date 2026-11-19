@@ -137,7 +137,7 @@ inline double nowSec()
     return std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-static const char* kNew[] = { "levelboost", "treblelift" };   // 0.12.0 のペダル 2 つ（前の版の部品は kAll に）
+static const char* kNew[] = { "middrive" };   // 0.13.0 のオーバードライブ（前の版の部品は kAll に）
 
 #include <cstring>
 #include <complex>
@@ -1419,7 +1419,7 @@ static const char* kAll[] = { "gate", "nred", "tubecomp", "limit", "studiovb", "
                               "electricfl", "multichorus", "vibeensemble", "scannervibe",
                               "classicph", "sweepph", "tapewow", "rotary",
                               "morphflt", "howlwah", "vintwah", "customwah", "vowelwah",
-                              "touchflt", "peakflt", "resobank", "dualflt", "speakflt", "ringsweep", "levelboost", "treblelift" };
+                              "touchflt", "peakflt", "resobank", "dualflt", "speakflt", "ringsweep", "levelboost", "treblelift", "middrive" };
 
 
 // ============================================================================

@@ -286,6 +286,9 @@ namespace
             { "Choppy Trem",       { { "ringsweep", { 0.0f, 0.6f, 0.0f, 1.0f / 12.0f, 0.6f, 0.15f, 1.0f / 12.0f, 0.3f, 0.5f } } } },
             { "Level Boost",       { { "levelboost", {} } } },
             { "Treble Lift",       { { "treblelift", {} } } },
+            { "Mid Drive",         { { "middrive", {} } } },
+            { "Mid Push",          { { "middrive", { 0.0f, 0.5f, 1.0f, 0.5f, 0.5f, 0.5f, 1.0f } } } },
+            { "Mid Lead",          { { "middrive", { 0.7f, 0.6f, 0.5f, 0.5f, 0.3f, 0.5f, 1.0f } } } },
         };
         return r;
     }

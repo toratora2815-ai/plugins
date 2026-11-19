@@ -111,6 +111,7 @@ inline const std::vector<Entry>& registry()
         // 0.12.0（足元のペダル）
         { &LevelBoost::info,     &makeModule<LevelBoost> },       // 62
         { &TrebleLift::info,     &makeModule<TrebleLift> },       // 63
+        { &MidDrive::info,       &makeModule<MidDrive> },         // 64（0.13.0）
     };
     return r;
 }

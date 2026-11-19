@@ -170,4 +170,231 @@ private:
     int left = 0;
     St z[2];
 };
+
+// 頭打ち D(u) = u / (1 + |u|^n)^(1/n) ＋ e u の表と、1 次の ADAA（折り返しを減らす）。MID DRIVE・BRICK FUZZ で共通
+//   D は s = |u| / (1 + |u|) の表（8192 点・直線補間）。積分 F(u) = |u| − H(|u|) ＋ e u²/2、H(u) = ∫0^u (1 − D)（有限）を同じ s の double の表で
+//   H は区間ごとに Simpson（8 等分）で積み、最後の区間（u = 8191 → ∞）は漸近の式 1 / (n (n − 1) u^(n−1)) で足す
+//   表は重い（約 1.5 ms・約 96 KB）ので、部品の prepare で作る（オーディオのスレッドで作らない: DSP 検査 0.13.0。前は最初の process で 15 ms 止まった）
+struct PowClipTable
+{
+    static constexpr int kTab = 8192;
+    double n = 2.0, e = 0.0;
+    std::vector<float> T;
+    std::vector<double> H;
+    PowClipTable (double n_, double e_) : n (n_), e (e_), T ((size_t) kTab + 2), H ((size_t) kTab + 2, 0.0)
+    {
+        auto oneMinusD = [this] (double u) { return 1.0 - u / std::pow (1.0 + std::pow (u, n), 1.0 / n); };
+        for (int i = 0; i <= kTab + 1; ++i)
+        {
+            const double s = std::min (1.0, (double) i / kTab);
+            T[(size_t) i] = (float) (s / std::pow (std::pow (1.0 - s, n) + std::pow (s, n), 1.0 / n));
+        }
+        double acc = 0.0, uPrev = 0.0, fPrev = 1.0;
+        for (int i = 1; i < kTab; ++i)
+        {
+            const double s1 = (double) i / kTab, u1 = s1 / (1.0 - s1);
+            const int m = 8; const double h = (u1 - uPrev) / m;
+            double sum = fPrev;
+            for (int j = 1; j < m; ++j) sum += (j % 2 == 1 ? 4.0 : 2.0) * oneMinusD (uPrev + h * j);
+            const double f1 = oneMinusD (u1);
+            sum += f1;
+            acc += sum * h / 3.0;
+            H[(size_t) i] = acc; uPrev = u1; fPrev = f1;
+        }
+        H[(size_t) kTab] = acc + 1.0 / (n * (n - 1.0) * std::pow (uPrev, n - 1.0));
+        H[(size_t) kTab + 1] = H[(size_t) kTab];
+    }
+    // 表の番号（NaN・無限大でも配列の外を読まない: DSP 検査 0.13.0）
+    static inline int index (double f) { return f < (double) kTab ? (int) f : kTab - 1; }
+    inline float raw (float u) const
+    {
+        const float a = std::abs (u), s = a / (1.0f + a), f = s * (float) kTab;
+        const int i = index ((double) f);
+        const float d = T[(size_t) i] + (T[(size_t) i + 1] - T[(size_t) i]) * (f - (float) i);
+        return std::copysign (d, u) + (float) e * u;
+    }
+    inline double anti (double u) const
+    {
+        const double a = std::abs (u), s = a / (1.0 + a), f = s * (double) kTab;
+        const int i = index (f);
+        const double hh = H[(size_t) i] + (H[(size_t) i + 1] - H[(size_t) i]) * (f - (double) i);
+        return a - hh + 0.5 * e * u * u;
+    }
+    // 1 次の ADAA。x1 = 1 つ前の入口（4 倍の中）。差が小さいときは中点の D
+    inline float adaa (float u, double& x1) const
+    {
+        const double x0 = (double) u, d = x0 - x1;
+        const float y = std::abs (d) > 1.0e-3 ? (float) ((anti (x0) - anti (x1)) / d) : raw ((float) (0.5 * (x0 + x1)));
+        x1 = x0;
+        return y;
+    }
+};
+
+// ---- MID DRIVE（Guitar Rig の Skreamer を測って合わせ込み。中音の山のあるオーバードライブ）----
+// 測った結果（cap/amp/Skreamer 35 通り。小さな音の複素の伝達関数をまとめて当てはめた差 rms 0.14 dB、正弦波 5 周波数 × 9 音量の利得 ±0.3 dB 前後・3 次 ±1 dB、
+// ギターの DI の 1/3 オクターブで ±0.5 dB）。形（中は全部 4 倍）:
+//   入口 HP 24.7 Hz → 歪む側: HP（BASS で 5.8 kHz〜58 Hz）× DRIVE（−1.8〜+18.1 dB）→ 頭打ち → 直流止め 3 Hz → LP（DRIVE で 68〜5.9 kHz）
+//                      原音側: × CLEAN（0〜+20 dB、100^v に近い）
+//   → 足して LP 400 Hz × TONE の棚（零 z・極 p）× BRIGHT（0 のときだけ高音を少し下げる棚）× VOLUME（v / 0.582、0 で無音）
+//   頭打ち: D(u) = (u / (1 + |u|^n)^(1/n) + e u) / (1 + e)、n = 2.161、e = 0.00114。入口の目盛り a = 45.39、わずかな非対称 δ = −0.0151（2 次 −44〜−64 dB）
+//   頭打ちは表＋ 1 次の ADAA（PowClipTable）。4 倍だけでは本物より折り返しが多かった（2.5 kHz 0 dBFS で −37〜−46 dB、本物 −50〜−66 dB）
+class MidDrive final : public Module
+{
+public:
+    static float driveDb (float d)
+    {
+        static const float x[6] { 0.0f, 0.09f, 0.25f, 0.5f, 0.75f, 1.0f }, y[6] { -1.808f, 0.0f, 3.196f, 8.192f, 13.117f, 18.104f };
+        return interpTable (x, y, std::clamp (d, 0.0f, 1.0f));
+    }
+    static float driveLpLog2 (float d)
+    {
+        static const float x[6] { 0.0f, 0.09f, 0.25f, 0.5f, 0.75f, 1.0f }, y[6] { 16.0610f, 16.1201f, 16.0167f, 15.8500f, 13.7474f, 12.5383f };
+        return interpTable (x, y, std::clamp (d, 0.0f, 1.0f));
+    }
+    static float bassLog2 (float b)
+    {
+        static const float x[5] { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f }, y[5] { 12.5091f, 10.8576f, 9.1892f, 7.5207f, 5.8475f };
+        return interpTable (x, y, std::clamp (b, 0.0f, 1.0f));
+    }
+    static float toneZLog2 (float t)
+    {
+        static const float x[5] { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f }, y[5] { 9.2415f, 8.9928f, 8.7287f, 8.6674f, 8.6439f };
+        return interpTable (x, y, std::clamp (t, 0.0f, 1.0f));
+    }
+    static float tonePLog2 (float t)
+    {
+        static const float x[5] { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f }, y[5] { 9.2415f, 9.2415f, 9.6995f, 10.8587f, 12.6915f };
+        return interpTable (x, y, std::clamp (t, 0.0f, 1.0f));
+    }
+    static float cleanGain (float c)
+    {
+        c = std::clamp (c, 0.0f, 1.0f);
+        static const float x[4] { 0.25f, 0.5f, 0.75f, 1.0f }, y[4] { -11.374f, 0.0f, 10.066f, 20.031f };
+        const float g25 = kB * dbToGain (y[0]);
+        if (c < 0.25f) return g25 * c / 0.25f;
+        return kB * dbToGain (interpTable (x, y, c));
+    }
+    static float volGain (float v) { return std::clamp (v, 0.0f, 1.0f) / 0.58225f; }
+    static float brightAmount (float v) { return std::clamp ((0.25f - v) / 0.25f, 0.0f, 1.0f); }
+    static const ModuleInfo& info()
+    {
+        static const ModuleInfo i { "middrive", "MID DRIVE", "PEDAL",
+            "Mid-hump overdrive: DRIVE pushes a mid-focused signal into soft clipping, TONE opens the top, BASS lets more lows into the clipping, CLEAN blends the dry signal back in.",
+            {
+                { "DRIVE",  0.09f,     0, [] (float v) { return fmtPct (v); } },
+                { "TONE",   0.5f,      0, [] (float v) { return fmtPct (v); } },
+                { "VOLUME", 0.58225f,  0, [] (float v) { return v <= 0.0005f ? std::string ("OFF") : fmt (gainToDb (volGain (v)), 1, " dB"); } },
+                { "BASS",   0.5f,      0, [] (float v) { return fmtPct (v); } },
+                { "CLEAN",  0.5f,      0, [] (float v) { return fmtPct (v); } },
+                { "BRIGHT", 0.5f,      0, [] (float v) { return v >= 0.25f ? std::string ("ON") : "DARK " + fmtPct (brightAmount (v)); } },
+                { "STEREO", 1.0f,      2, [] (float v) { return std::string (v >= 0.5f ? "ON" : "OFF (mono)"); } },
+            } };
+        return i;
+    }
+    void prepare (double sampleRate, int) override
+    {
+        (void) clip();   // 表はここで作る（オーディオのスレッドで作らない: DSP 検査 0.13.0）
+        sr = sampleRate; fs4 = 4.0 * sr;
+        for (auto* s : { &sLpD, &sB, &sZ, &sP }) s->prepare (sr, 0.03);
+        for (auto* s : { &sG, &sC, &sV, &sBr, &sMono }) s->prepare (sr, 0.02);
+        recalc (true);
+        gIn = tptG (kFin); gLp0 = tptG (kF0); gPb = tptG (kPb); gDc = tptG (3.0);
+        design (cur); tgt = cur; left = 0;
+        reset();
+    }
+    void reset() override { for (auto& o : os) o.reset(); for (auto& st : z) st = {}; }
+    void setKnob (int i, float v) override { if (i < 0 || i >= 7 || same (k[i], v)) return; k[i] = v; recalc (false); }
+    int latency() const override { return 4; }   // 4 倍の上げ下げ
+    bool dryAfterReset() const override { return false; }   // 音色を大きく変える（ドライを漏らさない）
+    void process (float* L, float* R, int n) override
+    {
+        const auto& C = clip();
+        const float dl0 = C.raw (kDelta);
+        for (int s = 0; s < n; ++s)
+        {
+            // 量（1 サンプルずつ）と、周波数（16 サンプルごとに作り直して直線でつなぐ）
+            const float g = sG.next(), c = sC.next(), vol = sV.next(), br = sBr.next(), mono = sMono.next();
+            if (left == 0 && ! (sLpD.settled() && sB.settled() && sZ.settled() && sP.settled()))
+            {
+                for (int i = 0; i < kStep; ++i)
+                    for (auto* sm : { &sLpD, &sB, &sZ, &sP }) { const float b = sm->cur; sm->next(); if (same (b, sm->cur)) sm->cur = sm->target; }
+                design (tgt);
+                for (int q = 0; q < kCo; ++q) inc.v[q] = (tgt.v[q] - cur.v[q]) / (float) kStep;
+                left = kStep;
+            }
+            if (left > 0)
+            {
+                if (--left == 0) cur = tgt;
+                else for (int q = 0; q < kCo; ++q) cur.v[q] += inc.v[q];
+            }
+            const float gB = cur.v[0], gD = cur.v[1], gP = cur.v[2], pz = cur.v[3];
+            const float mid = 0.5f * (L[s] + R[s]);
+            const float in[2] { L[s] + mono * (mid - L[s]), R[s] + mono * (mid - R[s]) };   // STEREO OFF = 左右を混ぜた音を両方に
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                float* io = ch == 0 ? L : R;
+                auto& st = z[ch];
+                float u4[4]; os[ch].up (in[ch], u4);
+                for (auto& x : u4)
+                {
+                    const float xi = hp (st.in, gIn, x);                         // 入口 24.7 Hz
+                    const float u = g * hp (st.bass, gB, xi);                     // BASS の HP × DRIVE
+                    float w = (C.adaa (kA * u + kDelta, st.x1) - dl0) * kOutScale;   // 頭打ち（ADAA。傾き 1 に戻して × kA）
+                    w = hp (st.dc, gDc, w);                                       // 直流止め 3 Hz
+                    w = lp (st.lpd, gD, w);                                       // DRIVE の LP（頭打ちの後ろ）
+                    float y = w + c * xi;                                         // 原音を足す
+                    y = lp (st.lp0, gLp0, y);                                     // 400 Hz
+                    { const float l = lp (st.tone, gP, y); y = l + pz * (y - l); } // TONE の棚 (1 + s/z)/(1 + s/p)
+                    if (br > 0.0f) { const float l = lp (st.br, gPb, y); const float sh = l + kPbZb * (y - l); y += br * (sh - y); }
+                    else lp (st.br, gPb, y);                                      // 状態は回しておく（切り替えでプチッとしないように）
+                    x = vol * y;
+                }
+                io[s] = os[ch].down (u4);
+            }
+        }
+    }
+
+private:
+    // 当てはめた値（sk4.py・sk7.py）
+    static constexpr float kFin = 24.652f, kF0 = 400.275f, kZb = 32288.5f, kPb = 20384.3f, kPbZb = kPb / kZb;
+    static constexpr float kAg = 7.25824f, kB = 0.29391f;            // 歪む側（DRIVE 0.09 のとき）・原音側（CLEAN 0.5 のとき）の利得
+    static constexpr float kA = 45.3907f, kDelta = -0.0150694f;     // 頭打ちの入口の目盛り・非対称
+    static constexpr float kN = 2.16097f, kE = 0.00114262f;          // 頭打ちの形
+    static constexpr float kOutScale = kAg / kA / (1.0f + kE);
+    static constexpr int kStep = 16, kCo = 4;
+    struct Co { float v[kCo] { 0.0f, 0.0f, 0.0f, 1.0f }; };   // BASS の HP・DRIVE の LP・TONE の極（TPT の G）・p/z
+    struct OneSt { float s = 0.0f; };
+    struct St { OneSt in, bass, dc, lpd, lp0, tone, br; double x1 = (double) kDelta; };
+    static const PowClipTable& clip() { static const PowClipTable t ((double) kN, (double) kE); return t; }
+    static inline float lp (OneSt& o, float G, float x) { const float v = G * (x - o.s), y = v + o.s; o.s = flush (y + v); return y; }
+    static inline float hp (OneSt& o, float G, float x) { return x - lp (o, G, x); }
+    float tptG (double f) const { const double gg = std::tan (kPiD * std::min (f, 0.45 * fs4) / fs4); return (float) (gg / (1.0 + gg)); }
+    void recalc (bool snap)
+    {
+        sG.set (dbToGain (driveDb (k[0])) , snap);
+        sLpD.set (driveLpLog2 (k[0]), snap);
+        sZ.set (toneZLog2 (k[1]), snap); sP.set (tonePLog2 (k[1]), snap);
+        sV.set (volGain (k[2]), snap);
+        sB.set (bassLog2 (k[3]), snap);
+        sC.set (cleanGain (k[4]), snap);
+        sBr.set (brightAmount (k[5]), snap);
+        sMono.set (k[6] >= 0.5f ? 0.0f : 1.0f, snap);
+    }
+    void design (Co& o) const
+    {
+        o.v[0] = tptG (std::exp2 ((double) sB.cur));
+        o.v[1] = tptG (std::exp2 ((double) sLpD.cur));
+        const double zz = std::exp2 ((double) sZ.cur), pp = std::exp2 ((double) sP.cur);
+        o.v[2] = tptG (pp);
+        o.v[3] = (float) (pp / zz);
+    }
+    double sr = 48000.0, fs4 = 192000.0;
+    float k[7] { 0.09f, 0.5f, 0.58225f, 0.5f, 0.5f, 0.5f, 1.0f };
+    float gIn = 0.0f, gLp0 = 0.0f, gPb = 0.0f, gDc = 0.0f;
+    Smooth sG, sC, sV, sBr, sMono, sLpD, sB, sZ, sP;
+    Co cur, tgt, inc;
+    int left = 0;
+    St z[2];
+    Oversampler4 os[2];
+};
 } // namespace aiofx
