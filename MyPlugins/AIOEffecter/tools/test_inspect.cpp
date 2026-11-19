@@ -135,7 +135,7 @@ inline double nowSec()
     return std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-static const char* kNew[] = { "morphflt", "howlwah", "vintwah", "customwah", "vowelwah" };   // 0.8.0 のフィルター・ワウ（前の版の部品は kAll に）
+static const char* kNew[] = { "touchflt", "peakflt" };   // 0.9.0 の音量で動くフィルター（前の版の部品は kAll に）
 
 #include <cstring>
 #include <complex>
@@ -339,7 +339,9 @@ static void clickOne (const char* id, int k, float a, float b, float& jump, floa
     jump = drag = base = 0;
     for (int mode = 0; mode < 2; ++mode)
     {
-        auto kv = kvBase.empty() ? defaults (id) : kvBase; kv[(size_t) k] = a;
+        auto kv = kvBase.empty() ? defaults (id) : kvBase;
+        if (kvBase.empty() && std::strcmp (id, "peakflt") == 0) { kv[0] = 0.35f; kv[3] = 0.75f; }   // MIX 0（初期値）は素通しなので、内蔵ラック「Peak Push」の設定から（DSP 検査 0.9.0）
+        kv[(size_t) k] = a;
         auto m = makeSnapped (id, sr, B, kv);
         Sig s = sine (sr, 2.0, 220, amp);
         for (size_t i = 0; i < (size_t) (0.1 * sr); ++i) { s.L[i] *= (float) i / (float) (0.1 * sr); s.R[i] = s.L[i]; }
@@ -1413,7 +1415,8 @@ static const char* kAll[] = { "gate", "nred", "tubecomp", "limit", "studiovb", "
                               "shelfeq", "consoleeq", "parameq", "graphiceq", "scoopeq", "tremolo", "ringmod", "flanger",
                               "electricfl", "multichorus", "vibeensemble", "scannervibe",
                               "classicph", "sweepph", "tapewow", "rotary",
-                              "morphflt", "howlwah", "vintwah", "customwah", "vowelwah" };
+                              "morphflt", "howlwah", "vintwah", "customwah", "vowelwah",
+                              "touchflt", "peakflt" };
 
 
 // ============================================================================

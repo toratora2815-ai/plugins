@@ -16,7 +16,7 @@ AIOEffecterProcessor::AIOEffecterProcessor()
     }
     pGainMatch = apvts.getRawParameterValue (myp::GainMatch::paramId);
     pLinkMatch = apvts.getRawParameterValue ("linkMatch");
-    tVerb = aiofx::typeForId ("studiovb"); tSpring = aiofx::typeForId ("spring"); tDelay = aiofx::typeForId ("twindly"); tLimit = aiofx::typeForId ("limit"); tMax = aiofx::typeForId ("maximizer");
+    tVerb = aiofx::typeForId ("studiovb"); tSpring = aiofx::typeForId ("spring"); tDelay = aiofx::typeForId ("twindly"); tLimit = aiofx::typeForId ("limit"); tMax = aiofx::typeForId ("maximizer"); tPeak = aiofx::typeForId ("peakflt");
     // GAIN MATCH: センド使い（ドライがほぼない）を見分けるつまみ（部品の id、つまみの番号、DRY 型か）
     for (const auto& r : { MixRuleDef { "spacevb", 13, false }, MixRuleDef { "classicvb", 1, false }, MixRuleDef { "shaperoom", 1, true },
                            MixRuleDef { "pickroom", 3, false }, MixRuleDef { "clubverb", 3, false }, MixRuleDef { "digihall", 10, false },
@@ -144,13 +144,13 @@ void AIOEffecterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     const int numCh = juce::jmin (numOut, 2);
     // GAIN MATCH: リバーブ・ディレイを MIX 90〜100 % で使っている（センド使い）なら少しずつ効かなくする。
-    // 最後に効いている段が LIMITER / MAXIMIZER なら上げない（決まり: 最後にリミッターがあるなら limitBoost (0)）
+    // 最後に効いている段が LIMITER / MAXIMIZER / MIX を上げた PEAK FILTER なら上げない（決まり: 最後にリミッターがあるなら limitBoost (0)）
     float amount = 1.0f;
-    int lastType = 0;
+    bool lastLimits = false;   // 最後の段の出口にリミッターがある（LIMITER・MAXIMIZER・MIX を上げた PEAK FILTER）
     for (const auto& sk : audioKnobs)
     {
         if (! sk.on || sk.type == 0) continue;
-        lastType = sk.type;
+        lastLimits = sk.type == tLimit || sk.type == tMax || (sk.type == tPeak && sk.k[3] > 0.0f);
         const int mixIdx = sk.type == tVerb ? 0 : sk.type == tSpring ? 1 : sk.type == tDelay ? 10 : -1;
         if (mixIdx >= 0) amount = juce::jmin (amount, juce::jlimit (0.0f, 1.0f, (1.0f - sk.k[mixIdx]) / 0.1f));
         // 0.3.0 からの響き・ディレイ: MIX 型は (1 − つまみ) / 0.1、DRY 型（ドライの量そのもの）は つまみ / 0.1
@@ -158,7 +158,8 @@ void AIOEffecterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             if (r.type == sk.type)
                 amount = juce::jmin (amount, juce::jlimit (0.0f, 1.0f, r.dryKnob ? sk.k[r.knob] / 0.1f : (1.0f - sk.k[r.knob]) / 0.1f));
     }
-    gainMatch.limitBoost ((lastType == tLimit || lastType == tMax) ? 0.0f : myp::GainMatch::maxBoostDb);
+    // 最後にリミッターがあるなら上げない（PEAK FILTER も出口にリミッター。上げると天井ごと持ち上がる: DSP 検査 0.9.0）
+    gainMatch.limitBoost (lastLimits ? 0.0f : myp::GainMatch::maxBoostDb);
     gainMatch.process (buffer, numCh, getLatencySamples(), amount);
     const bool gmOn = pGainMatch->load() > 0.5f;
     match.process (link, ! gmOn && pLinkMatch->load() > 0.5f, buffer.getArrayOfWritePointers(), numCh, n, getSampleRate());
@@ -271,6 +272,8 @@ namespace
             { "Custom Wah",        { { "customwah", {} } } },
             { "Talk Box",          { { "vowelwah", { 0.0f, 0.5f, 0.49f, 0.5f, 0.0f } } } },
             { "Band Pass",         { { "morphflt", { 0.55f, 0.55f, 0.66f, 0.5f } } } },
+            { "Funk Envelope",     { { "touchflt", {} } } },
+            { "Peak Push",         { { "peakflt", { 0.35f, 0.73138f, 0.61968f, 0.75f, 0.0f } } } },
         };
         return r;
     }

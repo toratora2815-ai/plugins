@@ -382,6 +382,24 @@ aufx Aifx Mypl。2026-11-18 本人「guitar rig 7 pro … いろいろ実験し�
   - 0.9.0 へ回したもの: FORMANT FILTER（並列 BP では 0.9 dB、形がまだ分からない）、PEAK FILTER（PUMP が音量で動くらしい = 静かな測り方では決まらない。KILL は 1.76 × (1 − BP) の形）、
     AUTO FILTER・DOPPEL FILTER・FILTERBANK
 
+## 0.9.0（2026-11-19）音量で動くフィルター（fx/FilterParts2.h）
+- 測る信号は dynS（1 kHz の音量の階段 −60〜0 dBFS 0.15 秒ずつ・段 −40 → −10 → −40 / −30 → −6 → −30・ピンクノイズ −60 / −40 / −20 dBFS・DI）。list25〜27
+- 比べ方: 階段の 1 kHz の複素の利得から角を逆算（afstair.py）、段で角を 1 ms ごとに追う（afstep.py）、ピンクノイズの区間で 2 次に当てはめ（afdyn.py・pklow.py）、
+  自作は libmodi で同じ dynS を通す（tfcmp.py・tfstep.py・pfcmp.py・pflim.py）
+- TOUCH FILTER = Auto Filter: 山を追う（ATTACK 9.5 × 13.6^A ms、RELEASE 表 75 / 169 / 322 / 388 ms）→ dB → c = clip(((L − T) / 12.3)^0.62 ＋ o(OFFSET), 0, 1)、
+  T = −19.3 − 20.7 SENS、記録は c = 1 になる音量で頭打ち（本物は大きな音のあとすぐ戻る）。角 = 46 × 3.65^RANGE ... 952 × 4.08^RANGE（対数で c）、
+  DOWN は 2727 → 272 Hz（30 ms でつなぐ）。分子は MODE の表（角 90 Hz と 1.8 kHz の 2 組を角で補間）、Q も 2 組。
+  階段は 1 dB 前後、ATTACK / RELEASE の 10〜90 % はほぼ本物どおり。合っていない所: DOWN の曲線（本物はゆっくり）、OFFSET 0.5 以上の低い所の滑らかな立ち上がり
+- PEAK FILTER = Peak Filter: 静かな所ではベル型 1 本（山の高さ R、幅 κ、base）× PUMP の音量。KILL は 1.76 (1 − d BP)。最後にリミッター（天井 0.655、効き 0.2 ms、戻り 0.3 秒）。
+  49 通りで中央 0.11 dB・いちばん悪い所 1.5 dB。リミッターの効き始め・戻りもほぼ本物どおり
+- まだ: FORMANT FILTER（並列 BP で 0.9 dB）、DOPPEL FILTER、FILTERBANK
+- **DSP 検査 1 回目（0.9.0）「渡してよい」**（発振・NaN・メモリの誤り・遅れの申告違いなし。ASan / UBSan 誤り 0）→ 勧められた所を直した:
+  1. README「出口はいつも −3.7 dBFS」→ 先読みのないリミッターなので音の頭は 1 ms ほど超える（Peak Push・−6 dBFS のギターで +1.5 dBFS、最悪 0 dBFS 入力で +13.8 dBFS が 1 ms 未満）
+  2. GAIN MATCH: 最後の段が MIX を上げた PEAK FILTER のときも limitBoost(0)（PluginProcessor の lastLimits。上げると天井ごと持ち上がる）
+  3. FREQ の表示を実際に山が来る周波数に（WahPedal::digitalHz。0.9 で 11.2 → 9.67 kHz）。KILL ON のときは FREQ を上げきっても「OFF」と出さない（高い所が削れるため）
+  4. test_inspect の click で peakflt は「Peak Push」の設定から（MIX 0 は素通しで何も測れていなかった）→ FREQ 5.5・EDGE 6.4・PUMP 4.0・MIX 3.4・KILL 2.0
+  そのまま（任意）: TOUCH FILTER は大きな入力で ATTACK を最短にすると角が 0.1〜0.3 ms で一気に動き、音の頭に短い高い音（山を直線の大きさで追うため。本物の 0 / +12 dBFS の段で比べてから）
+
 ## 次に
 - 部品を足す（全部の記録が cap/ にある）: アンプ（Fire Seeker・Jump・ICM の新しいアンプ）とキャビ、歪み、揺れもの、フィルター、ピッチ。足すたびに Registry の後ろへ
 - AIO Guitar のエフェクター欄へ移す（本人の将来の希望）

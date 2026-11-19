@@ -21,6 +21,7 @@
 #include "TapeParts.h"
 #include "RotaryParts.h"
 #include "FilterParts.h"
+#include "FilterParts2.h"
 
 namespace aiofx
 {
@@ -98,6 +99,8 @@ inline const std::vector<Entry>& registry()
         { &VintageWah::info,     &makeModule<VintageWah> },       // 53
         { &CustomWah::info,      &makeModule<CustomWah> },        // 54
         { &VowelWah::info,       &makeModule<VowelWah> },         // 55
+        { &TouchFilter::info,    &makeModule<TouchFilter> },      // 56
+        { &PeakFilter::info,     &makeModule<PeakFilter> },       // 57
     };
     return r;
 }

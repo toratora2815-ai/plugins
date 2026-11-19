@@ -79,7 +79,7 @@ private:
     std::array<std::array<std::atomic<float>*, aiofx::kMaxKnobs>, aiofx::kSlots> pKnob {};
     std::atomic<float>* pGainMatch = nullptr;
     std::atomic<float>* pLinkMatch = nullptr;
-    int tVerb = 0, tSpring = 0, tDelay = 0, tLimit = 0, tMax = 0;   // GAIN MATCH の判断に使う部品の番号
+    int tVerb = 0, tSpring = 0, tDelay = 0, tLimit = 0, tMax = 0, tPeak = 0;   // GAIN MATCH の判断に使う部品の番号
     struct MixRuleDef { const char* id; int knob; bool dry; };
     struct MixRule { int type, knob; bool dryKnob; };
     std::vector<MixRule> mixRules;   // 0.3.0 からの響き・ディレイの MIX / DRY のつまみ（GAIN MATCH の amount）
