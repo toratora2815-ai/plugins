@@ -9,41 +9,55 @@
 - 画面の操作（マウス・キーボード）はしない。Logic も開かない
 - 自動実行（launchd）の登録・削除もしない（本人がやる）
 
+## 許可の確認で止まらないために（いちばん大事）
+朝は本人がいないので、許可の確認が出るとそこで止まって報告が出ない（2026-11-19 の朝は、変数を使ってつないだ `cat` で止まった）。
+- ファイルを読むのは **Read・Glob・Grep の道具だけ**。Bash の `cat`・`ls`・`head`・`grep` は使わない
+- Bash で使ってよいのは次の 5 つだけ。**形を変えない**（前に `cd` を付けない、`;` や `&&` でつながない、変数や `$( )` を使わない。作業フォルダはもう /Users/torsas/plugins）
+  1. `bash tools/health-check/wait-nightly.sh`（run_in_background。夜の測定が終わるまで待つ）
+  2. `bash tools/health-check/nightly.sh --nightly`（run_in_background。測る）
+  3. `launchctl print gui/501/com.myplugins.health-check`（3 時の自動実行の登録があるか）
+  4. `build/health/hc run <コード> <検査> build/health/hc-check.json --seed <番号>`（1 つだけ測り直す。`--set <番号>` を足してもよい）
+  5. `bash tools/health-check/notify.sh "<1 行の結論>"`（Mac に通知）
+- 報告は **Write の道具**で `build/health/reports/<日付>.md` に書く
+- これ以外のコマンドが要りそうなときは使わずに、「確かめられなかった」と報告に書く
+- 許可は /Users/torsas/plugins/.claude/settings.local.json に入っている（足すのは本人が決める）
+
 ## 手順
 1. `build/health/reports/<今日の YYYY-MM-DD>.md` がもうあれば、「今日はもう報告済み」と 1 行書いて終わる
 2. `build/health/nightly-status.txt` を読む（`DATE=` が測った日、`STATUS=` が様子）
    - `DATE` が今日で `STATUS=running` … まだ測っている（Logic が鳴っていて待っていることもある）。
-     `bash -c 'for i in $(seq 1 90); do pgrep -f "nightly.sh --nightly" >/dev/null || exit 0; sleep 60; done'` を
-     **run_in_background で** 動かし、終わりの通知を待ってから読み直す（待っている間に何度も確認しない）。90 分たっても終わらなければ、その旨を報告して終わる
+     `bash tools/health-check/wait-nightly.sh` を **run_in_background で** 動かし、終わりの通知を待ってから読み直す
+     （待っている間に何度も確認しない）。90 分たっても終わらなければ、その旨を報告して終わる
    - `DATE` が今日でない・ファイルがない … 3 時に測っていない。
-     `launchctl print gui/$(id -u)/com.myplugins.health-check` で登録があるか確かめる（なければ報告の最後に
+     `launchctl print gui/501/com.myplugins.health-check` で登録があるか確かめる（なければ報告の最後に
      「毎晩 3 時に測るには、ターミナルで `bash ~/plugins/tools/health-check/install-nightly.sh` を 1 回実行してね」と書く）。
      それから `bash tools/health-check/nightly.sh --nightly` を **run_in_background で** 実行し、終わりの通知を待ってから読み直す（10〜60 分）
    - `STATUS=skipped` … `REASON=` を 1 行報告して終わる（通知はしない。報告ファイルは書く）
    - `STATUS=failed` … `REASON=` と `RUN=` の `.log` の最後の行を報告して終わる（通知する）
    - `STATUS=done` … `RUN=` が今夜の結果、`PREV=` が前回（全部を測った回）。`LOGIC=` は Logic の様子（開いていたら CPU の数値は少し高めに出ることがある）
-3. `RUN/summary.md` を読む。`PREV` があれば `PREV/summary.json` と `RUN/summary.json` を比べて、次を見つける
+3. `RUN/summary.md` を Read で読む。`PREV` があれば `PREV/summary.md`（細かくは `summary.json`）も Read で読んで比べ、次を見つける
    - 新しく出た「異常」「注意」、消えたもの（直ったもの）
    - CPU 平均が 30% 以上増えたプラグイン、遅れ（latency）が変わったプラグイン、入っている版が変わったプラグイン
 4. `tools/health-check/KNOWN.md` に「仕様」として載っているものは、調べ直さずに件数だけ数える
 5. 残った「異常」「注意」を 1 つずつ調べる
    - 細かい数値は `RUN/raw/<コード>-<検査>.json`（ランダム設定・保存・GAIN MATCH は、そのときのつまみの値も入っている）、落ちた・固まったときの最後の様子は `.json.log`
    - プラグインのコードは `MyPlugins/<フォルダ>/Source`、共通部品は `MyPlugins/Shared`。説明は各フォルダの `README.md`・`NOTES.md`
-   - 確かめたいときは、1 つだけ測り直してよい: `build/health/hc run <コード> <検査> /tmp/hc-check.json --seed <番号> [--set <番号>]`
+   - 確かめたいときは、1 つだけ測り直してよい: `build/health/hc run <コード> <検査> build/health/hc-check.json --seed <番号> [--set <番号>]`。
+     結果は `build/health/hc-check.json` を Read で読む（/tmp は作業フォルダの外なので、読むときに許可の確認が出る）
    - `.claude/agents/dsp-inspector.md`（DSP 検査係）のチェック項目を参考にする
    - ランダム設定の「15 秒聞いても減らない」は、raw の `tail_mid_max_db`（止めて 3〜9 秒の山）と `tail_late_max_db`（9〜15 秒の山）を見る。
      間隔の長いエコーで減っている途中のものは、検査がもう数えない（2026-11-18 から）。FEEDBACK が 100% 未満なのに減らないものは仕様扱いにしない（KNOWN.md の Echo Drift の行）
    - CPU の「重い」「ときどき重くなる」は、ほかの作業で Mac が混んでいると大きめに出る（summary.md の「Mac の混み具合」、raw の `load_avg`）。
-     `build/health/hc run <コード> basic /tmp/hc-check.json` で測り直し、空いている時にも出たときだけ不具合にする
+     `build/health/hc run <コード> basic build/health/hc-check.json --seed <番号>` で測り直し、空いている時にも出たときだけ不具合にする
      （2026-11-11 の初回は負荷平均 16〜19 で、Lumen Rooms 73% → 空いている時 14%、Hush Field 44〜53% → 15〜17% だった）
    - 判断は次の 3 つのどれか
      - **不具合**（直したほうがいい）… Logic でどう困るか、原因の場所（ファイル:行）、直し方（1〜2 行）
      - **仕様**（README・NOTES に書いてある、または音作りとして意図した動き）… 理由 1 行。KNOWN.md に足す案も書く（足すのは本人が OK してから）
      - **検査の勘違い** … 理由 1 行と、検査ツール（tools/health-check/hc.cpp）をどう直せばいいか
    - 決めきれないものは「様子見」にして、何を確かめれば決まるかを書く
-6. 報告を `build/health/reports/<YYYY-MM-DD>.md` に書き、最後のメッセージにも同じ内容をそのまま出す
+6. 報告を Write の道具で `build/health/reports/<YYYY-MM-DD>.md` に書き、最後のメッセージにも同じ内容をそのまま出す
 7. 「直したほうがいいもの」が 1 つ以上あった朝だけ、Mac に通知する（1 行の結論）。問題なしの朝は通知しない（報告は残す）:
-   `osascript -e 'display notification "<結論>" with title "自作プラグイン健康診断"'`
+   `bash tools/health-check/notify.sh "<結論>"`
 
 ## 報告の形（短く。数字は大事なものだけ）
 ```
