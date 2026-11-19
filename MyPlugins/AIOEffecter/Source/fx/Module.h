@@ -84,18 +84,28 @@ inline std::string fmtHz (float hz)
 inline std::string fmtPct (float v01) { return fmt (v01 * 100.0f, 0, " %"); }
 
 // ---- 小さい道具 ----
+// 小数が同じか（== の警告を避ける書き方）
+inline bool same (float a, float b) { return ! (a < b || b < a); }
+
 // 1 次のなめらか（つまみの急な変化をならす）。目標へ時定数 tau 秒で近づく
 struct Smooth
 {
     float cur = 0.0f, target = 0.0f, a = 0.0f;
     void prepare (double sr, double tau) { a = (float) std::exp (-1.0 / (std::max (1.0e-4, tau) * sr)); }
     void set (float t, bool snap = false) { target = t; if (snap) cur = t; }
-    float next() { cur = target + (cur - target) * a; return cur; }
+    // float では目標の手前（1 の近くで約 3e-5）で値が動かなくなり settled にならない → 動かなくなったら 1 刻み（ulp）ずつ目標へ近づける
+    // （settled を見て計算を止める部品が、いつまでも作り直していた・STEREO OFF の片側計算に戻れなかった: DSP 検査 0.12.0 / 0.14.0）。
+    // 一気に目標へそろえると、サンプル数で持っている遅れ（DUAL DELAY の TIME など）が数〜数百サンプル飛んでプチッと鳴った（DSP 検査 0.14.0 の 2 回目）
+    float next()
+    {
+        const float prev = cur;
+        cur = target + (cur - target) * a;
+        if (same (prev, cur) && ! same (cur, target)) cur = std::nextafter (cur, target);
+        return cur;
+    }
     bool settled() const { return std::abs (cur - target) < 1.0e-6f; }
 };
 
-// 小数が同じか（== の警告を避ける書き方）
-inline bool same (float a, float b) { return ! (a < b || b < a); }
 
 // 小さすぎる値（デノーマル）を 0 に
 inline float flush (float x) { return std::abs (x) < 1.0e-20f ? 0.0f : x; }

@@ -397,4 +397,136 @@ private:
     St z[2];
     Oversampler4 os[2];
 };
+
+// ---- BRICK FUZZ（Guitar Rig の Fuzz を測って合わせ込み。矩形波まで潰れるファズ）----
+// 測った結果（cap/amp/Fuzz 25 通り）: 強く潰れた出口は 18 kHz まで矩形波そのもの（倍音が 1/k から 0.4 dB 以内）= 頭打ちの後ろに音色のフィルターはない（5.7 Hz の直流止めだけ: DSP 検査 0.14.0）。
+//   形（中は全部 4 倍）: HP（BASS で 3.3 kHz〜11 Hz）× LP（TREBLE で 8.4 Hz〜31 kHz）× FUZZ（24.1 ＋ 24.9 × FUZZ dB）→ 頭打ち → × VOLUME
+//   小さな音の形 16 通りで rms 0.05〜0.4 dB（FUZZ 1 は頭打ちが近く 0.7）。頭打ち D(u) = u / (1 + |u|^n)^(1/n)、n = 8.07（硬い）、目盛り a = 26.49、非対称 δ = −0.141（2 次）。
+//   正弦波 5 周波数 × 9 音量で利得 ±0.2 dB・3 次 1〜3 dB、ギターの DI の 1/3 オクターブで ±0.2 dB（TREBLE 0 の 12.5 kHz だけ −1.8）
+//   VOLUME: .25 / .5 / .694 / .75 / 1 で −18.7 / −7.5 / 0 / +1.9 / +10.7 dB、0 で無音。STEREO 0（初期値）= 左右を混ぜてから歪ませる（本物の初期値もモノ）
+class BrickFuzz final : public Module
+{
+public:
+    static float fuzzDb (float f) { return 24.137f + 24.947f * std::clamp (f, 0.0f, 1.0f); }
+    static float bassLog2 (float b)
+    {
+        static const float x[5] { 0.0f, 0.25f, 0.50001f, 0.75f, 1.0f }, y[5] { 11.6937f, 9.3335f, 6.9868f, 4.8394f, 3.4128f };
+        return interpTable (x, y, std::clamp (b, 0.0f, 1.0f));
+    }
+    static float trebleLog2 (float t)
+    {
+        static const float x[6] { 0.0f, 0.25f, 0.5f, 0.60663f, 0.75f, 1.0f }, y[6] { 3.0704f, 3.8176f, 6.0682f, 7.4919f, 9.8522f, 14.9180f };
+        return interpTable (x, y, std::clamp (t, 0.0f, 1.0f));
+    }
+    static float volGain (float v)
+    {
+        v = std::clamp (v, 0.0f, 1.0f);
+        static const float x[5] { 0.25f, 0.5f, 0.69398f, 0.75f, 1.0f }, y[5] { -18.741f, -7.470f, 0.0f, 1.879f, 10.678f };
+        if (v < 0.25f) return dbToGain (y[0]) * v / 0.25f;
+        return dbToGain (interpTable (x, y, v));
+    }
+    static const ModuleInfo& info()
+    {
+        static const ModuleInfo i { "brickfuzz", "BRICK FUZZ", "PEDAL",
+            "Square-wave fuzz: FUZZ sets how hard it slams into the clipper, BASS and TREBLE shape what goes in (after the fuzz only a DC blocker). STEREO OFF mixes left and right before the fuzz.",
+            {
+                { "FUZZ",   0.70833f, 0, [] (float v) { return fmtPct (v); } },
+                { "BASS",   0.50001f, 0, [] (float v) { return fmtPct (v); } },
+                { "TREBLE", 0.60663f, 0, [] (float v) { return fmtPct (v); } },
+                { "VOLUME", 0.69398f, 0, [] (float v) { return v <= 0.0005f ? std::string ("OFF") : fmt (gainToDb (volGain (v)), 1, " dB"); } },
+                { "STEREO", 0.0f,     2, [] (float v) { return std::string (v >= 0.5f ? "ON" : "OFF (mono)"); } },
+            } };
+        return i;
+    }
+    void prepare (double sampleRate, int) override
+    {
+        (void) clip();   // 表はここで作る（オーディオのスレッドで作らない）
+        sr = sampleRate; fs4 = 4.0 * sr;
+        for (auto* s : { &sB, &sT }) s->prepare (sr, 0.03);
+        for (auto* s : { &sG, &sV, &sMono }) s->prepare (sr, 0.02);
+        gDc = tptG (5.7);   // 頭打ちの後ろの直流止め（本物は止めたあと約 26 ms で戻る = 5.6〜5.75 Hz の 1 次の HP）
+        recalc (true);
+        design (cur); tgt = cur; left = 0;
+        reset();
+    }
+    void reset() override { for (auto& o : os) o.reset(); for (auto& st : z) st = {}; }
+    void setKnob (int i, float v) override { if (i < 0 || i >= 5 || same (k[i], v)) return; k[i] = v; recalc (false); }
+    int latency() const override { return 4; }   // 4 倍の上げ下げ
+    bool dryAfterReset() const override { return false; }
+    void process (float* L, float* R, int n) override
+    {
+        const auto& C = clip();
+        const float d0 = C.raw (kDelta);
+        const int nCh = (sMono.settled() && sMono.target >= 0.999f) ? 1 : 2;
+        for (int s = 0; s < n; ++s)
+        {
+            const float g = sG.next(), vol = sV.next(), mono = sMono.next();
+            if (left == 0 && ! (sB.settled() && sT.settled()))
+            {
+                for (int i = 0; i < kStep; ++i)
+                    for (auto* sm : { &sB, &sT }) { const float b = sm->cur; sm->next(); if (same (b, sm->cur)) sm->cur = sm->target; }
+                design (tgt);
+                for (int q = 0; q < kCo; ++q) inc.v[q] = (tgt.v[q] - cur.v[q]) / (float) kStep;
+                left = kStep;
+            }
+            if (left > 0)
+            {
+                if (--left == 0) cur = tgt;
+                else for (int q = 0; q < kCo; ++q) cur.v[q] += inc.v[q];
+            }
+            const float gB = cur.v[0], gT = cur.v[1];
+            const float mid = 0.5f * (L[s] + R[s]);
+            const float in[2] { L[s] + mono * (mid - L[s]), R[s] + mono * (mid - R[s]) };
+            for (int ch = 0; ch < nCh; ++ch)
+            {
+                auto& st = z[ch];
+                float u4[4]; os[ch].up (in[ch], u4);
+                for (auto& x : u4)
+                {
+                    float u = x - lp (st.bass, gB, x);            // BASS の HP
+                    u = lp (st.treb, gT, u);                       // TREBLE の LP
+                    float w = C.adaa (kA * g * u + kDelta, st.x1) - d0;         // 頭打ち（ADAA）
+                    w -= lp (st.dc, gDc, w);                                     // 直流止め 5.7 Hz（δ の非対称で出る直流を本物どおり止める）
+                    x = w * (vol / kA);
+                }
+                (ch == 0 ? L : R)[s] = os[ch].down (u4);
+            }
+            if (nCh == 1) R[s] = L[s];
+        }
+        // STEREO OFF のまま止まっている間は左だけ計算して右へ写す（CPU が約半分）。右の中身も左にそろえておく（ON に戻したとき続きから）
+        if (nCh == 1) { z[1] = z[0]; os[1] = os[0]; }
+    }
+
+private:
+    static constexpr float kA = 26.4857f, kDelta = -0.140694f;
+    static constexpr double kN = 8.07451;
+    static constexpr int kStep = 16, kCo = 2;
+    struct Co { float v[kCo] { 0.0f, 0.0f }; };   // BASS の HP・TREBLE の LP（TPT の G）
+    struct OneSt { float s = 0.0f; };
+    struct St { OneSt bass, treb, dc; double x1 = (double) kDelta; };
+    static const PowClipTable& clip() { static const PowClipTable t (kN, 0.0); return t; }
+    static inline float lp (OneSt& o, float G, float x) { const float v = G * (x - o.s), y = v + o.s; o.s = flush (y + v); return y; }
+    float tptG (double f) const { const double gg = std::tan (kPiD * std::min (f, 0.45 * fs4) / fs4); return (float) (gg / (1.0 + gg)); }
+    void recalc (bool snap)
+    {
+        sG.set (dbToGain (fuzzDb (k[0])), snap);
+        sB.set (bassLog2 (k[1]), snap);
+        sT.set (trebleLog2 (k[2]), snap);
+        sV.set (volGain (k[3]), snap);
+        sMono.set (k[4] >= 0.5f ? 0.0f : 1.0f, snap);
+    }
+    void design (Co& o) const
+    {
+        o.v[0] = tptG (std::exp2 ((double) sB.cur));
+        o.v[1] = tptG (std::exp2 ((double) sT.cur));
+    }
+    double sr = 48000.0, fs4 = 192000.0;
+    float k[5] { 0.70833f, 0.50001f, 0.60663f, 0.69398f, 0.0f };
+    float gDc = 0.0f;
+    Smooth sG, sV, sMono, sB, sT;
+    Co cur, tgt, inc;
+    int left = 0;
+    St z[2];
+    Oversampler4 os[2];
+};
 } // namespace aiofx
