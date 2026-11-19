@@ -508,6 +508,30 @@ aufx Aifx Mypl。2026-11-18 本人「guitar rig 7 pro … いろいろ実験し�
   GAIN MATCH の K 特性と聞こえる所の差 0.1 dB 以内、19.2 kHz より上は本物より小さい、元の音の漏れ（搬送波の平均）がレートでそろう（697 Hz・FM 1 で −0.274 / −0.253）。
   任意の 1 か所: 帰還のローパスを min(3000, 0.12 sr)（12 kHz より下の変わったレートでも安定。44.1 kHz より上では同じ）。MODE LOW・FM 1 の折れ目のカチッ（−40〜−48 dBFS）は本物の矩形 LFO の角と同じくらい
 
+## 0.12.0（2026-11-20）ペダル: ブースター 2 つ（fx/PedalParts.h）
+- 62 LEVEL BOOST = Gain Booster、63 TREBLE LIFT = Treble Booster。記録 cap/amp/GainBooster 6 通り・TrebleBooster 11 通り（ampS: sweep70 / sweep40 = 小さな音の伝達関数、
+  sin_<82.41 / 196 / 440 / 1000 / 2500>_<−48〜0 dBFS 9 段>、burst6 / burst30、di 12 秒）。比べる道具は scratchpad/ped（pedlib.cpp・bcmp.py・tbjoint2.py・lpscan.py）
+- **LEVEL BOOST**: どの周波数も平ら（±0.00 dB）、利得 = 30 × BOOST dB。出口の振れ 9（+19.1 dBFS）までは 1 ビットも歪まず、そこから y = 9 ＋ tanh(|x| − 9) で 10（+20 dBFS）へ頭打ち
+  （振れ 13.3 / 15.8 / 31.6 で 3 次・5 次が本物と 0.1〜0.9 dB）。歪むので 4 倍の中（遅れ 4、実際 4.17 サンプル）。
+  本物との差: 6 通りの小さな音の伝達関数 ±0.00 dB（16 kHz まで）、正弦波の利得 ±0.02 dB。DI の波形の差 −30 dB は 4 倍のフィルターの位相（高い所で群遅延が増える。大きさは 23 kHz まで ±0.002 dB）。
+  強く頭打ちさせると下げるフィルターで山が少し超える（2.5 kHz 0 dBFS・BOOST 1 で 11.7。本物も 10.3 まで超える）。折り返しは本物 −51.5 dB・こちら −72.6 dB
+- **TREBLE LIFT**: 0 dBFS・+36 dB の持ち上げでも歪まない = 線形。H = (fin / 26.11) × HP(fin) × LP(fLP)。
+  fin（BOOST 0 / .25 / .315 / .5 / .75 / 1）= 26.1 / 82.8 / 111.9 / 263.3 / 847.5 / 2836 Hz、fLP（BRIGHT 0 / .25 / .5 / .603 / .75 / 1）= 849 / 1800 / 3961 / 5611 / 9611 / 32969 Hz（どちらも 2 を底にした対数で補間）。
+  本物の高音はアナログの 1 次のローパスより少しだけ高い（16 kHz で +0.2〜0.3 dB）。ふつうの双一次の LP だと 16 kHz で 3.7 dB 足りなかったので、
+  LP は「極 1 つ（p = exp(−ωc)）＋零 2 つ」の 2 次の式で、DC・7.2 kHz・ナイキストの 3 点の大きさを「アナログ × 1.716 (min(f, 24 kHz) / 24 kHz)² dB の持ち上げ」に合わせて、零を最小位相に分ける（Vicanek の matched の考え方。閉じた式、16 サンプルごとに作り直して 1 サンプルずつ直線でつなぐ）。
+  11 通りをまとめて当てはめた差: 1/24 オクターブで 40 Hz〜18 kHz の rms 0.018 dB・最大 0.16 dB（18 kHz）。位相の差は 0.5〜0.67 サンプルの遅れだけ（本物のほうが遅い。直線の位相 = 聞こえない）。
+  22.05〜384 kHz × fLP 800 Hz〜40 kHz で式が成り立つ（disc ≥ 0）こと、目標との差 0.5 dB 以内（48 kHz）を確かめた
+- 自己検査（test_inspect）: info・block（差 0）・reset（新品と同じ）・rates（44.1〜192 kHz で NaN 0。山は LEVEL BOOST +24.8 dBFS = 白い雑音を +30 dB で頭打ちさせたときの下げるフィルターの行き過ぎ、TREBLE LIFT +31.9 dBFS = +40 dB の持ち上げ）・
+  lat（LEVEL BOOST 申告 4 / 実際 4.17、TREBLE LIFT 0）・click1（2.0 以下）・CPU 0.12 % / 0.04 %
+- 出口の上限（DSP 検査 0.12.0）: LEVEL BOOST は下げるフィルターの |h| の和 3.826 から最大 38.3（+31.7 dBFS。わざと作った最悪の形で 33.5）。実際の音では DI 山 −0.8 dBFS・BOOST 1 で 10.83（+20.7 dBFS）、
+  2.5 kHz 0 dBFS で 11.67（本物 10.29）、7 kHz 0 dBFS で 16.1。1 倍で最後に抑えると折り返しが戻るのでそのまま（本物も超える）。折り返し（48 kHz・BOOST 1）1 kHz −85 / 3 kHz −68 / 7 kHz −47 dB
+- **DSP 検査 1 回目（0.12.0）「直してから」**: LEVEL BOOST が dryAfterReset を上書きしていなかった → ホストの reset のあと 15 ms「上げていない音」になり、初期値で −9.4 dB・BOOST 1 で −22.6 dB 落ちた
+  → dryAfterReset() = false（MORPH・DUAL FILTER と同じ）で −0.8 dB・0 ms。TREBLE LIFT の Smooth が float で目標の手前（48 kHz で約 7e-4）に止まって settled にならず、
+  16 サンプルごとの作り直しが永遠に続いた（CPU 0.045 → 0.059 %、音は無害）→ 値が動かなくなったら目標へ。
+  ラックの「壊れた」の目安（Rack.h、部品の出口）を ±1000（+60 dBFS）→ ±1e6（+120 dBFS）: LEVEL BOOST 1 → TREBLE LIFT 1・BRIGHT 1 で DI 山 −0.8 dBFS の正しい音が引っかかり、12 秒に 46 回 reset されていた。
+  README に、2 つを重ねて上げきると出口の +24 dBFS の頭打ちで硬く歪む（8〜46 %）こと・ブースターとして使うときは GAIN MATCH を OFF にすることを足した。
+  そのまま（範囲外）: 同じ「settled にならない」判定が SpringReverb.h・StudioReverb.h・DynEngine.h・FilterParts3.h にもある（CPU だけ。後で Smooth をまとめて直す）
+
 ## 次に
 - 部品を足す（全部の記録が cap/ にある）: アンプ（Fire Seeker・Jump・ICM の新しいアンプ）とキャビ、歪み、揺れもの、フィルター、ピッチ。足すたびに Registry の後ろへ
 - AIO Guitar のエフェクター欄へ移す（本人の将来の希望）

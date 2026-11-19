@@ -24,6 +24,7 @@
 #include "FilterParts2.h"
 #include "FilterParts3.h"
 #include "ModParts2.h"
+#include "PedalParts.h"
 
 namespace aiofx
 {
@@ -107,6 +108,9 @@ inline const std::vector<Entry>& registry()
         { &DualFilter::info,     &makeModule<DualFilter> },       // 59
         { &SpeakFilter::info,    &makeModule<SpeakFilter> },      // 60
         { &RingSweep::info,      &makeModule<RingSweep> },        // 61
+        // 0.12.0（足元のペダル）
+        { &LevelBoost::info,     &makeModule<LevelBoost> },       // 62
+        { &TrebleLift::info,     &makeModule<TrebleLift> },       // 63
     };
     return r;
 }

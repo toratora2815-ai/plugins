@@ -137,7 +137,7 @@ inline double nowSec()
     return std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-static const char* kNew[] = { "ringsweep" };   // 0.11.0 のリングモジュレーター（前の版の部品は kAll に）
+static const char* kNew[] = { "levelboost", "treblelift" };   // 0.12.0 のペダル 2 つ（前の版の部品は kAll に）
 
 #include <cstring>
 #include <complex>
@@ -1199,7 +1199,7 @@ static void modeEngine()
         std::printf ("\n");
     }
     // 広い範囲のランダム（つまみの表がどんな値でも）
-    std::printf ("== エンジンの値をランダムに（広め 3000 通り）: NaN・+24 dBFS 超え・1000 超え（ラックが部品を reset する大きさ）==\n");
+    std::printf ("== エンジンの値をランダムに（広め 3000 通り）: NaN・+24 dBFS 超え・1000 超え（0.11.0 までラックが部品を reset した大きさ。0.12.0 から 1e6）==\n");
     {
         std::mt19937 g (42); std::uniform_real_distribution<float> u (0, 1);
         auto R = [&] (float a, float b) { return a + (b - a) * u (g); };
@@ -1419,7 +1419,7 @@ static const char* kAll[] = { "gate", "nred", "tubecomp", "limit", "studiovb", "
                               "electricfl", "multichorus", "vibeensemble", "scannervibe",
                               "classicph", "sweepph", "tapewow", "rotary",
                               "morphflt", "howlwah", "vintwah", "customwah", "vowelwah",
-                              "touchflt", "peakflt", "resobank", "dualflt", "speakflt", "ringsweep" };
+                              "touchflt", "peakflt", "resobank", "dualflt", "speakflt", "ringsweep", "levelboost", "treblelift" };
 
 
 // ============================================================================

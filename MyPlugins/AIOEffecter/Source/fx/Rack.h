@@ -287,7 +287,9 @@ private:
                         s.wet = tg > s.wet ? std::min (tg, s.wet + fadeStep) : std::max (tg, s.wet - fadeStep);
                     const float w = smoothstep (s.wet);
                     const float l = L[off + j], r = R[off + j];
-                    const bool ok = std::isfinite (l) && std::isfinite (r) && std::abs (l) < 1000.0f && std::abs (r) < 1000.0f;
+                    // 「壊れた」の目安は ±1e6（+120 dBFS）。0.11.0 までは 1000（+60 dBFS）だったが、LEVEL BOOST → TREBLE LIFT を上げきった正しい音（〜+61 dBFS）が
+                    // 引っかかって部品が reset され、そのたびに 15 ms 高音が抜けた（DSP 検査 0.12.0）。NaN・無限大は isfinite で捕まり、本当の暴走は 1e6 もすぐ超える
+                    const bool ok = std::isfinite (l) && std::isfinite (r) && std::abs (l) < 1.0e6f && std::abs (r) < 1.0e6f;
                     if (! ok) broken = true;
                     L[off + j] = ok ? dL[j] + w * (l - dL[j]) : dL[j];
                     R[off + j] = ok ? dR[j] + w * (r - dR[j]) : dR[j];
