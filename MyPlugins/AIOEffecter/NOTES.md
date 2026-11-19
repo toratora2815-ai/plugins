@@ -218,6 +218,44 @@ aufx Aifx Mypl。2026-11-18 本人「guitar rig 7 pro … いろいろ実験し�
   4. STYLE の戻りにも直流止め 5 Hz（LO CUT 0・FEEDBACK 100 % で 20 Hz より下が −8〜−11 dBFS 鳴っていた）
   検査係の道具（scratchpad/dspinsp040）: longloop.cpp（FEEDBACK 100 %・FREEZE を 10 分）・warplong.cpp・gains.cpp（部品ごとの利得の最大）・charthd.cpp（CHARACTER の歪み）
 
+## 0.5.0（2026-11-19）EQ・揺れもの
+- 部品 35〜42。EQ は fx/EqParts.h（Svf と TptShelf1、なめらかにしたつまみから 32 サンプルごと。RBJ と伝達関数は同じ）、揺れものは fx/ModParts.h。
+  測り方: EQ は cap/mod の 1/48〜1/96 オクターブの返りに RBJ のピーク・棚を当てはめ（作業メモは scratchpad/eq_laws_050.md）。揺れものは 440 Hz の正弦波の成分と、
+  インパルス列 modiS（50 ms ごと 8 秒＋左右交互 4 秒、capone3m.sh・run_extra3m.sh、カテゴリ modi）の 1 発ずつの返り
+  - SHELF EQ = EQ Shelving / CONSOLE EQ = Solid EQ（OUTPUT の初期値 1 = +12 dB は本物どおり。MODE E / G の違いと、大きく持ち上げたときの飽和はまだ）/
+    PARAM EQ = EQ Parametric / GRAPHIC EQ = EQ Graphic / SCOOP EQ = Custom EQ。本物との差の中央値 0.18〜0.47 dB（SCOOP は TONE の端で 1.6 dB）
+  - TREMOLO = Tremolo: 四角い波を上がり・下がりの時定数でなまらせる（時定数 = 周期 × 0.00592 × (e^(5.4 v) − 1)）。形の差 0.1〜0.7 dB
+  - RING MOD = Ringmod: 運び手 log10 f = 1.9988 + 0.65414 v + 1.26984 v²。運び手は 1・2・3・5・6・7 倍音（4・8 倍音がない形）、RAW で
+    r = 1.25 v − 0.25 v² 倍、1 倍音と A（元の音）は RAW の 2 次式。PITCH ごとの倍音の差は表（8.4 kHz で 1 倍音 −9.6 dB）。成分の差 0.27 dB 以内
+    （山の前後 ±4 Hz のエネルギーで読む。最大の 1 点で読むと 0.6 dB 低く出る＝窓の端の分）
+  - FLANGER = Flanger: 揺れ = 四角い波 → 1 次のローパス 2 段（fc = 0.993 × min(速さ, 3.28 Hz)）。3 倍音 6.6 %・位相 −0.92 rad まで一致し、
+    3.28 Hz から上で浅くなるのも同じ（5.6 Hz で半分）。遅れ = 基本 + 1.745 S + S / 0.3158 / 2 × なまった四角、S = Smax × WIDTH²。
+    MODE 0 / 1 / 2（GR の Mode は 0・1・2 の 3 段。0.25〜0.75 は 0 と同じ）= 基本 4.41 / 1.40 / 1.39 ms、Smax 3.36 / 2.48 / 3.98 ms。
+    こだま = −HP1 500 Hz × (0.084 + 1.081 I × LP1)、ドライ = 1 次の高い棚（INTENSITY で低い所が下がる: 0.933 − 0.486 I）。
+    戻りは HP だけ通した音（本物は 2 回目以降も高い音が減らない）で −0.093（MODE 2 −0.78）。STEREO は右のこだまを逆向き・ドライ × 1.08（MODE 2 は 1.86）。
+    基本の遅れは XTap で 40 ms のクロスフェード（MODE の切り替えでプチッとしない）、ドライの棚・こだまの LP はなめらかにした値から 32 サンプルごと
+- 自分の検査: ブロック差 0・reset は新品と同じ・ASan＋UBSan の fuzz で NaN 0・プチッの目安は FLANGER の MODE / INTENSITY を直して 2.4 以下（直す前 29.9 / 18.4）。
+  EQ を全部上げきると SCOOP +27・SHELF +54.5・PARAM +59・CONSOLE +71 dB、GRAPHIC は帯域を詰めると +98 dB（OUTPUT 込み +109 dB）。ラックの頭打ち（+24 dBFS）にかかる（本物も上限なし）
+- **DSP 検査 1 回目（0.5.0）「渡してよい」**。直したほうがいい所 7 つを入れた:
+  1. TREMOLO / FLANGER（と 0.6.0 の ELECTRIC FLANGE）の SYNC を曲の位置にそろえる: Module に setTransport (ppq, playing)、processBlock で getPpqPosition、
+     Rack が毎ブロック渡す（モノの出口は区切りごとに ppq を進める）。SYNC ON・再生中は、ブロックの頭で ph = frac(ppq / 音符の長さ)（TREMOLO は + duty = 拍の頭で上がっている側）
+  2. GRAPHIC EQ の最大の持ち上げ（+98 dB）を README・NOTES に
+  3. FLANGER の DEEP / RINGING の INTENSITY は測っていなかった（0.933 − c I と同じ形を仮定していた）→ cap/list17.tsv（MODE 1・2 × INTENSITY 5 点、WIDTH 0）を測って表に。
+     DEEP は低い所が 0.969 → 0.060（100 % で −24 dB）、RINGING ははじめから 0.349。こだまは INTENSITY でほとんど変わらない（−1.2 / −1.8 dB）。RINGING の LP は 8 → 13 kHz で開く。差 0.16 dB（最大 0.8 dB）
+  4. EQ の 1 次のなめらかが float の丸めで目標の手前で止まる（192 kHz で PARAM EQ の Q 40 の肩が 0.79 dB ずれた）→ 32 サンプルごとに目標の 0.1 % 以内なら目標ちょうどへ（settleTo）
+  5. テンポ: ラックで 5〜999 BPM だけ受ける（inf で揺れが止まっていた）。TREMOLO / FLANGER の下限 20 → 5 BPM
+  6. RING MOD の運び手を掛けた分（c x）にだけ直流止め 10 Hz（入口と運び手が近いと 20 Hz 未満の差の音が −5 dBFS 出ていた → −35 dBFS）
+  7. RING MOD の DRY/WET を GAIN MATCH のセンドの決まりから外した（100 % ウェットでトラックに挿すのがふつう）
+- **DSP 検査 2 回目（0.5.0）「渡してよい」**（ラックを通した SYNC のできごと 10 通り・区切り・おかしなテンポ / ppq の fuzz 38,010 ブロック・5 BPM で NaN 0、プチッはふだん以下）。入れたもの:
+  1. TREMOLO の setTransport で sRate.cur = sRate.target（SYNC 中にテンポを変えた直後、古い速さで角を越えてから次のブロックで引き戻されて角が二重になった。
+     ブロック 512 / 1024 / 2048 で 180 通り中 18 / 6 / 36 回 → 0 回。FLANGER は 2 段のローパスでなまるので要らない）
+  2. FLANGER のドライの棚の gH を、デジタルの棚の x = tan(π 16000 / sr) / tan(π 角 / sr) で逆算（アナログの 16000 / 角 だと 16 kHz が表より 0.4〜0.6 dB 大きかった）
+  3. README に「DEEP / RINGING では INTENSITY 0 でもうねりは強く、主に低音の量が変わる」。settleTo のコメントの数字
+- コーラス系（Choral・Ensemble・Electric Lady・Vintage Vibrato）はつまみの効き方が複雑なので、追加の測定（cap/list15.tsv、59 件）を取ってから次の版で。
+  分かったこと: Electric Lady = 三角の揺れ（最小 0.235 ms 固定、最大 3.37 + 6.09 × DEPTH ms）を 1 次のローパス 2.32 Hz に通す、RATE 1 = 11.4 Hz（50 ms ごとの記録では 8.6 Hz に折り返して見える）、
+  COLOR = くり返し（0 → 0、1 → 0.68）＋音量（0.5 から上で下がる）、MIX 0 でドライ +5.6 dB。Ensemble = MODE 0 は三角の揺れ（速さ 0.1 + 2.9 × INTENSITY Hz、振れ ±1.29 ms）、MODE 1 はビブラート（6.1 Hz）。
+  Choral = 揺れの傾きが一定（AMOUNT² × 16.5 ms/s）で、RATE が速いほど浅い。Vintage Vibrato = 6 Hz 前後のビブラートで、MODE が深さ（0 → ±0.18 ms … 5 → ±0.65 ms）
+
 ## 次に
 - 部品を足す（全部の記録が cap/ にある）: アンプ（Fire Seeker・Jump・ICM の新しいアンプ）とキャビ、歪み、揺れもの、フィルター、ピッチ。足すたびに Registry の後ろへ
 - AIO Guitar のエフェクター欄へ移す（本人の将来の希望）

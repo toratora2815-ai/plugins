@@ -134,7 +134,7 @@ inline double nowSec()
     return std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-static const char* kNew[] = { "warpdly", "bbdecho", "widedly", "clubdly", "styledly", "tapeheads" };   // 0.4.0 のディレイ（0.2.0 の抑える系は kAll に）
+static const char* kNew[] = { "shelfeq", "consoleeq", "parameq", "graphiceq", "scoopeq", "tremolo", "ringmod", "flanger" };   // 0.5.0 の EQ・揺れもの（前の版の部品は kAll に）
 
 #include <cstring>
 #include <complex>
@@ -1363,7 +1363,8 @@ static void modeRackReset()
 static const char* kAll[] = { "gate", "nred", "tubecomp", "limit", "studiovb", "spring", "twindly",
                               "tubepush", "tubepushxl", "fetcomp", "optocomp", "vcacomp", "transient", "buscomp", "chandyn", "quickcomp", "pedalcomp", "volpedal", "maximizer",
                               "spacevb", "classicvb", "shaperoom", "pickroom", "clubverb", "digihall", "digihallxl", "frostverb", "eightverb",
-                              "warpdly", "bbdecho", "widedly", "clubdly", "styledly", "tapeheads" };
+                              "warpdly", "bbdecho", "widedly", "clubdly", "styledly", "tapeheads",
+                              "shelfeq", "consoleeq", "parameq", "graphiceq", "scoopeq", "tremolo", "ringmod", "flanger" };
 
 
 // ============================================================================

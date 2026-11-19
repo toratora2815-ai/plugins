@@ -48,6 +48,8 @@ public:
     virtual void setKnob (int index, float v01) = 0;   // 何度呼んでもよい（変わったときだけ計算し直す）
     virtual void process (float* L, float* R, int n) = 0;
     virtual void setTempo (double /*bpm*/) {}   // ホストのテンポ（SYNC のある部品だけ使う）
+    // ホストの曲の位置（このブロックの頭の拍の位置 ppq、再生中か）。揺れを小節にそろえる部品だけ使う（ppq < 0 = 分からない）
+    virtual void setTransport (double /*ppq*/, bool /*playing*/) {}
     virtual int latency() const { return 0; }
     virtual double tailSeconds() const { return 0.0; }
     // 画面用（0..1、ゲートの開き具合・コンプの下げ量など。ないものは -1）

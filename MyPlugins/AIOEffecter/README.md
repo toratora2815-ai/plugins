@@ -1,8 +1,8 @@
-# AIO Effecter（エーアイオー エフェクター）0.4.0
+# AIO Effecter（エーアイオー エフェクター）0.5.0
 
 いろいろなエフェクトを好きな順に並べて使う、ラック型のエフェクトです（Logic のトラックに挿すタイプ。AU）。
 中の部品は、Guitar Rig 7 Pro の部品を 1 つずつ測って、音の動きを合わせ込んで作りました（見た目・名前はオリジナルです）。
-0.1.0 は「響き」と「抑える」から 7 つの部品、0.2.0 で「抑える」の残り（コンプ・トランジェント・マキシマイザーなど）、0.3.0 でリバーブ 9 種類、0.4.0 でディレイ 6 種類（テープエコー・アナログ・ピンポンなど）を足しました。これから版を重ねて部品を増やします。
+0.1.0 は「響き」と「抑える」から 7 つの部品、0.2.0 で「抑える」の残り（コンプ・トランジェント・マキシマイザーなど）、0.3.0 でリバーブ 9 種類、0.4.0 でディレイ 6 種類（テープエコー・アナログ・ピンポンなど）、0.5.0 で EQ 5 種類と揺れもの 3 種類（トレモロ・リングモジュレーター・フランジャー）を足しました。これから版を重ねて部品を増やします。
 音の処理は、将来 **AIO Guitar のエフェクター欄にもそのまま移せる**形で作ってあります。
 
 ## 使い方
@@ -112,6 +112,37 @@
   - WARBLE: テープの揺れ（70 % まではわずか、上げきると大きく揺れる）、HEADROOM: 下げるほどテープが早く頭打ち（太く・つぶれる）
   - REV VOL / REV TIME: スプリングの量と長さ（0.3〜10 秒）
 
+### EQ（0.5.0 で追加）
+どれも、本物の周波数ごとの大きさを、つまみの位置ごとに測って合わせ込んでいます（差はおおむね 0.2〜0.5 dB）。
+- **SHELF EQ** … 低い棚と高い棚だけの EQ
+  - LO FREQ / LO GAIN（40 Hz〜2.1 kHz、±20 dB）、HI FREQ / HI GAIN（±20 dB）、OUTPUT（±20 dB）
+  - 初期値は本物と同じで、**LO GAIN が −20 dB（低音カット）・HI GAIN が −5.5 dB** です。平らにするときは両方の GAIN を 50 % に
+- **CONSOLE EQ** … 4 バンド＋ハイパス・ローパスの、ミキサー卓ふうの EQ
+  - HF（棚 / BELL でピーク）、HMF・LMF（ピーク。Q は右へ回すほど広い。下げる側は細め）、LF（初期値はピーク、BELL を外すと低い棚）
+  - HP FREQ（28〜364 Hz）・LP FREQ（16.8〜4.3 kHz）。どちらも 10 % より下で OFF
+  - OUTPUT は 50 % で 0 dB、**初期値の 100 % は +12 dB**、0 で無音（どれも本物と同じ）
+- **PARAM EQ** … 2 バンドのパラメトリック EQ
+  - FREQ 1 / 2（20 Hz〜20 kHz）、GAIN（−14〜+19 dB）、Q（0 でとても鋭い）、VOLUME（初期値 −4.8 dB）
+  - 全体に 16 kHz の穏やかなローパスがかかります（本物と同じ）
+- **GRAPHIC EQ** … 8 本のつまみで帯域を上げ下げする EQ
+  - MIN FREQ / MAX FREQ で 8 本の帯域の端（いちばん下 26〜630 Hz、いちばん上 1.1〜14.2 kHz）、RANGE で上げ下げの幅（50 % で ±14 dB）、OUTPUT
+- **SCOOP EQ** … 中域をえぐるギター向けの EQ
+  - TONE（左でこもる・右で細く）、FREQ（谷の位置 54 Hz〜2.3 kHz）、SCOOP（谷の深さ、最大 −25 dB）、OUTPUT
+
+### 揺れもの（0.5.0 で追加）
+- **TREMOLO** … 音量を揺らすトレモロ・オートパン
+  - RATE（0.26〜16 Hz、SYNC ON で音符）、INTENSITY（深さ。100 % で切れる）、WIDTH（下がっている時間の長さ）
+  - DOWN / UP（下がる・上がる角のなまり方。0 でカクカク、上げるほどなめらか）、PAN（MONO / STEREO = 左右が逆に揺れるオートパン）
+- **RING MOD** … 音に別の波を掛けて、金属っぽい・ベルのような音にする
+  - PITCH（掛ける波の高さ 100 Hz〜8.4 kHz）、RAW（掛ける波の倍音。上げるほど荒い）、AM/RM（AM = 元の音を残す、RM = 元の音を消す）
+  - DRY/WET（初期値 0 = 素通し。本物と同じ。混ぜるには上げる）
+- **FLANGER** … ジェット機のようにうねるフランジャー
+  - MODE: CLASSIC（遅れ 4〜15 ms、ほどよいうねり）/ DEEP（遅れが短く、深い谷）/ RINGING（くり返しが強く、鳴くようなうねり）
+  - RATE（0.1〜10 Hz、SYNC ON で音符。3.3 Hz から上は揺れが浅くなる＝本物と同じ）、WIDTH（うねりの幅）、INTENSITY（うねりの深さ。上げるほどドライの低音が下がる＝本物と同じ）
+  - DEEP / RINGING では INTENSITY 0 でもうねりは強いままで、INTENSITY で主に変わるのは低音の量です（本物と同じ）
+  - SYNC ON で再生中は、うねりが曲の拍にそろいます（TREMOLO も同じ。拍の頭で音が上がっている側から始まる）
+  - STEREO ON で、右のうねりが左と逆向き（広がる）
+
 ## おすすめ
 - **クリーンのギター**: NOISE GATE（THRESHOLD 20 %）→ TUBE COMP（初期値）→ SPRING（MIX 45 %）。RACKS の「Spring Clean」
 - **ハイゲインの刻み**: いちばん上に NOISE GATE（THRESHOLD 35 %、RELEASE 20 %）。弾き止めでピタッと止まる。RACKS の「Tight High Gain」
@@ -131,6 +162,10 @@
 - **暗いアナログのディレイ**: BBD ECHO（初期値）。RACKS の「Analog Echo」。FEEDBACK を上げると発振していくので、オートメーションで盛り上げに
 - **ピンポン**: STYLE DELAY の STEREO を PING-PONG、TIME 1/8。RACKS の「Ping-Pong 1/8」
 - **DJ ふうのこだま**: CLUB DELAY（初期値は 1/4 と右が 1 段長い）。FILTER を左右に回して音色を変える、FREEZE でこだまを止めて回す。RACKS の「Club Echo」
+- **低音と高音を少し足す**: SHELF EQ の LO GAIN・HI GAIN を 57.5 %（+3 dB）。RACKS の「Warm + Air」
+- **トレモロ**: TREMOLO（初期値は 5.6 Hz・浅め）。RACKS の「Classic Tremolo」。左右にゆっくり振るなら「Auto-Pan」
+- **ベルのような音**: RING MOD の AM/RM を RM、DRY/WET 50 %。RACKS の「Ring Bell」
+- **ジェット機のうねり**: FLANGER の MODE を RINGING、INTENSITY・WIDTH 80 %。RACKS の「Jet Flanger」
 
 ## 気をつけること
 - **TUBE COMP の SATURATION・INPUT・OUTPUT は ±48 dB と幅が広い**（本物と同じ）。全部を上げると、とても大きな音になります。
@@ -162,6 +197,15 @@
   ECHO BASS・ECHO TREB はくり返すたびに強くかかるので、上げすぎると発振しやすくなります
 - TAPE HEADS は本物のつまみ 20 本のうち、DROPOUTS・NOISE・ACCELERATION・SPRING LENGTH を外して 16 本にしました（本物の初期値のまま。古っぽさを足すなら Retro Retro を後ろに）
 - BBD ECHO の INPUT は −20〜+20 dB で、ドライにもかかります（本物と同じ）。上げきるととても大きな音になります
+- **SHELF EQ の初期値は低音カット（LO GAIN −20 dB）と高音少し下げ（−5.5 dB）**です（本物と同じ）。挿しただけで音が変わるので、平らにするなら両方 50 % に
+- **CONSOLE EQ の初期値は OUTPUT +12 dB**です（本物と同じ）。挿すと 12 dB 大きくなるので、ふつうは OUTPUT を 50 %（0 dB）に
+- EQ を大きく持ち上げたとき、本物は中で少し歪みますが、こちらは歪ませていません（細かい測定で詰めます）。CONSOLE EQ の MODE（E / G）の違いもまだです
+- **GRAPHIC EQ は、MIN FREQ と MAX FREQ を近づけて（帯域を詰めて）RANGE と BAND を上げると、+100 dB 近くまで持ち上がります**（本物と同じ。帯域が重なって足し合わさるため）。
+  ほかの EQ も上げきると +27〜+71 dB になります。ラックの出口の頭打ち（+24 dBFS）で止まりますが、とても大きな音になるので少しずつ
+- **RING MOD の DRY/WET の初期値は 0（素通し）**です（本物と同じ）。挿しても音が変わらないときは DRY/WET を上げてください
+- **FLANGER の INTENSITY を上げると、ドライの低音が下がります**（本物と同じ）。CLASSIC は 100 % で −7 dB、**DEEP は 100 % で −24 dB**（ギターの 6 弦の開放が大きく痩せます）、
+  RINGING ははじめから −9 dB で、100 % で −13 dB。低音を残したいときは INTENSITY を控えめに
+- FLANGER は、入る音が 0 dBFS を超えると、こだまの輪の中で少し頭打ちになります（RINGING で目立つ）。CONSOLE EQ（初期値 +12 dB）の後ろに置くときは、OUTPUT を下げてから
 
 ## 入れ方（インストール）
 Releases の latest から `AIOEffecter.zip`（または Actions の Artifacts「AIOEffecter-macOS」）を解凍して:

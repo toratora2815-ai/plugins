@@ -14,6 +14,8 @@
 #include "Maximizer.h"
 #include "VerbParts.h"
 #include "DelayParts.h"
+#include "EqParts.h"
+#include "ModParts.h"
 
 namespace aiofx
 {
@@ -66,6 +68,15 @@ inline const std::vector<Entry>& registry()
         { &ClubDelay::info,      &makeModule<ClubDelay> },        // 32
         { &StyleDelay::info,     &makeModule<StyleDelay> },       // 33
         { &TapeHeads::info,      &makeModule<TapeHeads> },        // 34
+        // 0.5.0（EQ・揺れもの）
+        { &ShelfEq::info,        &makeModule<ShelfEq> },          // 35
+        { &ConsoleEq::info,      &makeModule<ConsoleEq> },        // 36
+        { &ParamEq::info,        &makeModule<ParamEq> },          // 37
+        { &GraphicEq::info,      &makeModule<GraphicEq> },        // 38
+        { &ScoopEq::info,        &makeModule<ScoopEq> },          // 39
+        { &Tremolo::info,        &makeModule<Tremolo> },          // 40
+        { &RingMod::info,        &makeModule<RingMod> },          // 41
+        { &Flanger::info,        &makeModule<Flanger> },          // 42
     };
     return r;
 }

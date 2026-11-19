@@ -82,9 +82,11 @@ public:
     }
 
     // ---- オーディオスレッド ----
-    void process (float* L, float* R, int n, const std::array<SlotKnobs, kSlots>& want, double bpm = 120.0)
+    void process (float* L, float* R, int n, const std::array<SlotKnobs, kSlots>& want, double bpm = 120.0, double ppq = -1.0, bool playing = false)
     {
-        tempo = bpm;
+        // テンポは 5〜999 BPM だけ受ける（inf や 0 が来たら前の値のまま。DSP 検査 0.5.0）
+        if (std::isfinite (bpm) && bpm >= 5.0 && bpm <= 999.0) tempo = bpm;
+        songPpq = std::isfinite (ppq) ? ppq : -1.0; songPlaying = playing && songPpq >= 0.0;
         // 入口の壊れた数（NaN / inf）は 0 に（どの部品にも入れない）
         for (int j = 0; j < n; ++j) { if (! std::isfinite (L[j])) L[j] = 0.0f; if (! std::isfinite (R[j])) R[j] = 0.0f; }
         for (int i = 0; i < kSlots; ++i)
@@ -162,6 +164,7 @@ private:
             {
                 if (typeMatches) applyKnobs (*s.mod, sk);
                 s.mod->setTempo (tempo);
+                s.mod->setTransport (songPpq, songPlaying);
             }
             float* dL = dry.data();
             float* dR = dry.data() + block;
@@ -265,7 +268,8 @@ private:
     std::array<std::atomic<float>, kSlots> meters {};
     std::vector<float> dry;
     std::atomic<int> totalLat { 0 };
-    double sr = 48000.0, tempo = 120.0;
+    double sr = 48000.0, tempo = 120.0, songPpq = -1.0;
+    bool songPlaying = false;
     int block = 512, ringLen = 4096;
     float fadeStep = 0.001f;
     bool prepared = false;

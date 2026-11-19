@@ -24,6 +24,7 @@ AIOEffecterProcessor::AIOEffecterProcessor()
                            MixRuleDef { "eightverb", 7, false },
                            MixRuleDef { "warpdly", 2, false }, MixRuleDef { "bbdecho", 3, false }, MixRuleDef { "widedly", 2, false },
                            MixRuleDef { "clubdly", 3, false }, MixRuleDef { "styledly", 0, false } })
+        // RING MOD の DRY/WET は入れない（100 % ウェットでトラックに挿すのがふつうの使い方。センド使いではないので GAIN MATCH は効かせる）
         if (const int t = aiofx::typeForId (r.id); t > 0) mixRules.push_back ({ t, r.knob, r.dry });
     startTimerHz (20);
 }
@@ -113,14 +114,19 @@ void AIOEffecterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     gainMatch.measureInput (buffer, juce::jmax (1, numIn));
 
     readSlots (audioKnobs);
-    double bpm = 120.0;
+    double bpm = 120.0, ppq = -1.0;
+    bool playing = false;
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
+        {
             if (auto b = pos->getBpm()) bpm = *b;
+            if (auto p = pos->getPpqPosition()) ppq = *p;   // 曲の位置（揺れものの SYNC を小節にそろえる）
+            playing = pos->getIsPlaying();
+        }
     float* L = buffer.getWritePointer (0);
     float* R = numOut >= 2 ? buffer.getWritePointer (1) : buffer.getWritePointer (0);
     if (numOut >= 2)
-        rack.process (L, R, n, audioKnobs, bpm);
+        rack.process (L, R, n, audioKnobs, bpm, ppq, playing);
     else
     {
         // モノの出口: 右に同じものを作って通し、左右の平均を返す（作業用の場所は prepareToPlay で確保済み）
@@ -129,7 +135,8 @@ void AIOEffecterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         {
             const int m = juce::jmin ((int) monoTmp.size(), n - off);
             std::copy (L + off, L + off + m, monoTmp.data());
-            rack.process (L + off, monoTmp.data(), m, audioKnobs, bpm);
+            const double ppqHere = ppq >= 0.0 ? ppq + (double) off / getSampleRate() * bpm / 60.0 : -1.0;
+            rack.process (L + off, monoTmp.data(), m, audioKnobs, bpm, ppqHere, playing);
             for (int i = 0; i < m; ++i) L[off + i] = 0.5f * (L[off + i] + monoTmp[(size_t) i]);
         }
     }
@@ -241,6 +248,12 @@ namespace
             { "Analog Echo",       { { "bbdecho", {} } } },
             { "Ping-Pong 1/8",     { { "styledly", { 0.25f, 0.375f, 1.0f / 3.0f, 0.35f, 0.0f, 0.0f, 0.15f, 0.0f, 1.0f } } } },
             { "Club Echo",         { { "clubdly", {} } } },
+            // 0.5.0（EQ・揺れもの）
+            { "Warm + Air",        { { "shelfeq", { 0.5f, 0.2475f, 0.575f, 0.785f, 0.575f } } } },
+            { "Classic Tremolo",   { { "tremolo", {} } } },
+            { "Auto-Pan",          { { "tremolo", { 0.0f, 0.5f, 0.45f, 1.0f / 3.0f, 1.0f, 0.85f, 0.85f } } } },
+            { "Ring Bell",         { { "ringmod", { 0.6f, 0.2f, 1.0f, 0.5f } } } },
+            { "Jet Flanger",       { { "flanger", { 0.0f, 1.0f, 0.25f, 0.8f, 0.8f, 1.0f } } } },
         };
         return r;
     }
