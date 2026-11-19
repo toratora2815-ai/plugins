@@ -1,8 +1,8 @@
-# AIO Effecter（エーアイオー エフェクター）0.3.0
+# AIO Effecter（エーアイオー エフェクター）0.4.0
 
 いろいろなエフェクトを好きな順に並べて使う、ラック型のエフェクトです（Logic のトラックに挿すタイプ。AU）。
 中の部品は、Guitar Rig 7 Pro の部品を 1 つずつ測って、音の動きを合わせ込んで作りました（見た目・名前はオリジナルです）。
-0.1.0 は「響き」と「抑える」から 7 つの部品、0.2.0 で「抑える」の残り（コンプ・トランジェント・マキシマイザーなど）、0.3.0 でリバーブ 9 種類を足しました。これから版を重ねて部品を増やします。
+0.1.0 は「響き」と「抑える」から 7 つの部品、0.2.0 で「抑える」の残り（コンプ・トランジェント・マキシマイザーなど）、0.3.0 でリバーブ 9 種類、0.4.0 でディレイ 6 種類（テープエコー・アナログ・ピンポンなど）を足しました。これから版を重ねて部品を増やします。
 音の処理は、将来 **AIO Guitar のエフェクター欄にもそのまま移せる**形で作ってあります。
 
 ## 使い方
@@ -85,6 +85,33 @@
 - **DIGI HALL** … 80 年代はじめのデジタルホール。ALGORITHM 3 種類、INTENSITY（長さ）、BASS / MID / X-OVER（低音・中音の響き方）、
   HI CUT・REV COLOR（明るさ）、DEPTH、PREDELAY（3〜131 ms）、MODULATION（0〜3）、MIX、INPUT / OUTPUT（±10 dB、0 で無音）
 
+### ディレイ（0.4.0 で追加）
+どれも、本物の「こだまの時刻・大きさ・音色・くり返しの減り方・左右の分かれ方」を、つまみ 1 本ずつ合わせ込んでいます。TIME を変えたときは、読む位置を 40 ms でつなぎ替えます（プチッとしない。BBD ECHO と TAPE HEADS は本物どおり音程がすべる）。
+- **WARP DELAY** … こだまを逆回しにしたり（REVERSE）、くり返すたびに音程を変えたり（PITCH）できるディレイ
+  - TIME（5 ms〜2 秒、SYNC ON で音符）、FEEDBACK、WET（エネルギーで混ぜる）、ST TIME（右を短く）、CROSS ON で左右に交互（初期値）
+  - REVERSE / ST REVERSE（右だけ逆回し）、DETUNE（2 回目からのくり返しを少しずらして厚く）、PITCH（±1 オクターブ）
+- **BBD ECHO** … 暗いアナログのディレイ（コーラス・ビブラートつき）。FEEDBACK を上げると発振して鳴り続けます
+  - INPUT（−20〜+20 dB。ドライにもかかる）、TIME（28 ms〜1 秒）、MIX、TREBLE（こだまの明るさと大きさ）、BASS
+  - DEPTH・MODE（CHORUS / VIBRATO）・RATE、ACCEL（TIME を変えたときの追いかけの速さ）
+  - 小さい音ほどくり返しが早く消えます（昔の機材の癖を再現）
+- **WIDE DELAY** … 揺れで広がるステレオディレイ。DIFFUSION ON でくり返しが雲のようににじむ
+  - TIME（5 ms〜2 秒）、FEEDBACK、WET、TREBLE・BASS（こだまの音色、輪の中にもかかる）、MOD RATE / DEPTH、INVERT（ウェットの極性）
+- **CLUB DELAY** … テンポに合わせる DJ 向けディレイ
+  - TIME（1 小節〜1/32 の 7 段）、SPREAD ON で右だけ 1 段長く、FREE ON で ms
+  - FILTER（真ん中で素通し、左でこもる・右で細くなる）、FEEDBACK 100 % で減らずに鳴り続ける、FREEZE で今のこだまを止めて回し続ける
+- **STYLE DELAY** … 5 つの色（MODERN / ANALOG / TAPE / DIGITAL / DIFFUSE）を選べるテンポ同期ディレイ
+  - TIME（TIME MODE が NOTE で 1/64〜1 小節の 7 段、DOTTED・TRIPLET、MS）、FEEDBACK（83 % から上は鳴り続ける）、MIX
+  - STEREO MODE: 0 = モノ、1 = 左右を少しずらす（初期値）、2 = 右を 2 倍（ピンポン）
+  - LO CUT / HI CUT（12 dB/oct）、DEPTH・RATE（揺れ）、CHARACTER、DUCK（弾いている間はこだまを下げる）
+- **TAPE HEADS** … ヘッドが 4 つあるテープエコー＋スプリング
+  - HEAD A / HEAD B: どのヘッドで鳴らすか（1〜4。2 なら基本の 2 倍の遅れ、OFF で鳴らさない）
+  - HEAD MIX（0 で A だけ・1 で B だけ）、STEREO（左右で A と B の混ぜ方を広げる。0 でモノ）
+  - SPEED: テープの速さ（SYNC ON で 1/8〜1/32 の 7 段、OFF で 60〜240 ms）。速いほど明るく、遅いほど暗いこだま。動かすと音程がすべる
+  - FEEDBACK（80 % を超えると鳴り続けて、テープの頭打ちで止まる）、ECHO VOL（こだまの量。ドライはいつも 100 %）
+  - ECHO BASS / ECHO TREB: テープの中の音色（くり返すたびに強くかかる）。BASS / TREBLE: こだまの出口の音色（1 回だけ）
+  - WARBLE: テープの揺れ（70 % まではわずか、上げきると大きく揺れる）、HEADROOM: 下げるほどテープが早く頭打ち（太く・つぶれる）
+  - REV VOL / REV TIME: スプリングの量と長さ（0.3〜10 秒）
+
 ## おすすめ
 - **クリーンのギター**: NOISE GATE（THRESHOLD 20 %）→ TUBE COMP（初期値）→ SPRING（MIX 45 %）。RACKS の「Spring Clean」
 - **ハイゲインの刻み**: いちばん上に NOISE GATE（THRESHOLD 35 %、RELEASE 20 %）。弾き止めでピタッと止まる。RACKS の「Tight High Gain」
@@ -100,6 +127,10 @@
 - **昔のプレート**: CLASSIC VERB の PLATE（MIX 18 %）。RACKS の「Vintage Plate」
 - **逆回しのふくらみ**: SHAPE ROOM の REVERSE ON（WET 50 %）。RACKS の「Reverse Swell」
 - **80 年代のホール**: DIGI HALL（MIX 25 %）。RACKS の「80s Hall」
+- **テープエコー**: TAPE HEADS（初期値。3 連 8 分と 1/4 のヘッド＋少しのスプリング）。RACKS の「Tape Echo」。ギターなら HEAD MIX 50 %、WARBLE 75 % で揺れを足す
+- **暗いアナログのディレイ**: BBD ECHO（初期値）。RACKS の「Analog Echo」。FEEDBACK を上げると発振していくので、オートメーションで盛り上げに
+- **ピンポン**: STYLE DELAY の STEREO を PING-PONG、TIME 1/8。RACKS の「Ping-Pong 1/8」
+- **DJ ふうのこだま**: CLUB DELAY（初期値は 1/4 と右が 1 段長い）。FILTER を左右に回して音色を変える、FREEZE でこだまを止めて回す。RACKS の「Club Echo」
 
 ## 気をつけること
 - **TUBE COMP の SATURATION・INPUT・OUTPUT は ±48 dB と幅が広い**（本物と同じ）。全部を上げると、とても大きな音になります。
@@ -122,6 +153,15 @@
 - **SHAPE ROOM の REVERSE ON は、響きが約 1.8 秒遅れて来ます**（逆回しのため。Logic への遅れの申告はしません。ドライはそのまま）
 - **SPACE VERB の FEEDBACK は PREDELAY を上げたときだけ効きます**（本物と同じ）。PREDELAY を長くして FEEDBACK を上げきると、こだまがなかなか消えません
 - FROST VERB・EIGHT VERB・DIGI HALL XL の初期値は響きが多め（本物と同じ）。トラックに直接挿すときは MIX を下げてください
+
+- **TAPE HEADS の SPEED・BBD ECHO の TIME を動かすと、こだまの音程がすべります**（本物のテープ・アナログ機材と同じ。BBD は ACCEL で速さを変えられます。
+  すべる速さは音程 0.1〜4 倍まで = 逆回りはしない）。
+  ほかのディレイの TIME は、読む位置を 40 ms でつなぎ替える（音程はすべらない）
+- **TAPE HEADS の FEEDBACK は 80 % を超えると鳴り続けて、テープの頭打ちで止まります**（本物と同じ）。HEADROOM を下げるほど早く頭打ちになり、こもった音に。
+  音色を上げて発振させると、こだまは最大 +6 dBFS ほどで鳴り続けます（STYLE DELAY の FEEDBACK 83 % から上も同じ）。後ろに LIMITER などを
+  ECHO BASS・ECHO TREB はくり返すたびに強くかかるので、上げすぎると発振しやすくなります
+- TAPE HEADS は本物のつまみ 20 本のうち、DROPOUTS・NOISE・ACCELERATION・SPRING LENGTH を外して 16 本にしました（本物の初期値のまま。古っぽさを足すなら Retro Retro を後ろに）
+- BBD ECHO の INPUT は −20〜+20 dB で、ドライにもかかります（本物と同じ）。上げきるととても大きな音になります
 
 ## 入れ方（インストール）
 Releases の latest から `AIOEffecter.zip`（または Actions の Artifacts「AIOEffecter-macOS」）を解凍して:

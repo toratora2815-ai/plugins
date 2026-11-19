@@ -21,7 +21,9 @@ AIOEffecterProcessor::AIOEffecterProcessor()
     for (const auto& r : { MixRuleDef { "spacevb", 13, false }, MixRuleDef { "classicvb", 1, false }, MixRuleDef { "shaperoom", 1, true },
                            MixRuleDef { "pickroom", 3, false }, MixRuleDef { "clubverb", 3, false }, MixRuleDef { "digihall", 10, false },
                            MixRuleDef { "digihallxl", 15, false }, MixRuleDef { "frostverb", 3, false }, MixRuleDef { "eightverb", 6, false },
-                           MixRuleDef { "eightverb", 7, false } })
+                           MixRuleDef { "eightverb", 7, false },
+                           MixRuleDef { "warpdly", 2, false }, MixRuleDef { "bbdecho", 3, false }, MixRuleDef { "widedly", 2, false },
+                           MixRuleDef { "clubdly", 3, false }, MixRuleDef { "styledly", 0, false } })
         if (const int t = aiofx::typeForId (r.id); t > 0) mixRules.push_back ({ t, r.knob, r.dry });
     startTimerHz (20);
 }
@@ -234,6 +236,11 @@ namespace
             { "Vintage Plate",     { { "classicvb", { 2.0f / 7.0f, 0.18f } } } },
             { "Reverse Swell",     { { "shaperoom", { 0.5f, 1.0f, 0.3333f, 0.0f, 0.6644f, 0.5f, 0.0f, 1.0f, 0.5f, 0.7686f, 0.5f, 0.5f, 0.5f, 0.5f, 0.4215f, 0.5985f } } } },
             { "80s Hall",          { { "digihall", { 0.5f, 0.2018f, 0.5179f, 0.4551f, 1.0f, 0.0f, 0.1783f, 0.6078f, 0.7668f, 1.0f, 0.25f, 0.5f, 0.5f, 0.0f } } } },
+            // 0.4.0（ディレイ）
+            { "Tape Echo",         { { "tapeheads", {} } } },
+            { "Analog Echo",       { { "bbdecho", {} } } },
+            { "Ping-Pong 1/8",     { { "styledly", { 0.25f, 0.375f, 1.0f / 3.0f, 0.35f, 0.0f, 0.0f, 0.15f, 0.0f, 1.0f } } } },
+            { "Club Echo",         { { "clubdly", {} } } },
         };
         return r;
     }

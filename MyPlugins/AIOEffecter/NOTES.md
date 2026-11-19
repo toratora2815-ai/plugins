@@ -175,6 +175,49 @@ aufx Aifx Mypl。2026-11-18 本人「guitar rig 7 pro … いろいろ実験し�
 - EIGHT VERB（Octaverb）0.23 / 0.2 dB
 - 合わせ込みの値の意味: 特徴の差 = T60（log、1.5 倍）・音色（dB、0.7 倍）・量（dB）・最初の 50 ms の割合・始まり（ms × 0.3）・左右の相関（× 5）の 2 乗平均
 
+## 0.4.0（2026-11-19）ディレイ
+- 部品 29〜34（fx/DelayParts.h、共通の部品は fx/DelayKit.h）。測り方: ノイズの塊のこだま（帯域ごとの利得・くり返しの大きさ、左右の力を平均）と、
+  インパルスの返り（こだまの時刻・左右の分かれ方）。比べる道具は build/aiofx/vfit/dcmp.py・dburst.py、作業用は scratchpad の tecmp.py など（コミットしない）
+  - WARP DELAY = Psyche Delay: TIME = 5.02 × 10^(2.6 v) ms、WET はエネルギー、CROSS でピンポン、REVERSE・PITCH・DETUNE は大まか
+  - BBD ECHO = Delay Man: 6 次のバターワースのこだま、コンパンダーの癖（小さい音ほど速く消える）、FEEDBACK 1.26 × v^2.4 で発振、ACCEL で時間を追いかける（音程がすべる）
+  - WIDE DELAY = Quad Delay: 1 次の LP / HP が輪の中、MOD DEPTH で左右別々に揺れる、DIFFUSION は長いオールパス 4 段
+  - CLUB DELAY = Traktor Delay: 7 段の音符、SPREAD で右が 1 段長い、FILTER は 1 次の LP（左）/ HP（右）、FREEZE
+  - STYLE DELAY = Replika GR: 7 段の音符＋付点・3 連、5 スタイル、STEREO（モノ / 少しずらす / ピンポン）、ダッキング
+  - TAPE HEADS = Tape Echo: こだまだけの記録は「つまみを変えた記録 − ECHO VOL 0 の記録」（スプリングとドライが同じなので引き算で消える）。
+    左右で別々の輪・ヘッド A / B の位置 L = HM (1 − ST)、R = HM + (1 − HM) ST・戻り 1.2552 × FB・輪の中の音色（HP2 54.6 Hz Q 1.05、LP2 7.88 kHz Q 0.3、
+    ECHO BASS = HP2 + g·LP2 の 5 点の表（谷が動く）、ECHO TREB = 零点 2042 Hz の 1 次の棚）・テープの速さの棚（零点 1919 Hz、−6.43 dB × log2(基本 / 166.7 ms)）・
+    出口の音色（HP1 162 Hz・BASS 中点 159 Hz・TREBLE 中点 4.46 kHz）・HEADROOM = tanh(d x) / d（d = 7.1 e^(−4.02 h)、インパルスとノイズの塊の 2 点で決めた）・
+    WARBLE = 2.3 ms × e^(7.5 (w − 1))。音色の合い具合 2 乗平均 0.54 dB。スプリングは 0.1.0 の SPRING（LENGTH 0.29・BASS 0.542・LOW DAMP は長さに合わせて・HIGH DAMP 0.2）
+    ＋2.2 kHz −3 dB と 6 kHz +1 dB の補正、T60 は setT60Override（SPRING の部品としては使わない）で 0.3〜10 秒、REV TIME ごとの量と長さの補正表。
+    20 本のうち DROPOUTS・NOISE・ACCELERATION・SPRING LENGTH を外して 16 本
+- プチッの直し（自分の検査、scratchpad/dclick.cpp。ふつうとこだまだけの両方で、どのつまみも目安 10 未満にした）:
+  TIME は 2 つの読み口を 40 ms でクロスフェード（XTap。BBD と TAPE HEADS は本物どおり音程がすべる）/ 輪の中・出口のフィルターは TPT の形
+  （TptShelf1・Svf。setOnePoleLP / HP・RBJ の棚の Q で、合わせ込んだときの OnePole・Biquad と伝達関数は同じ。差 2e-6 以下）で、なめらかにしたつまみから 32 サンプルごと /
+  スタイル・DIFFUSION・ピンポン・CROSS・ビット落としは、いつも回して混ぜ具合で入れ替える / WIDE の MOD DEPTH の量の補正もなめらかに / TAPE HEADS の REV TIME は 0.3 秒で /
+  TAPE HEADS のこだまの出口は 0 dBFS までは素通し、その上はなめらかに +12 dBFS で頭打ち（音色を全部上げて発振させたとき +46 dBFS になっていた）/
+  揺れ（WowFlutter）を reset で最初に戻す（TAPE HEADS が reset のあと新品と違った）
+- **Svf の止め忘れ（自分の検査で見つけた、危ない抜け）**: Svf（VerbEngine.h）は ramp(false, 32) のあと止める処理がなく、step() が同じ歩みで足し続ける。
+  VerbEngine は 32 サンプルごとに必ず ramp を呼ぶので大丈夫だが、ディレイの tone() は「変わっていなければ早く return」していたので、つまみを動かしたあと係数が流れ続けて
+  数秒後に壊れた（ASan の fuzzall で TAPE HEADS が NaN 212 万サンプル。BASS の k = 21.7・m2 = −23）→ 早い return の前に Svf を ramp(true) で目標ちょうどに止める
+  （BBD・STYLE・TAPE HEADS と EqParts.h の EQ 全部）。TptShelf1 は残り回数で止まるので元から大丈夫。Svf を使うときは、毎回 ramp を呼ぶか、止めること
+- **DSP 検査 1 回目（0.4.0）「直してから」** → 直したこと:
+  1. Svf 自体に残り回数を持たせ、n 回で目標ちょうどに着いて止まる（検査係の案。0.3.0 のリバーブの返りは 1 ビットも同じ、つまみを動かしても −115 dB 以下）
+  2. TAPE HEADS の REV TIME のプチッがブロックで増える（512 で 17〜26、2048 で 50〜100）→ スプリングの長さを 32 サンプルずつ渡す（どのブロックでも 3 前後）
+  3. WARP・CLUB・BBD の輪に直流がたまる（FB 100 % で −40 → −6 dBFS、BBD の発振の 2〜3 割が 20 Hz 以下）→ 戻りに直流止め（DcBlock、WARP・CLUB 5 Hz、BBD 10 Hz）
+  4. CLUB の FILTER を初めて左へ回すと 20 ms −8 dB 落ちる（1 Hz のままだった）→ 外れている側の周波数は端（0.495 / 0.505 の値）に置く
+  5. TAPE HEADS の発振が +12 dBFS に張り付く → こだまの出口の頭打ちを +6 dBFS に。STYLE の発振も WIDTH 次第で +10 dBFS を超えたので、出口に同じ頭打ち
+  6. BBD・TAPE HEADS のすべりで読む位置が逆回り（−30.8 倍 / −5.0 倍）→ 遅れの伸びを 1 サンプルあたり 0.9、縮みを 3 まで（TAPE HEADS はいちばん遠いヘッドで）
+  7. WARP・CLUB・STYLE の輪の入口の頭打ちが 0 dBFS で 3 次 −35 dB → softKnee2（0 dBFS まで素通し、その上はなめらかに ±2）。WARP は輪の入口が線形になって、
+     FEEDBACK 100 % でゆっくり大きくなったので 1 周 0.9995 倍にした（→ 2 回目で原因は直流止めと分かり外した）
+- **DSP 検査 2 回目（0.4.0）「直してから」** → 直したこと:
+  1. 直流止め y = x − x₋₁ + R y₋₁ は高い音で 1/√R 倍（5 Hz で +0.003 dB）。CLUB の FEEDBACK 100 %・FREEZE は輪の利得がちょうど 1 なので、1 周ごとに育った
+     （FREEZE・1/32 で 10 分 +21.5 dB）→ (1 + R) / 2 を掛ける（最大がちょうど 1）。直したあと 10 分で CLUB −23.7 → −23.8 dBFS、WARP も大きくならない
+  2. WARP の 0.9995 倍は外した（4 点補間の大きさの最大はちょうど 1.0 で、育ちは直流止めの分だった）。FEEDBACK 100 % でまた鳴り続ける
+  3. STYLE の CHARACTER が −17 dBFS より下で歪まない形（softKnee2 だけ）になっていた → 前の satSoft（±2 で飽和）を CHARACTER の 0〜25 % で混ぜ始める形に。
+     CHARACTER 0 は素通しのまま、100 % は前と同じ（−20 dBFS で 3 次 −41 dB、−12 dBFS で −26 dB）。softKnee2 は安全のための頭打ちだけ
+  4. STYLE の戻りにも直流止め 5 Hz（LO CUT 0・FEEDBACK 100 % で 20 Hz より下が −8〜−11 dBFS 鳴っていた）
+  検査係の道具（scratchpad/dspinsp040）: longloop.cpp（FEEDBACK 100 %・FREEZE を 10 分）・warplong.cpp・gains.cpp（部品ごとの利得の最大）・charthd.cpp（CHARACTER の歪み）
+
 ## 次に
 - 部品を足す（全部の記録が cap/ にある）: アンプ（Fire Seeker・Jump・ICM の新しいアンプ）とキャビ、歪み、揺れもの、フィルター、ピッチ。足すたびに Registry の後ろへ
 - AIO Guitar のエフェクター欄へ移す（本人の将来の希望）

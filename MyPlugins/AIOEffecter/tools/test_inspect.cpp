@@ -134,7 +134,7 @@ inline double nowSec()
     return std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-static const char* kNew[] = { "tubepush", "tubepushxl", "fetcomp", "optocomp", "vcacomp", "transient", "buscomp", "chandyn", "quickcomp", "pedalcomp", "volpedal", "maximizer" };
+static const char* kNew[] = { "warpdly", "bbdecho", "widedly", "clubdly", "styledly", "tapeheads" };   // 0.4.0 のディレイ（0.2.0 の抑える系は kAll に）
 
 #include <cstring>
 #include <complex>
@@ -1362,7 +1362,8 @@ static void modeRackReset()
 
 static const char* kAll[] = { "gate", "nred", "tubecomp", "limit", "studiovb", "spring", "twindly",
                               "tubepush", "tubepushxl", "fetcomp", "optocomp", "vcacomp", "transient", "buscomp", "chandyn", "quickcomp", "pedalcomp", "volpedal", "maximizer",
-                              "spacevb", "classicvb", "shaperoom", "pickroom", "clubverb", "digihall", "digihallxl", "frostverb", "eightverb" };
+                              "spacevb", "classicvb", "shaperoom", "pickroom", "clubverb", "digihall", "digihallxl", "frostverb", "eightverb",
+                              "warpdly", "bbdecho", "widedly", "clubdly", "styledly", "tapeheads" };
 
 
 // ============================================================================
@@ -1373,6 +1374,7 @@ static void modeFuzzAll (int nRandom)
     std::printf ("== 全部の部品: つまみ 0 / 1 / 0.5 / 初期値 / ランダム %d 通り × 入力 9 種 × レート・ブロック（途中でつまみも動かす）==\n", nRandom);
     for (const char* id : kAll)
     {
+        if (const char* only = std::getenv ("FUZZ_ONLY")) if (std::strcmp (only, id) != 0) continue;   // FUZZ_ONLY=部品 で 1 つだけ
         std::mt19937 g (777);
         const auto& inf = *infoFor (typeForId (id));
         std::vector<std::vector<float>> sets;
@@ -1425,6 +1427,18 @@ static void modeFuzzAll (int nRandom)
                     if (off >= inLen && off < inLen + (size_t) B && (si % 2 == 1))
                         for (int k = 0; k < (int) inf.knobs.size(); ++k) m->setKnob (k, sets[si][(size_t) k]);   // 余韻は最初の設定で
                     m->process (s.L.data() + off, s.R.data() + off, n);
+                    if (std::getenv ("FUZZ_DEBUG") != nullptr)
+                    {
+                        static bool shown = false;
+                        for (int i = 0; i < n && ! shown; ++i)
+                            if (! std::isfinite (s.L[off + (size_t) i]) || ! std::isfinite (s.R[off + (size_t) i]))
+                            {
+                                shown = true;
+                                std::printf ("    [FUZZ_DEBUG] 最初の NaN: 入力 %s sr %.0f B %d、%.4f 秒目。そのときのつまみ {", inName[in], sr, B, (double) (off + (size_t) i) / sr);
+                                for (float x : kv) std::printf ("%.4f,", x);
+                                std::printf ("}\n");
+                            }
+                    }
                 }
                 auto st = stats (s);
                 long ov = 0, b1000 = 0;

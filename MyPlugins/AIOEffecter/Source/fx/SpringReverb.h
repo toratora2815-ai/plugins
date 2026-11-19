@@ -66,6 +66,12 @@ struct SpringReverb final : Module
         e1.fill (0.0f); e2.fill (0.0f); f1.fill (0.0f); f2.fill (0.0f); dcx.fill (0.0f); dcy.fill (0.0f);
         counter = 0;
     }
+    // TAPE HEADS の中で使うとき: 響きの長さ T60（秒）を直接決める（0 = SIZE のつまみどおり）。SPRING の部品としては使わない（いつも 0）
+    void setT60Override (float seconds)
+    {
+        if (same (t60Ovr, seconds)) return;
+        t60Ovr = seconds; dirty = true;
+    }
     void setKnob (int i, float v) override
     {
         if (i < 0 || i >= 6 || same (k[i], v)) return;
@@ -189,7 +195,7 @@ private:
     }
     void recalc (const float* v)
     {
-        const float T = t60 (v[0]);
+        const float T = t60Ovr > 0.0f ? t60Ovr : t60 (v[0]);
         // LOW DAMP: 400 Hz より下を 1 周ごとに +0.7 dB（0）〜 −1.2 dB（1）
         lowCoef = (float) (1.0 - std::exp (-2.0 * 3.14159265 * 400.0 / sr));
         lowAmt = dbToGain (0.7f - 1.9f * v[4]) - 1.0f;
@@ -238,6 +244,7 @@ private:
     }
     double sr = 48000.0;
     float k[6] { 0.10f, 1.0f, 0.257f, 0.335f, 0.5f, 0.98f };
+    float t60Ovr = 0.0f;
     Smooth sm[6], dsm[2];
     std::array<std::vector<float>, 2> dl;
     std::array<std::array<std::array<float, kMaxK>, kAp>, 2> apx {}, apy {};

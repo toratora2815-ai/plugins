@@ -161,18 +161,27 @@ struct Svf
     }
     float a1 = 1.0f, a2 = 0.0f, a3 = 0.0f;
     bool moving = false;
+    int left = 0;
     void calcA() { a1 = 1.0f / (1.0f + g * (g + k)); a2 = g * a1; a3 = g * a2; }
     void ramp (bool snap, float n)
     {
-        if (snap) { g = tg; k = tk; m0 = tm0; m1 = tm1; m2 = tm2; dg = dk = dm0 = dm1 = dm2 = 0.0f; moving = false; calcA(); }
+        if (snap) { g = tg; k = tk; m0 = tm0; m1 = tm1; m2 = tm2; dg = dk = dm0 = dm1 = dm2 = 0.0f; moving = false; left = 0; calcA(); }
         else
         {
             dg = (tg - g) / n; dk = (tk - k) / n; dm0 = (tm0 - m0) / n; dm1 = (tm1 - m1) / n; dm2 = (tm2 - m2) / n;
             moving = dg != 0.0f || dk != 0.0f || dm0 != 0.0f || dm1 != 0.0f || dm2 != 0.0f;
+            left = std::max (1, (int) n);
         }
     }
-    // 動いている間だけ係数を進めて計算し直す（止まっている間は割り算をしない）
-    inline void step() { if (moving) { g += dg; k += dk; m0 += dm0; m1 += dm1; m2 += dm2; calcA(); } }
+    // 動いている間だけ係数を進めて計算し直す（止まっている間は割り算をしない）。n 回で目標にちょうど着いて止まる
+    // （止めないと同じ歩みで足し続ける。ramp を毎回呼ばない部品で係数が流れて壊れていた: DSP 検査 0.4.0）
+    inline void step()
+    {
+        if (! moving) return;
+        if (--left <= 0) { g = tg; k = tk; m0 = tm0; m1 = tm1; m2 = tm2; moving = false; }
+        else { g += dg; k += dk; m0 += dm0; m1 += dm1; m2 += dm2; }
+        calcA();
+    }
     inline float process (float v0)
     {
         const float v3 = v0 - ic2;

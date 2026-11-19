@@ -13,6 +13,7 @@
 #include "VolumePedal.h"
 #include "Maximizer.h"
 #include "VerbParts.h"
+#include "DelayParts.h"
 
 namespace aiofx
 {
@@ -58,6 +59,13 @@ inline const std::vector<Entry>& registry()
         { &DigiHallXL::info,     &makeModule<DigiHallXL> },       // 26
         { &FrostVerb::info,      &makeModule<FrostVerb> },        // 27
         { &EightVerb::info,      &makeModule<EightVerb> },        // 28
+        // 0.4.0（ディレイ）
+        { &WarpDelay::info,      &makeModule<WarpDelay> },        // 29
+        { &BbdEcho::info,        &makeModule<BbdEcho> },          // 30
+        { &WideDelay::info,      &makeModule<WideDelay> },        // 31
+        { &ClubDelay::info,      &makeModule<ClubDelay> },        // 32
+        { &StyleDelay::info,     &makeModule<StyleDelay> },       // 33
+        { &TapeHeads::info,      &makeModule<TapeHeads> },        // 34
     };
     return r;
 }
