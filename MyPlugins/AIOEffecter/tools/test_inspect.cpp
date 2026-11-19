@@ -1361,7 +1361,8 @@ static void modeRackReset()
 }
 
 static const char* kAll[] = { "gate", "nred", "tubecomp", "limit", "studiovb", "spring", "twindly",
-                              "tubepush", "tubepushxl", "fetcomp", "optocomp", "vcacomp", "transient", "buscomp", "chandyn", "quickcomp", "pedalcomp", "volpedal", "maximizer" };
+                              "tubepush", "tubepushxl", "fetcomp", "optocomp", "vcacomp", "transient", "buscomp", "chandyn", "quickcomp", "pedalcomp", "volpedal", "maximizer",
+                              "spacevb", "classicvb", "shaperoom", "pickroom", "clubverb", "digihall", "digihallxl", "frostverb", "eightverb" };
 
 
 // ============================================================================

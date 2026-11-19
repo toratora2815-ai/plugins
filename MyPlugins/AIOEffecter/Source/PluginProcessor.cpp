@@ -17,6 +17,12 @@ AIOEffecterProcessor::AIOEffecterProcessor()
     pGainMatch = apvts.getRawParameterValue (myp::GainMatch::paramId);
     pLinkMatch = apvts.getRawParameterValue ("linkMatch");
     tVerb = aiofx::typeForId ("studiovb"); tSpring = aiofx::typeForId ("spring"); tDelay = aiofx::typeForId ("twindly"); tLimit = aiofx::typeForId ("limit"); tMax = aiofx::typeForId ("maximizer");
+    // GAIN MATCH: センド使い（ドライがほぼない）を見分けるつまみ（部品の id、つまみの番号、DRY 型か）
+    for (const auto& r : { MixRuleDef { "spacevb", 13, false }, MixRuleDef { "classicvb", 1, false }, MixRuleDef { "shaperoom", 1, true },
+                           MixRuleDef { "pickroom", 3, false }, MixRuleDef { "clubverb", 3, false }, MixRuleDef { "digihall", 10, false },
+                           MixRuleDef { "digihallxl", 15, false }, MixRuleDef { "frostverb", 3, false }, MixRuleDef { "eightverb", 6, false },
+                           MixRuleDef { "eightverb", 7, false } })
+        if (const int t = aiofx::typeForId (r.id); t > 0) mixRules.push_back ({ t, r.knob, r.dry });
     startTimerHz (20);
 }
 
@@ -137,6 +143,10 @@ void AIOEffecterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         lastType = sk.type;
         const int mixIdx = sk.type == tVerb ? 0 : sk.type == tSpring ? 1 : sk.type == tDelay ? 10 : -1;
         if (mixIdx >= 0) amount = juce::jmin (amount, juce::jlimit (0.0f, 1.0f, (1.0f - sk.k[mixIdx]) / 0.1f));
+        // 0.3.0 からの響き・ディレイ: MIX 型は (1 − つまみ) / 0.1、DRY 型（ドライの量そのもの）は つまみ / 0.1
+        for (const auto& r : mixRules)
+            if (r.type == sk.type)
+                amount = juce::jmin (amount, juce::jlimit (0.0f, 1.0f, r.dryKnob ? sk.k[r.knob] / 0.1f : (1.0f - sk.k[r.knob]) / 0.1f));
     }
     gainMatch.limitBoost ((lastType == tLimit || lastType == tMax) ? 0.0f : myp::GainMatch::maxBoostDb);
     gainMatch.process (buffer, numCh, getLatencySamples(), amount);
@@ -219,6 +229,11 @@ namespace
                                      { "transient", { 0.65f, 0.4f, 0.56f, 1.0f, 1.0f } } } },
             { "Push + Maximize",   { { "tubepush", { 0.433333f, 0.35f, 0.0f, 0.0f, 0.0f, 0.5f } },
                                      { "maximizer", {} } } },
+            // 0.3.0（響き）
+            { "Big Space",         { { "spacevb", { 0.5f, 0.0f, 0.25f, 0.0f, 0.6f, 0.35f, 0.45f, 0.35f, 0.25f, 0.8f, 0.3f, 0.25f, 1.0f, 0.3f, 0.0f, 0.0f } } } },
+            { "Vintage Plate",     { { "classicvb", { 2.0f / 7.0f, 0.18f } } } },
+            { "Reverse Swell",     { { "shaperoom", { 0.5f, 1.0f, 0.3333f, 0.0f, 0.6644f, 0.5f, 0.0f, 1.0f, 0.5f, 0.7686f, 0.5f, 0.5f, 0.5f, 0.5f, 0.4215f, 0.5985f } } } },
+            { "80s Hall",          { { "digihall", { 0.5f, 0.2018f, 0.5179f, 0.4551f, 1.0f, 0.0f, 0.1783f, 0.6078f, 0.7668f, 1.0f, 0.25f, 0.5f, 0.5f, 0.0f } } } },
         };
         return r;
     }

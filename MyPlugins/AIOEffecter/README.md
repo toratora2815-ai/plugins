@@ -1,8 +1,8 @@
-# AIO Effecter（エーアイオー エフェクター）0.2.0
+# AIO Effecter（エーアイオー エフェクター）0.3.0
 
 いろいろなエフェクトを好きな順に並べて使う、ラック型のエフェクトです（Logic のトラックに挿すタイプ。AU）。
 中の部品は、Guitar Rig 7 Pro の部品を 1 つずつ測って、音の動きを合わせ込んで作りました（見た目・名前はオリジナルです）。
-0.1.0 は「響き」と「抑える」から 7 つの部品、0.2.0 で「抑える」の残り（コンプ・トランジェント・マキシマイザーなど）を足しました。これから版を重ねて部品を増やします。
+0.1.0 は「響き」と「抑える」から 7 つの部品、0.2.0 で「抑える」の残り（コンプ・トランジェント・マキシマイザーなど）、0.3.0 でリバーブ 9 種類を足しました。これから版を重ねて部品を増やします。
 音の処理は、将来 **AIO Guitar のエフェクター欄にもそのまま移せる**形で作ってあります。
 
 ## 使い方
@@ -67,6 +67,24 @@
   - TIME L / R（1 ms〜2 秒）、LEVEL L / R、FDBK L / R（くり返し）、PRE L / R（くり返しの前の遅れ、0〜2 秒）
   - CROSS: 反対側へ回す量（ピンポンっぽく）、WIDTH: 0 で左右入れ替え・0.5 でモノ・1 でそのまま、MIX: 真ん中でドライもウェットも最大
 
+### 響き（0.3.0 で追加）
+どれも、本物の響きの「始まり・帯域ごとの長さ・量・音色・前の濃さ・左右の広がり」を、つまみ 1 本ずつ合わせ込んでいます（波形そのものは別物です）。
+- **SPACE VERB** … 大きく、なめらかに揺れる空間（つまみ 16 本）
+  - MODE: TIGHT / OPEN / SWELL（SWELL はゆっくりふくらむ響き）、DENSITY: LOW / HIGH（HIGH で少し濃く大きく）
+  - PREDELAY（0〜2 秒、SYNC ON で音符）、FEEDBACK: 予備の遅れをくり返す（PREDELAY を上げたときだけ効く）
+  - SIZE・DIFFUSION・DECAY（0.25〜20 秒くらい）・DAMP（高い音の消え方）・LOW CUT（低い音を下げる棚）・HIGH CUT
+  - MOD・RATE: 響きの揺れ、REVERB: 0 % で予備の遅れのこだまだけ・100 % で響きだけ、MIX、FREEZE: 響きを鳴らしっぱなしに
+- **CLASSIC VERB** … 昔のデジタルリバーブ 8 種類（ROOM / HALL / PLATE / BIG PLATE / CHAMBER / BIG HALL / MONO 1 / MONO 2）と MIX だけ
+  - MONO 1・2 は左右が同じ響き、MONO 2 は 8 kHz から上がない暗い響き
+- **SHAPE ROOM** … 形を変えられる部屋（つまみ 16 本）
+  - WET・DRY（別々の量）、SIZE（響きを伸び縮み）、START（響きの頭を飛ばす＝遠く暗く）、DECAY、DEPTH（上げると遠くに）、PREDELAY（0〜1 秒）
+  - REVERSE ON: 響きを逆回し（約 1.8 秒かけてだんだん大きくなって切れる。響きは 1.8 秒遅れて来ます）
+  - LOW / PEAK / HIGH の GAIN・FREQ（PEAK は Q も）: 響きの音色。GAIN は ±12 dB、50 % で 0 dB
+- **PICK ROOM** … 8 つの部屋から選ぶ（BOOTH / ROOM / STUDIO / CHAMBER / HALL / PLATE / CHURCH / CAVE）。DECAY で長さ、LOW CUT、MIX
+- **CLUB VERB** … シンプルな大きいリバーブ（盛り上げ・ブレイク向け）。SIZE（0.5〜8 秒）、LP・HP（響きの明るさ・低音の長さ）、MIX、FREEZE
+- **DIGI HALL** … 80 年代はじめのデジタルホール。ALGORITHM 3 種類、INTENSITY（長さ）、BASS / MID / X-OVER（低音・中音の響き方）、
+  HI CUT・REV COLOR（明るさ）、DEPTH、PREDELAY（3〜131 ms）、MODULATION（0〜3）、MIX、INPUT / OUTPUT（±10 dB、0 で無音）
+
 ## おすすめ
 - **クリーンのギター**: NOISE GATE（THRESHOLD 20 %）→ TUBE COMP（初期値）→ SPRING（MIX 45 %）。RACKS の「Spring Clean」
 - **ハイゲインの刻み**: いちばん上に NOISE GATE（THRESHOLD 35 %、RELEASE 20 %）。弾き止めでピタッと止まる。RACKS の「Tight High Gain」
@@ -78,6 +96,10 @@
 - **ギターのクリーンを伸ばす**: PEDAL COMP（SUSTAIN ON）をいちばん上に
 - **音量をペダルで**: VOLUME PEDAL の PEDAL を Logic のオートメーション（または足のエクスプレッションペダル）で動かす
 - リバーブやディレイをセンド（バス）で使うときは、WET / MIX を 100 % に
+- **大きな空間**: SPACE VERB（PREDELAY 20 ms、DECAY 少し長め、MIX 30 %）。RACKS の「Big Space」
+- **昔のプレート**: CLASSIC VERB の PLATE（MIX 18 %）。RACKS の「Vintage Plate」
+- **逆回しのふくらみ**: SHAPE ROOM の REVERSE ON（WET 50 %）。RACKS の「Reverse Swell」
+- **80 年代のホール**: DIGI HALL（MIX 25 %）。RACKS の「80s Hall」
 
 ## 気をつけること
 - **TUBE COMP の SATURATION・INPUT・OUTPUT は ±48 dB と幅が広い**（本物と同じ）。全部を上げると、とても大きな音になります。
@@ -94,6 +116,12 @@
 - FET COMP の OUTPUT、OPTO COMP の GAIN、VCA COMP の OUTPUT も上げきると +20 dB 以上になります（本物と同じ）。少しずつ上げてください
 - コンプを強くかける（COMPRESS・INPUT を上げる）と、無音のあとの最初の音の頭が跳ねます（本物も同じ）。大きな音を出す所では、いちばん後ろに MAXIMIZER か LIMITER を
 - CHANNEL DYN のゲート（RANGE を上げたとき）は、開く・閉じるタイミングがまだ大まか（細かい測定で合わせます）
+- 響きの部品の **MODE・PRESET・ROOM・ALGORITHM を切り替えると、響きが一瞬（約 50 ms）小さくなって残りが切れます**（プチッとしないため）
+  FREEZE 中に切り替えたときは、FREEZE を外したときに切り替わります（止めている響きを消さないため。外した瞬間に止めていた響きは約 15 ms で消えてから切り替わります）
+- **FREEZE で何分も止めていると、響きは少しずつ小さくなります**（10 分で 10〜40 dB ほど。発振しないための安全の分）
+- **SHAPE ROOM の REVERSE ON は、響きが約 1.8 秒遅れて来ます**（逆回しのため。Logic への遅れの申告はしません。ドライはそのまま）
+- **SPACE VERB の FEEDBACK は PREDELAY を上げたときだけ効きます**（本物と同じ）。PREDELAY を長くして FEEDBACK を上げきると、こだまがなかなか消えません
+- FROST VERB・EIGHT VERB・DIGI HALL XL の初期値は響きが多め（本物と同じ）。トラックに直接挿すときは MIX を下げてください
 
 ## 入れ方（インストール）
 Releases の latest から `AIOEffecter.zip`（または Actions の Artifacts「AIOEffecter-macOS」）を解凍して:

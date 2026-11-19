@@ -12,6 +12,7 @@
 #include "Transient.h"
 #include "VolumePedal.h"
 #include "Maximizer.h"
+#include "VerbParts.h"
 
 namespace aiofx
 {
@@ -47,6 +48,16 @@ inline const std::vector<Entry>& registry()
         { &PedalComp::info,      &makeModule<PedalComp> },        // 17
         { &VolumePedal::info,    &makeModule<VolumePedal> },      // 18
         { &Maximizer::info,      &makeModule<Maximizer> },        // 19
+        // 0.3.0（響き系。共通エンジン VerbEngine）
+        { &SpaceVerb::info,      &makeModule<SpaceVerb> },        // 20
+        { &ClassicVerb::info,    &makeModule<ClassicVerb> },      // 21
+        { &ShapeRoom::info,      &makeModule<ShapeRoom> },        // 22
+        { &PickRoom::info,       &makeModule<PickRoom> },         // 23
+        { &ClubVerb::info,       &makeModule<ClubVerb> },         // 24
+        { &DigiHall::info,       &makeModule<DigiHall> },         // 25
+        { &DigiHallXL::info,     &makeModule<DigiHallXL> },       // 26
+        { &FrostVerb::info,      &makeModule<FrostVerb> },        // 27
+        { &EightVerb::info,      &makeModule<EightVerb> },        // 28
     };
     return r;
 }
