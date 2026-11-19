@@ -109,9 +109,10 @@ void AIOEffecterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     const int numIn = getTotalNumInputChannels(), numOut = getTotalNumOutputChannels();
     const int n = buffer.getNumSamples();
     for (int ch = numIn; ch < numOut; ++ch) buffer.clear (ch, 0, n);
-    if (numOut >= 2 && numIn == 1) buffer.copyFrom (1, 0, buffer, 0, 0, n);   // モノの入口は左右に
 
+    // measureInput は入口の NaN・無限大も 0 に直すので、モノの入口を右へ写すのはその後（写してからだと右に NaN が残る。2026-11-19 GainMatch の NaN 対策）
     gainMatch.measureInput (buffer, juce::jmax (1, numIn));
+    if (numOut >= 2 && numIn == 1) buffer.copyFrom (1, 0, buffer, 0, 0, n);   // モノの入口は左右に
 
     readSlots (audioKnobs);
     double bpm = 120.0, ppq = -1.0;
@@ -254,6 +255,11 @@ namespace
             { "Auto-Pan",          { { "tremolo", { 0.0f, 0.5f, 0.45f, 1.0f / 3.0f, 1.0f, 0.85f, 0.85f } } } },
             { "Ring Bell",         { { "ringmod", { 0.6f, 0.2f, 1.0f, 0.5f } } } },
             { "Jet Flanger",       { { "flanger", { 0.0f, 1.0f, 0.25f, 0.8f, 0.8f, 1.0f } } } },
+            // 0.6.0（コーラス系）
+            { "Electric Flange",   { { "electricfl", {} } } },
+            { "Lush Chorus",       { { "multichorus", { 1.0f / 3.0f, 0.5f, 0.2f, 0.0f, 0.35f, 0.45f, 0.85f, 0.7f, 0.0f, 0.0f } } } },
+            { "Vintage Ensemble",  { { "vibeensemble", { 0.0f, 0.5f, 0.0f, 0.34282f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.64f } } } },
+            { "Organ Vibe",        { { "scannervibe", {} } } },
         };
         return r;
     }

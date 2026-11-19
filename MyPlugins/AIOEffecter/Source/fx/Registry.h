@@ -16,6 +16,7 @@
 #include "DelayParts.h"
 #include "EqParts.h"
 #include "ModParts.h"
+#include "ChorusParts.h"
 
 namespace aiofx
 {
@@ -77,6 +78,11 @@ inline const std::vector<Entry>& registry()
         { &Tremolo::info,        &makeModule<Tremolo> },          // 40
         { &RingMod::info,        &makeModule<RingMod> },          // 41
         { &Flanger::info,        &makeModule<Flanger> },          // 42
+        // 0.6.0（コーラス系）
+        { &ElectricLady::info,   &makeModule<ElectricLady> },     // 43
+        { &Choral::info,         &makeModule<Choral> },           // 44
+        { &Ensemble::info,       &makeModule<Ensemble> },         // 45
+        { &VintageVibe::info,    &makeModule<VintageVibe> },      // 46
     };
     return r;
 }

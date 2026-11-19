@@ -1,8 +1,8 @@
-# AIO Effecter（エーアイオー エフェクター）0.5.0
+# AIO Effecter（エーアイオー エフェクター）0.6.0
 
 いろいろなエフェクトを好きな順に並べて使う、ラック型のエフェクトです（Logic のトラックに挿すタイプ。AU）。
 中の部品は、Guitar Rig 7 Pro の部品を 1 つずつ測って、音の動きを合わせ込んで作りました（見た目・名前はオリジナルです）。
-0.1.0 は「響き」と「抑える」から 7 つの部品、0.2.0 で「抑える」の残り（コンプ・トランジェント・マキシマイザーなど）、0.3.0 でリバーブ 9 種類、0.4.0 でディレイ 6 種類（テープエコー・アナログ・ピンポンなど）、0.5.0 で EQ 5 種類と揺れもの 3 種類（トレモロ・リングモジュレーター・フランジャー）を足しました。これから版を重ねて部品を増やします。
+0.1.0 は「響き」と「抑える」から 7 つの部品、0.2.0 で「抑える」の残り（コンプ・トランジェント・マキシマイザーなど）、0.3.0 でリバーブ 9 種類、0.4.0 でディレイ 6 種類（テープエコー・アナログ・ピンポンなど）、0.5.0 で EQ 5 種類と揺れもの 3 種類（トレモロ・リングモジュレーター・フランジャー）、0.6.0 でコーラス系 4 種類（昔のペダルふうフランジャー・コーラス・アンサンブル・オルガンのビブラート）を足しました。これから版を重ねて部品を増やします。
 音の処理は、将来 **AIO Guitar のエフェクター欄にもそのまま移せる**形で作ってあります。
 
 ## 使い方
@@ -143,6 +143,22 @@
   - SYNC ON で再生中は、うねりが曲の拍にそろいます（TREMOLO も同じ。拍の頭で音が上がっている側から始まる）
   - STEREO ON で、右のうねりが左と逆向き（広がる）
 
+### コーラス系（0.6.0 で追加）
+- **ELECTRIC FLANGE** … 昔のペダルふうのフランジャー（くり返しで鳴く、やわらかいうねり）
+  - COLOR（くり返し。上げるほど鳴く）、DEPTH（うねりの深さ）、RATE（0.03〜11 Hz、SYNC ON で音符）、MIX
+  - STATIC ON でうねりを止めて、DEPTH の位置に固定（決まった色の「シュワッ」）。INVERT でこだまの向き、ROTATE で右のうねりを左からずらす（50 % = 同じ）
+- **MULTI CHORUS** … 2 本 1 組の声を最大 3 組まで重ねるコーラス
+  - MODE: CLASSIC（こもった昔のコーラス）/ LUSH（さらに暗く、速い揺れが足されて厚い）/ BRIGHT（明るく、遅れ長め）/ TWIN（素通しの明るさで、2 本が同じ向きに動く）
+  - VOICES（声の数 2〜6。組が増えるほど、後ろの組は少し速く揺れて、広がりは狭い）、DELAY（声のいちばん短い遅れ 0.3〜15 ms）
+  - RATE（0.25〜7.7 Hz）、AMOUNT（揺れの深さ＝音程の揺れ）、WIDTH（左右の広がり）、FEEDBACK（声をくり返して鳴かせる）、MIX、INVERT（声の向き）
+  - SCATTER は本物を測った範囲では音が変わらなかったので、こちらも変えていません
+- **VIBE ENSEMBLE** … 昔のコーラス／ビブラートの箱
+  - MODE: CHORUS（INTENSITY で揺れの速さ 0.1〜3 Hz。深さは決まっている）/ VIBRATO（DEPTH・RATE 3.2〜11.6 Hz で音程を揺らす）。SYNC ON で音符
+  - BASS・MID・TREBLE は揺れた音（ウェット）だけの音色（3 本の組み合わせを 125 通り測って合わせた）。VOLUME は全体の音量（±15 dB）、MIX、DELAY（声の遅れ）、STEREO（右の揺れを左から 0〜90° ずらす）
+- **SCANNER VIBE** … オルガンのスキャナー式ビブラート（揺れながら少しこもる、独特の「ゆらゆら」）
+  - MODE 1〜6（揺れの深さ）、RATE（0.75〜24 Hz）、BLEND（揺れない音を混ぜてコーラスに。0 = 揺れだけ）、COLOR（A / B / C。B・C は深い）
+  - SPREAD ON で左右をずらす（WIDTH = 0〜180°）、MIX。STEREO OFF で左右の入口をまとめてから揺らす
+
 ## おすすめ
 - **クリーンのギター**: NOISE GATE（THRESHOLD 20 %）→ TUBE COMP（初期値）→ SPRING（MIX 45 %）。RACKS の「Spring Clean」
 - **ハイゲインの刻み**: いちばん上に NOISE GATE（THRESHOLD 35 %、RELEASE 20 %）。弾き止めでピタッと止まる。RACKS の「Tight High Gain」
@@ -166,6 +182,10 @@
 - **トレモロ**: TREMOLO（初期値は 5.6 Hz・浅め）。RACKS の「Classic Tremolo」。左右にゆっくり振るなら「Auto-Pan」
 - **ベルのような音**: RING MOD の AM/RM を RM、DRY/WET 50 %。RACKS の「Ring Bell」
 - **ジェット機のうねり**: FLANGER の MODE を RINGING、INTENSITY・WIDTH 80 %。RACKS の「Jet Flanger」
+- **昔のペダルのフランジャー**: ELECTRIC FLANGE（初期値）。RACKS の「Electric Flange」。STATIC ON で止めて使うのも定番
+- **厚いコーラス**: MULTI CHORUS の MODE を LUSH、VOICES 50 %、WIDTH 85 %、MIX 70 %。RACKS の「Lush Chorus」
+- **昔のアンサンブル**: VIBE ENSEMBLE の CHORUS（MIX 50 %）。RACKS の「Vintage Ensemble」。VIBRATO にすると音程が揺れる
+- **オルガンのビブラート**: SCANNER VIBE（初期値 = MODE 4・BLEND 50 % のコーラス寄り）。RACKS の「Organ Vibe」。BLEND 0 で揺れだけ
 
 ## 気をつけること
 - **TUBE COMP の SATURATION・INPUT・OUTPUT は ±48 dB と幅が広い**（本物と同じ）。全部を上げると、とても大きな音になります。
@@ -206,6 +226,12 @@
 - **FLANGER の INTENSITY を上げると、ドライの低音が下がります**（本物と同じ）。CLASSIC は 100 % で −7 dB、**DEEP は 100 % で −24 dB**（ギターの 6 弦の開放が大きく痩せます）、
   RINGING ははじめから −9 dB で、100 % で −13 dB。低音を残したいときは INTENSITY を控えめに
 - FLANGER は、入る音が 0 dBFS を超えると、こだまの輪の中で少し頭打ちになります（RINGING で目立つ）。CONSOLE EQ（初期値 +12 dB）の後ろに置くときは、OUTPUT を下げてから
+- **MULTI CHORUS の FEEDBACK は上げるほど鳴きが長くなります**。100 % では余韻が数十秒残ります（本物はほとんど鳴り止みません。こちらはくり返し 1 周 0.99 倍までにして、
+  鳴きの強さは本物より 7 dB ほど控えめ）。鳴きの山に大きな音が入ると、とても大きく鳴るので、FEEDBACK を上げきるときは後ろに LIMITER か MAXIMIZER を
+- **VIBE ENSEMBLE の BASS・MID・TREBLE は影響し合います**（本物と同じ。例: BASS と TREBLE を上げきると MID はほとんど効かない、TREBLE 0 では全体がとても小さく暗くなる）。
+  3 本とも上げきると揺れた音の中低域が約 +12 dB、VOLUME も上げきると約 +27 dB になります（本物と同じ）。少しずつ上げてください
+- MULTI CHORUS・VIBE ENSEMBLE・SCANNER VIBE は、本物のギター用の入口（左だけ）で測りました。ステレオの音を入れたときは、左の音から左寄りの声、右の音から右寄りの声を作ります
+- SCANNER VIBE はまだ大まかな版です（揺れの幅・音色は 2〜3 dB 以内で合わせましたが、COLOR B / C の音色の違いは細かい測定で詰めます）
 
 ## 入れ方（インストール）
 Releases の latest から `AIOEffecter.zip`（または Actions の Artifacts「AIOEffecter-macOS」）を解凍して:
