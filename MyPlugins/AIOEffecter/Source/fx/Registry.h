@@ -23,6 +23,7 @@
 #include "FilterParts.h"
 #include "FilterParts2.h"
 #include "FilterParts3.h"
+#include "ModParts2.h"
 
 namespace aiofx
 {
@@ -105,6 +106,7 @@ inline const std::vector<Entry>& registry()
         { &ResoBank::info,       &makeModule<ResoBank> },         // 58
         { &DualFilter::info,     &makeModule<DualFilter> },       // 59
         { &SpeakFilter::info,    &makeModule<SpeakFilter> },      // 60
+        { &RingSweep::info,      &makeModule<RingSweep> },        // 61
     };
     return r;
 }

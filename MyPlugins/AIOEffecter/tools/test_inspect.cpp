@@ -137,7 +137,7 @@ inline double nowSec()
     return std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-static const char* kNew[] = { "resobank", "dualflt", "speakflt" };   // 0.10.0 のフィルター 3 つ（前の版の部品は kAll に）
+static const char* kNew[] = { "ringsweep" };   // 0.11.0 のリングモジュレーター（前の版の部品は kAll に）
 
 #include <cstring>
 #include <complex>
@@ -1419,7 +1419,7 @@ static const char* kAll[] = { "gate", "nred", "tubecomp", "limit", "studiovb", "
                               "electricfl", "multichorus", "vibeensemble", "scannervibe",
                               "classicph", "sweepph", "tapewow", "rotary",
                               "morphflt", "howlwah", "vintwah", "customwah", "vowelwah",
-                              "touchflt", "peakflt", "resobank", "dualflt", "speakflt" };
+                              "touchflt", "peakflt", "resobank", "dualflt", "speakflt", "ringsweep" };
 
 
 // ============================================================================

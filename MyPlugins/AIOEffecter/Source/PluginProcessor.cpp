@@ -282,6 +282,8 @@ namespace
             { "Stereo Peaks",      { { "dualflt", { 0.6f, 0.45f, 0.0f, 0.2f, 0.5f, 0.5f, 0.4f, 0.0f, 0.8f, 0.5f, 0.5f, 1.0f / 3.0f, 0.0f, 0.0f, 0.0f } } } },
             { "Speak Filter",      { { "speakflt", {} } } },
             { "Big Mouth",         { { "speakflt", { 0.5f, 0.2f, 0.5f, 0.8f, 1.0f / 12.0f } } } },
+            { "Ring Sweep",        { { "ringsweep", {} } } },
+            { "Choppy Trem",       { { "ringsweep", { 0.0f, 0.6f, 0.0f, 1.0f / 12.0f, 0.6f, 0.15f, 1.0f / 12.0f, 0.3f, 0.5f } } } },
         };
         return r;
     }
