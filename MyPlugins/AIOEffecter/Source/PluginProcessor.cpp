@@ -266,6 +266,11 @@ namespace
             { "Worn Tape",         { { "tapewow", { 0.2f, 0.3f, 0.1f, 0.465f, 0.3f, 0.35f, 0.4f, 1.0f } } } },
             { "Rotary Fast",       { { "rotary", {} } } },
             { "Rotary Slow",       { { "rotary", { 0.0f, 0.365f, 0.59f, 0.895f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 1.0f, 0.655f } } } },
+            { "Cocked Wah",        { { "howlwah", { 0.0f, 0.45f } } } },
+            { "Vintage Wah",       { { "vintwah", {} } } },
+            { "Custom Wah",        { { "customwah", {} } } },
+            { "Talk Box",          { { "vowelwah", { 0.0f, 0.5f, 0.49f, 0.5f, 0.0f } } } },
+            { "Band Pass",         { { "morphflt", { 0.55f, 0.55f, 0.66f, 0.5f } } } },
         };
         return r;
     }

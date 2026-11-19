@@ -17,6 +17,7 @@
 //     engine / lookmix / esteps … エンジンを表を通さず直接（飽和の形・ランダム・先読み・段の切り替え）
 //     targets … 本人が名前を挙げた大きく上げる設定の音量
 //     rackreset … ホストの reset のあと遅れのある段のドライに前の音が残るか
+//     resetleak … 音が流れている最中の reset で、遅れのある部品やフィルターを通らない音（高い所）が漏れないか（DSP 検査 0.8.0）
 //     maxlow  … 3 回目: MAXIMIZER の低音（34 Hz より下で窓の最大の列が溢れると歪みが段で増える。C1 と C#1 を比べる）
 //     swapin  … 3 回目: 再生中に部品を選び直して MAXIMIZER などが入る瞬間のプチッ
 //   表（DynTables.h）を作り直したら、ASan でも動かす（配列の外に書いていないか）:
@@ -134,7 +135,7 @@ inline double nowSec()
     return std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-static const char* kNew[] = { "classicph", "sweepph", "tapewow", "rotary" };   // 0.7.0 のフェイザー・テープ・ロータリー（前の版の部品は kAll に）
+static const char* kNew[] = { "morphflt", "howlwah", "vintwah", "customwah", "vowelwah" };   // 0.8.0 のフィルター・ワウ（前の版の部品は kAll に）
 
 #include <cstring>
 #include <complex>
@@ -1360,13 +1361,59 @@ static void modeRackReset()
     }
 }
 
+// 音が流れている最中のホストの reset で、部品を通らない音が漏れないか（DSP 検査 0.8.0: 遅れのある MORPH FILTER がコンプ用の「ドライ → 15 ms で部品の音へ」に入って、
+// LP 194 Hz なのに 2 kHz より上が −104 → −18 dBFS に跳ねた）。ホワイトノイズ −12 dBFS を流したまま 1 秒で reset、2 kHz より上の 1 ms ごとの強さを reset の前と後 30 ms で比べる
+static void modeResetLeak()
+{
+    const double sr = 48000; const int B = 256;
+    struct Case { const char* id; const char* what; std::vector<std::pair<int, float>> knobs; };
+    const std::vector<Case> cases = {
+        { "morphflt", "LP 194 Hz 24 dB", { { 0, 0.25f }, { 2, 1.0f } } }, { "morphflt", "LP 52 Hz 24 dB", { { 0, 0.0f }, { 2, 1.0f } } },
+        { "howlwah", "WAH 0", { { 1, 0.0f } } }, { "vintwah", "WAH 0", { { 1, 0.0f } } }, { "customwah", "初期値", {} }, { "vowelwah", "初期値", {} },
+        { "tapewow", "初期値", {} }, { "transient", "初期値", {} }, { "fetcomp", "初期値", {} }, { "maximizer", "初期値", {} } };
+    // 2 kHz の 2 次の HP（RBJ）を 2 段
+    auto hp = [&] (const std::vector<float>& x) {
+        const double w0 = 2.0 * M_PI * 2000.0 / sr, al = std::sin (w0) / (2.0 * 0.7071), cs = std::cos (w0);
+        const double b0 = (1 + cs) / 2, b1 = -(1 + cs), b2 = (1 + cs) / 2, a0 = 1 + al, a1 = -2 * cs, a2 = 1 - al;
+        std::vector<double> y (x.begin(), x.end());
+        for (int st = 0; st < 2; ++st)
+        {
+            double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+            for (auto& v : y) { const double in = v, o = (b0 * in + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0; x2 = x1; x1 = in; y2 = y1; y1 = o; v = o; }
+        }
+        return y;
+    };
+    std::printf ("== 音が流れている最中の reset: 2 kHz より上の 1 ms ごとの強さの最大（dBFS）、reset の前（ふだん）→ 後 30 ms（★ = 6 dB より上に跳ね、しかも −60 dBFS より上）==\n");
+    for (auto& c : cases)
+    {
+        Want w {}; for (auto& sl : w) { sl.type = 0; sl.on = true; for (auto& k : sl.k) k = 0.5f; }
+        w[0].type = typeForId (c.id); const auto& inf = *infoFor (w[0].type);
+        for (int k = 0; k < kMaxKnobs; ++k) w[0].k[k] = k < (int) inf.knobs.size() ? inf.knobs[(size_t) k].def : 0.5f;
+        for (auto& kv : c.knobs) w[0].k[kv.first] = kv.second;
+        Rack r; r.prepare (sr, B, w);
+        Sig s = noise (sr, 1.5, 0.25f);
+        const size_t t0 = (size_t) (1.0 * sr) / B * B;
+        for (size_t off = 0; off < s.size(); off += B)
+        {
+            if (off == t0) r.resetAll();
+            r.process (s.L.data() + off, s.R.data() + off, (int) std::min<size_t> ((size_t) B, s.size() - off), w, 120.0);
+        }
+        const auto y = hp (s.L);
+        const size_t win = (size_t) (0.001 * sr);
+        auto maxDb = [&] (size_t a, size_t b) { double mx = 1e-30; for (size_t i = a; i + win <= b; i += win) { double e = 0; for (size_t j = i; j < i + win; ++j) e += y[j] * y[j]; mx = std::max (mx, e / (double) win); } return 10.0 * std::log10 (mx); };
+        const double before = maxDb ((size_t) (0.5 * sr), t0), after = maxDb (t0, t0 + (size_t) (0.03 * sr));
+        std::printf ("  %-10s %-16s %7.1f → %7.1f%s\n", c.id, c.what, before, after, (after > before + 6.0 && after > -60.0) ? "  ★" : "");
+    }
+}
+
 static const char* kAll[] = { "gate", "nred", "tubecomp", "limit", "studiovb", "spring", "twindly",
                               "tubepush", "tubepushxl", "fetcomp", "optocomp", "vcacomp", "transient", "buscomp", "chandyn", "quickcomp", "pedalcomp", "volpedal", "maximizer",
                               "spacevb", "classicvb", "shaperoom", "pickroom", "clubverb", "digihall", "digihallxl", "frostverb", "eightverb",
                               "warpdly", "bbdecho", "widedly", "clubdly", "styledly", "tapeheads",
                               "shelfeq", "consoleeq", "parameq", "graphiceq", "scoopeq", "tremolo", "ringmod", "flanger",
                               "electricfl", "multichorus", "vibeensemble", "scannervibe",
-                              "classicph", "sweepph", "tapewow", "rotary" };
+                              "classicph", "sweepph", "tapewow", "rotary",
+                              "morphflt", "howlwah", "vintwah", "customwah", "vowelwah" };
 
 
 // ============================================================================
@@ -1885,6 +1932,7 @@ int main (int argc, char** argv)
     else if (m == "esteps") modeEngineSteps();
     else if (m == "targets") modeTargets();
     else if (m == "rackreset") modeRackReset();
+    else if (m == "resetleak") modeResetLeak();
     else if (m == "maxlow") modeMaxLow();
     else if (m == "swapin") modeSwapIn();
     else { std::printf ("知らないモード: %s（先頭のコメントを見てください）\n", m.c_str()); return 1; }

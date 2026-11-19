@@ -151,7 +151,8 @@ public:
             s.dryGate = (flowing && s.lat > 0) ? -s.lat : (1 << 30);   // 音が流れていたら、遅れのある段の出口（ドライも部品の音も）を、新しい音が届いてから 2 ms でフェードイン
             // 天井のない部品（コンプ類）は、そのあと 15 ms ドライから部品の音へ（下げを消した直後の跳ねを隠す）。
             // 天井のある部品（MAXIMIZER、Module::hasCeiling）はドライを出さない（出すと天井 −1 dBFS を +3.7〜+5.2 dBFS 超えた: DSP 検査 0.7.0 の 3 回目）
-            if (flowing && s.running && s.lat > 0 && s.mod && ! s.mod->hasCeiling()) { s.prime = s.lat; s.wet = 0.0f; }
+            // 音色を大きく変える部品（MORPH FILTER）も dryAfterReset = false（フィルターを通らない音が 15 ms 漏れた: DSP 検査 0.8.0）
+            if (flowing && s.running && s.lat > 0 && s.mod && s.mod->dryAfterReset()) { s.prime = s.lat; s.wet = 0.0f; }
             s.latFade = 1.0f;
         }
         hold[0] = lastOut[0]; hold[1] = lastOut[1]; slope[0] = lastOut[0] - prevOut[0]; slope[1] = lastOut[1] - prevOut[1]; rFade = sounding ? 0.0f : 1.0f; rPos = 0;

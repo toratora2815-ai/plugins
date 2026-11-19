@@ -20,6 +20,7 @@
 #include "PhaserParts.h"
 #include "TapeParts.h"
 #include "RotaryParts.h"
+#include "FilterParts.h"
 
 namespace aiofx
 {
@@ -91,6 +92,12 @@ inline const std::vector<Entry>& registry()
         { &SweepPhaser::info,    &makeModule<SweepPhaser> },      // 48
         { &TapeWobble::info,     &makeModule<TapeWobble> },       // 49
         { &Rotary::info,         &makeModule<Rotary> },           // 50
+        // 0.8.0（フィルター・ワウ）
+        { &MorphFilter::info,    &makeModule<MorphFilter> },      // 51
+        { &HowlWah::info,        &makeModule<HowlWah> },          // 52
+        { &VintageWah::info,     &makeModule<VintageWah> },       // 53
+        { &CustomWah::info,      &makeModule<CustomWah> },        // 54
+        { &VowelWah::info,       &makeModule<VowelWah> },         // 55
     };
     return r;
 }

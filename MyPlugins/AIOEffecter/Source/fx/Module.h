@@ -56,6 +56,9 @@ public:
     // 出口に越えてはいけない天井がある部品（MAXIMIZER）。ラックは reset のあと、この部品の段ではドライを混ぜない。
     // 先読み（遅れ）のあるリミッターを足すときは、必ず true を返すこと（DSP 検査 0.7.0 の 4 回目）
     virtual bool hasCeiling() const { return false; }
+    // 遅れのある部品で、ホストの reset のあと先読みが埋まるまでドライを出して、15 ms で部品の音へ戻してよいか（コンプ類の「下げを消した直後の跳ね」を隠す）。
+    // 音色を大きく変える部品（フィルター）は false（ドライが漏れる: DSP 検査 0.8.0）。天井のある部品も false
+    virtual bool dryAfterReset() const { return ! hasCeiling(); }
     virtual double tailSeconds() const { return 0.0; }
     // 画面用（0..1、ゲートの開き具合・コンプの下げ量など。ないものは -1）
     virtual float meter() const { return -1.0f; }

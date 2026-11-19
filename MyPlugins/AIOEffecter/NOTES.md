@@ -350,6 +350,38 @@ aufx Aifx Mypl。2026-11-18 本人「guitar rig 7 pro … いろいろ実験し�
   再生の頭 15 ms だけドライ → 部品の音へ移った（2 回目の reset が wetBeforeReset に 0 を写す / 途切れに気づいても 1 回目の prime を片付けない）→ 続けて来たときは最初の wet を残し、途切れていたら先に片付ける。
   reset が続く 3 通りの順番 × 部品 × 入口 48 通りがまっさらと同じ（dblreset）。ラックのファズ（ASan）NaN 0・±16 超え 0
 
+## 0.8.0（2026-11-19）フィルター・ワウ
+- 部品 51〜55（fx/FilterParts.h）: MORPH FILTER = Pro-Filter / HOWL WAH = Cry Wah / VINTAGE WAH = Real Wah / CUSTOM WAH = Wahwah / VOWEL WAH = Talk Wah。
+  作業メモは scratchpad/filter_laws_080.md。比べ方: ピンクノイズの区間の伝達関数（tf.py、遅れ 16 で合わせる）を 2 次などの式に当てはめ（bqfit.py・pbp.py・wahjoint.py）、
+  libmodi（modilib2.cpp）で同じ modS を通して全部の記録と比べる（wahcmp.py・cwcmp.py・vwcmp.py・mfcmp.py）。追加の測定 list22（ワウ 2 種の途中の位置）・list23（Wahwah 132 通り）・list24（Talk Wah・Formant Filter・Peak Filter 82 通り）
+  - MORPH FILTER: 状態変数フィルターの LP / BP / HP を MODE で直線に（LP → −BP → HP）、SLOPE で 2 段目（LP²・BP²・HP²）へ混ぜる量、RES の Q と全体の大きさの表。
+    2 倍（ハーフバンド 1 段）で計算（本物は角を上げきったとき高い所がなだらか）。遅れ 3 を申告。45 通りで中央 0.70 dB。
+    合っていない所: RES 0.75〜1 の山（本物 700 Hz に +28 dB の鋭い山、こちら +18 dB で広い）、FREQ 1 の BP / HP の 10 kHz から上（ラダー型でも RES の端は 2.4 dB）
+    次に詰めるときの手がかり: 本物の 4 次を自由な分子で当てはめると（0.07〜0.10 dB）、極は同じ角（710 Hz）に Q の違う 2 組（RES 0 / .5 / .75 / 1 で 0.41・0.64 / 2.97・0.94 / 8.68・1.29 / 60・1.67）。
+    分子 ≈ G ((1 − m) D_b ＋ m)（D_b = 低い Q の組）= 1 段目が高い Q・2 段目が低い Q、SLOPE で 2 段目へ混ぜる形。こちらは 2 段とも同じ Q（pf2.py）
+  - HOWL WAH / VINTAGE WAH: 全体の大きさ × 2 次（分子自由）× 2 次 × 1 次の HP。9 か所（WAH 1/8 ごと）をまとめて当てはめ、係数の対数が位置でなめらかに動くようにした（2 階差に罰）。
+    HOWL は HP なし（6 Hz まで平ら。1 Hz の直流よけだけ）、VINTAGE は 200〜235 Hz の 1 次 HP。周波数特性 0.03〜0.12 dB、本物の遅れ（+1 サンプル）を除いた波形の差 −24〜−46 dB。
+    ペダルは端から端まで最短 0.04 秒（一瞬で飛ばすと HOWL の 2 段の中の大きな分が追いつかず「チッ」27 → 1.3。0.08 秒だと全幅 8 Hz のオートメーションの振れが 59 % に削られた）
+  - CUSTOM WAH: 出口 = DRY x ＋ k (αL LP ＋ αB BP ＋ αH HP)。周波数・Q・LEVEL は MIN と MAX の間を t(p) = p (2p − 1) ＋ 4p (1 − p) MID でつなぐ（t(0.5) = MID）。
+    周波数はつまみの位置で混ぜてから Hz に（FREQ MAX は +0.399 ずれた位置 → Φ(u) の表）、k = 0.80 − 0.698 u、λ = 1.99 (3.17^u − 1)、α は MODE × λ の表、DRY = 2 × 1000^(v − 1)。
+    197 通りで中央 0.10 dB・9 割 0.42 dB・いちばん悪い所 1.12 dB（つま先 10 kHz で Q が本物より 26 % 高い）
+  - VOWEL WAH: 山で正規化した BP 4 本の並列（母音の F1・F2・F3 と 8〜10 kHz の広い山）。WAH の表は 1/16 ごとに 17 か所測った値、SIZE は F1 だけ 3.185^(SIZE − 0.49) 倍、
+    OUTPUT ±15 dB、BRIGHT = f / 900 Hz の傾き（各帯域を HP × f_i / (900 Q_i) に替える ＋ 双一次の持ち上がりを (1 + 0.43 z⁻¹) / 1.43 で戻す）。56 通りで中央 0.26 dB・いちばん悪い所 0.48 dB
+- **DSP 検査 1 回目（0.8.0）「直してから」**（発振・NaN・暴走はなし）→ 直した:
+  1. 音が流れている最中のホストの reset で、遅れのある MORPH FILTER がコンプ類と同じ「先読みが埋まるまでドライ → 15 ms で部品の音へ」に入り、フィルターを通らない音が漏れた
+     （LP 194 Hz・ノイズで 2 kHz より上 −104 → −18 dBFS）→ Module::dryAfterReset()（初期値 = ! hasCeiling）を足し、MORPH FILTER は false。ラックはこれで判断
+  2. （任意）ペダルの最短 0.08 → 0.04 秒（WahPedal::kSweepSec、CUSTOM・VOWEL も同じ）/ CUSTOM WAH の RES の位置を 1 までに（MID の曲線で 1 を超えて Q が 50 に跳ねた。本物の記録は 1 の内側だけ）/
+     表示を実際に山が来る周波数に（表の値はアナログの Hz。WahPedal::digitalHz）/ README に CUSTOM WAH の大きさと「挿しただけで +8〜9 dB」
+- **DSP 検査 2 回目（0.8.0）「渡してよい」**: 段の漏れ（ラックのつなぎを外して）LP −18.5 → −57.8、BP −18.7 → −54.9、HP 3 k −32.0 → −54.5 dBFS。0.7.0 の 50 部品 × 27 条件で出力が 1 ビットも同じ。
+  ペダル 0.04 秒で 8 Hz の追従 64.5 → 92.7 %、RES の頭打ちで Q の最大 50 → 9.8、表示と実際の山の差 3 % 以内。
+  **次に直す（0.7.0 から、全部品に関わる）**: ラックの reset のつなぎ（最後の音と傾きを 2 ms 持つ）が、高い音だけの出口（HP・ハイハット）に低い「ポッ」を作る
+  （MORPH HP 3 kHz で 300 Hz より下 −110 → −12.6 dBFS。つなぎなしなら −54.6）→ つなぎの元を低い所だけ（200 Hz 前後の 1 次 LP で追った値と傾き）にする案。
+  直したら rackreset・swapin・max と resetleak（HP を足すなら、つなぎを外すか空のラックと比べる形で）を回し直す
+  そのまま: VOWEL の BRIGHT の戻しは 44.1 kHz だけ 18 / 20 kHz で +1.9 / +6 dB（係数は 48 kHz 用）、HOWL の 1 Hz 直流よけの残り −75 dBFS、
+  Polyphase2x は中の値を 0 に落とさない（processBlock の ScopedNoDenormals の中で使う。AIO Guitar へ移すときも同じ）
+  - 0.9.0 へ回したもの: FORMANT FILTER（並列 BP では 0.9 dB、形がまだ分からない）、PEAK FILTER（PUMP が音量で動くらしい = 静かな測り方では決まらない。KILL は 1.76 × (1 − BP) の形）、
+    AUTO FILTER・DOPPEL FILTER・FILTERBANK
+
 ## 次に
 - 部品を足す（全部の記録が cap/ にある）: アンプ（Fire Seeker・Jump・ICM の新しいアンプ）とキャビ、歪み、揺れもの、フィルター、ピッチ。足すたびに Registry の後ろへ
 - AIO Guitar のエフェクター欄へ移す（本人の将来の希望）
