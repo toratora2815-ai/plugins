@@ -400,6 +400,38 @@ aufx Aifx Mypl。2026-11-18 本人「guitar rig 7 pro … いろいろ実験し�
   4. test_inspect の click で peakflt は「Peak Push」の設定から（MIX 0 は素通しで何も測れていなかった）→ FREQ 5.5・EDGE 6.4・PUMP 4.0・MIX 3.4・KILL 2.0
   そのまま（任意）: TOUCH FILTER は大きな入力で ATTACK を最短にすると角が 0.1〜0.3 ms で一気に動き、音の頭に短い高い音（山を直線の大きさで追うため。本物の 0 / +12 dBFS の段で比べてから）
 
+## 0.9.1（2026-11-20）ラックの reset のつなぎを線形予測に（Rack.h、全部の部品に関わる）
+- 0.8.0 の「次に直す」: 音が流れている最中のホストの reset で、最後の音と傾きを 2 ms 持ってつなぐと、高い音だけの出口（HP・ハイハット）では持った値が 2 ms の低い「ポッ」になった
+- 直し方: 出口の最後の 2048 サンプルを輪に記録（hist）。reset のとき、最後の 10 ms（ハン窓、48 kHz で 480 サンプル）から線形予測の係数（自己相関法・Levinson-Durbin、
+  次数 32 × レート / 48 k、16〜64。ラグ窓 60 Hz、白色ノイズ −50 dB、極を 20 ms で内側へ）を求めて続きを 2 ms 分作り（makeBridge、確保なし）、smoothstep で新しい音へ渡す（頭打ちは検査 1 回目の 1 番）。
+  高い音だけの出口なら続きも高い音のまま、低い音なら波の形のまま続く（パケット損失の隠し方と同じ考え）。
+  続きの頭打ち: 最初は 10 ms で減る包絡 envPk（220 Hz の次の山を平らに削って 5 kHz より上が −62 dBFS に増えた）→ 予測に使った 10 ms の山（検査 1 回目で角が残ると指摘）→ 直前約 48 ms の山 ＋ なめらかなゲイン
+- 測った（直す前 → 後。検査係 0.7.0・0.8.0 の道具 hpdiag・rackscen・rstover・stale2 などをそのまま使って）:
+  MORPH HP 3 kHz の reset で 300 Hz より下 −12.6 → −82.8 dBFS（つなぎなしだと −54.5、ふだん −110）/ HP 15 kHz の 2 kHz より下 −17.4 → −63.8（ふだん −61.7）/
+  LP 194 Hz の 2 kHz より上 −76.8 → −100.1 / 220 Hz を流したままの場面 13 個 × ブロック 4 種のプチッ（5 kHz より上）: 悪くなったもの 0、多くは 13〜23 dB 静かに（MAXIMIZER ON で −78 → −94〜−101、CLASSIC PHASER −72〜−75 → −91〜−96）/
+  reset 後 3 ms の山は全部ふだんの出口の山以下（CLASSIC PHASER 1 kHz の谷 −10.8 → −2.8 dBFS = 抜けなくなった）/ MAXIMIZER の天井・無音からの最初の音（firstfade・hissfirst・maxreset）は 1 ビットも同じ /
+  test_inspect の rack・rack2・swapin・max・maxlow・block・reset・rates は 1 ビットも同じ。rackreset は 94 サンプル目までの山が −15.1 → −10.0 dBFS（つなぎが波の形のまま 2 ms で消えるため。長さは同じ）
+- bridgefuzz（新しい検査）: レート 8 k〜384 k × ブロック 1〜2048 × 入力 9 種 × ラック 4 種で reset 2016 回（つなぎの途中・2 回続けても）、NaN・±16 超え 0、ASan / UBSan 誤り 0。
+  reset 1 回の計算 48 kHz で 0.03 ms、192 kHz 0.23 ms、384 kHz 0.29 ms
+- **DSP 検査 1 回目（0.9.1）「直してから」**（HP の低い「ポッ」が消えたのは確認・NaN なし・天井を守る・ASan / UBSan 誤り 0）→ 直した:
+  1. 続きの頭打ちが「予測に使った 10 ms の山」で 1 サンプルずつ硬い clamp → 和音のうなり・トレモロ・ひずんだ音・リミッターの後で本当の続きより低く角ができ、
+     いちばん悪い位置の reset のプチッ（5 kHz より上）が前の版より大きかった（MAXIMIZER ＋ ひずんだ和音 前 −39.1 → −18.2 dBFS、192 kHz のひずんだ和音 −11.7）
+     → 頭打ちの基準を直前約 48 ms の実際の出口の山（1 ms ごとの山の輪 pkRing。どのレートでも同じ長さ。検査係の案は 2048 サンプルの輪全体 = 192 kHz では 10.7 ms しかない）、
+     硬い clamp をやめ、必要な下げを前後に 0.25 ms の傾きでならしたゲインに（O(n)、|続き| ≤ 山は必ず守る）→ −27.9 dBFS（ふだん −46.6）、空のラックの和音 −36.7 → −73.3、
+     192 kHz の和音の最悪 −50.4（検査係の案）→ −73.9
+  2. 途切れ（process が 100 ms 以上来ない）のあとも記録と山の包絡が古いまま → process の頭で途切れていたら消す（clearHistory）
+  3. reset の重さ（192 kHz で 0.24 ms）→ 自己相関を 4 本に分けて足す（0.13 ms、384 kHz 0.18 ms）
+  4. rFade を makeBridge より前に出していた → 後に。さらにプロセッサーの reset() を processBlock と同じ鍵（getCallbackLock）の中で呼ぶ（別スレッドの reset と音の処理が重ならない）
+  5. Rack の大きさ: 1,096 → 67,528 バイト（ヒープの上）
+  確かめた: test_inspect の rack・rack2・swapin・max・maxlow・block・reset・rates・rackreset は直す前と 1 ビットも同じ、resetleak の MORPH LP 52 Hz だけ −89.4 → −88.8 dBFS。
+  検査係の道具（pos・rk・ceil・bt）は 48 kHz で検査係の案と同じ結果、天井 −6 dBFS の MAXIMIZER で −6.000 dBFS。ASan / UBSan 誤り 0（bridgefuzz・bt の全部の場面）
+  そのまま（まれ）: 0.67 ms 以内にぴたっと止まった音を reset すると −2.1 dBFS でよみがえる / 鳴り始め 0.25〜1 ms の reset は 5 kHz より上 −26〜−38 dBFS（前 −40〜−64）
+- **DSP 検査 2 回目（0.9.1）「渡してよい」**: 1 回目の 5 点はすべて正しく直っている（longPeak を直近の本当の最大と照らし合わせ 71,801 回でずれ 0、500 Hz〜768 kHz・ブロック 1〜2048・
+  prepare し直し・途切れ・reset を混ぜて。ASan / UBSan 誤り 0。getCallbackLock: JUCE の AU は processBlock を同じ鍵の中で呼ぶ・CriticalSection は再帰で優先度の継承つき、
+  processBlock の中ではプラグインの鍵を取らないので止まる道はない。鍵を持つ時間は 48k で最長 0.03〜0.32 ms、192k の響き 8 段で最長 1.03 ms（ほとんどは部品の reset。0.9.0 でも中央 0.4 ms））
+  → 勧められた 1 行を足した: 途切れたら途中だったつなぎもやめる（rFade = 1。reset → 2 ms 未満の process → 途切れ → 再開で、途切れる前の音の残りが最大 −3.7 dBFS 混ざった。0.9.0 でも −4.5 dBFS の前からの穴。
+  undoContinuation は呼ばない = 部品を ON にした直後の先読みの埋めに古い wetBeforeReset を戻すため）。process の重さ 9.5 → 13.9 ns / サンプル
+
 ## 次に
 - 部品を足す（全部の記録が cap/ にある）: アンプ（Fire Seeker・Jump・ICM の新しいアンプ）とキャビ、歪み、揺れもの、フィルター、ピッチ。足すたびに Registry の後ろへ
 - AIO Guitar のエフェクター欄へ移す（本人の将来の希望）

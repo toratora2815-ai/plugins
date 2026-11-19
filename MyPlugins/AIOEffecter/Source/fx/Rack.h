@@ -60,8 +60,14 @@ public:
         }
         updateLatency();
         fadeStep = (float) (1.0 / (0.015 * sr));
-        rFadeStep = (float) (1.0 / (0.002 * sr)); rFade = 1.0f; rTau = (float) (8.0 * sr / 48000.0); gateLen = std::max (1, (int) (0.002 * sr));
-        lastOut[0] = lastOut[1] = prevOut[0] = prevOut[1] = hold[0] = hold[1] = slope[0] = slope[1] = 0.0f;
+        rFadeStep = (float) (1.0 / std::min (0.002 * sr, (double) (kBridge - 2))); rFade = 1.0f; gateLen = std::max (1, (int) (0.002 * sr));
+        bridgeLen = std::min (kBridge, (int) std::ceil (1.0 / rFadeStep) + 2);
+        lpcWin = std::clamp ((int) std::lround (0.010 * sr), 64, kHist);
+        for (int i = 0; i < lpcWin; ++i) lpcWinFn[i] = (float) (0.5 - 0.5 * std::cos (2.0 * M_PI * (i + 0.5) / lpcWin));   // ハン窓
+        lpcOrder = std::clamp ((int) std::lround (32.0 * sr / 48000.0), 16, kOrderMax);
+        for (int c = 0; c < 2; ++c) std::fill (std::begin (pred[c]), std::end (pred[c]), 0.0f);
+        pkLen = std::max (1, (int) std::lround (0.001 * sr));
+        clearHistory();
         envA = (float) std::exp (-1.0 / (0.01 * sr)); envPk[0] = envPk[1] = 0.0f; lastInPk = 0.0f;
         for (auto& s : slots) s.dryGate = 1 << 30;
         gapUs = std::max<int64_t> (100000, (int64_t) (4.0e6 * block / sr)); lastProcUs.store (0, std::memory_order_relaxed); resetPending = false;
@@ -93,6 +99,8 @@ public:
         // テンポは 5〜999 BPM だけ受ける（inf や 0 が来たら前の値のまま。DSP 検査 0.5.0）
         if (std::isfinite (bpm) && bpm >= 5.0 && bpm <= 999.0) tempo = bpm;
         songPpq = std::isfinite (ppq) ? ppq : -1.0; songPlaying = playing && songPpq >= 0.0;
+        // 途切れていたら、つなぎの元の記録（輪・1 ms ごとの山）と出口の山の包絡を消す（途切れる前の古い音で予測・頭打ち・「鳴っていた」の判断をしない: DSP 検査 0.9.1）
+        if (lastProcUs.load (std::memory_order_relaxed) != 0 && processGap()) { clearHistory(); rFade = 1.0f; }   // 途中だったつなぎ（途切れる前の音の続き）もやめる（DSP 検査 0.9.1 の 2 回目）
         // reset の前後で process が途切れていた（Logic が止めている間・バイパスの間は呼ばないことがある）なら、続きではないので reset のつなぎをやめて頭から
         if (resetPending)
         {
@@ -107,30 +115,34 @@ public:
             processSlot (i, L, R, n, want[(size_t) i]);
         // 安全のための頭打ち（+24 dBFS）。ふだんは届かない（TUBE COMP を全部最大にしたときなどの事故よけ）
         for (int j = 0; j < n; ++j) { L[j] = std::clamp (L[j], -16.0f, 16.0f); R[j] = std::clamp (R[j], -16.0f, 16.0f); }
-        // ホストの reset の直後は、reset 前の最後の音（とその傾き。8 サンプルの時定数で止める）から 2 ms でつなぐ
-        // （中を全部消すので、音が流れている最中だと段になってプチッ: DSP 検査 0.7.0 の 2 回目）
+        // ホストの reset の直後は、reset 前の出口の続き（線形予測で作った 2 ms。makeBridge）から 2 ms で新しい音へ渡す
+        // （中を全部消すので、音が流れている最中だと段になってプチッ: DSP 検査 0.7.0 の 2 回目。
+        //   前は最後の音と傾きを持っていたが、高い音だけの出口（HP・ハイハット）では持った値が 2 ms の低い「ポッ」になった: DSP 検査 0.8.0 の 2 回目）
         if (rFade < 1.0f)
             for (int j = 0; j < n; ++j)
             {
                 rFade = std::min (1.0f, rFade + rFadeStep);
-                const float f = smoothstep (rFade), t = (float) (++rPos);
-                const float ext = rTau * (1.0f - std::exp (-t / rTau));
-                // 傾きの外挿は直前の出口の山（10 ms で減る包絡）より外へ出さない（高い音で行き過ぎて +10〜+28 dBFS になった: DSP 検査 0.7.0 の 3 回目）
-                const float hl = std::clamp (hold[0] + slope[0] * ext, -envPk[0], envPk[0]), hr = std::clamp (hold[1] + slope[1] * ext, -envPk[1], envPk[1]);
+                const float f = smoothstep (rFade);
+                const int t = std::min (rPos++, bridgeLen - 1);
+                const float hl = pred[0][t], hr = pred[1][t];
                 L[j] = std::clamp (hl + f * (L[j] - hl), -16.0f, 16.0f); R[j] = std::clamp (hr + f * (R[j] - hr), -16.0f, 16.0f);
             }
         else
             for (int j = 0; j < n; ++j) { envPk[0] = std::max (std::abs (L[j]), envPk[0] * envA); envPk[1] = std::max (std::abs (R[j]), envPk[1] * envA); }
-        if (n > 1) { prevOut[0] = L[n - 2]; prevOut[1] = R[n - 2]; }
-        else if (n == 1) { prevOut[0] = lastOut[0]; prevOut[1] = lastOut[1]; }
-        if (n > 0) { lastOut[0] = L[n - 1]; lastOut[1] = R[n - 1]; }
+        // 出口の記録（reset のつなぎの元）: 最後の kHist サンプルの輪と、1 ms ごとの山（約 48 ms 分。つなぎの頭打ちに使う）
+        for (int j = 0; j < n; ++j)
+        {
+            hist[0][histPos] = L[j]; hist[1][histPos] = R[j]; histPos = (histPos + 1) & (kHist - 1);
+            pkCur[0] = std::max (pkCur[0], std::abs (L[j])); pkCur[1] = std::max (pkCur[1], std::abs (R[j]));
+            if (++pkCount >= pkLen) { pkRing[0][pkPos] = pkCur[0]; pkRing[1][pkPos] = pkCur[1]; pkCur[0] = pkCur[1] = 0.0f; pkPos = (pkPos + 1) % kPkSlots; pkCount = 0; }
+        }
         lastProcUs.store (nowUs(), std::memory_order_relaxed);
     }
 
     // ホストのリセット（再生の停止・位置の移動・書き出しの前）: 全部の段の響き・下げを消す（確保なし）。ドライの遅れの記録も消す（前の音が出ないように: DSP 検査 0.2.0）。
     // 音が流れている最中の reset だけ、段にならないようにつなぐ（DSP 検査 0.7.0 の 2・3 回目）:
     //   遅れのある段は、新しい音が遅れの分だけ届いてから段の出口全体を 2 ms でフェードイン / 天井のない遅れのある部品は先読みが埋まるまでドライ → 15 ms で部品の音へ /
-    //   響きのある部品の入口は 15 ms でフェードイン / 出口が鳴っていたら、最後の音と傾き（山の包絡で頭打ち）から 2 ms でつなぐ。無音からの reset では何もしない
+    //   響きのある部品の入口は 15 ms でフェードイン / 出口が鳴っていたら、出口の続きを線形予測で作り（直前約 48 ms の山で、なめらかなゲインで頭打ち）、2 ms で新しい音へ渡す。無音からの reset では何もしない
     void resetAll()
     {
         // 入口に音が来ていた（−80 dBFS より上）ときだけ、響きの部品の入口をフェードイン。出口が −50 dBFS より上で鳴っていたときだけつなぐ
@@ -155,7 +167,9 @@ public:
             if (flowing && s.running && s.lat > 0 && s.mod && s.mod->dryAfterReset()) { s.prime = s.lat; s.wet = 0.0f; }
             s.latFade = 1.0f;
         }
-        hold[0] = lastOut[0]; hold[1] = lastOut[1]; slope[0] = lastOut[0] - prevOut[0]; slope[1] = lastOut[1] - prevOut[1]; rFade = sounding ? 0.0f : 1.0f; rPos = 0;
+        // つなぎ（pred）を作り終えてから始める（DSP 検査 0.9.1。プロセッサーの reset も processBlock と同じ鍵の中で呼ぶ）
+        if (sounding) { makeBridge (0); makeBridge (1); }
+        rPos = 0; rFade = sounding ? 0.0f : 1.0f;
         resetPending = keepBefore || flowing || sounding;
     }
 
@@ -328,6 +342,87 @@ private:
         }
     }
     static float smoothstep (float x) { return x * x * (3.0f - 2.0f * x); }
+
+    // reset のつなぎの元: 出口の最後の 10 ms から線形予測（自己相関法・Levinson-Durbin、次数は 48 kHz で 32）の係数を求め、続きを bridgeLen サンプル作る。
+    // 高い音だけの出口なら続きも高い音のまま（低い「ポッ」が出ない）、低い音なら波の形のまま続く。確保なし（配列は全部メンバー）
+    void makeBridge (int ch)
+    {
+        const int W = lpcWin, p = lpcOrder;
+        for (int i = 0; i < W; ++i)   // 古い順に、ハン窓をかけて
+        {
+            const float v = hist[ch][(histPos - W + i + kHist) & (kHist - 1)];
+            lpcBuf[i] = (double) lpcWinFn[i] * (double) v;
+        }
+        double r[kOrderMax + 1];
+        for (int k = 0; k <= p; ++k)
+        {
+            double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;   // 4 本に分けて足す（足し算の待ちが重ならず速い: DSP 検査 0.9.1。192 kHz で 0.24 → 0.13 ms）
+            int i = k;
+            for (; i + 3 < W; i += 4) { s0 += lpcBuf[i] * lpcBuf[i - k]; s1 += lpcBuf[i + 1] * lpcBuf[i + 1 - k]; s2 += lpcBuf[i + 2] * lpcBuf[i + 2 - k]; s3 += lpcBuf[i + 3] * lpcBuf[i + 3 - k]; }
+            for (; i < W; ++i) s0 += lpcBuf[i] * lpcBuf[i - k];
+            const double a = (s0 + s1) + (s2 + s3);
+            // ラグ窓（ガウス、帯域 60 Hz 相当）: 山を少しなだらかにして、係数が極端にならないように
+            const double lw = 2.0 * M_PI * 60.0 * k / sr;
+            r[k] = a * std::exp (-0.5 * lw * lw);
+        }
+        double a[kOrderMax + 1] {}, tmp[kOrderMax + 1];
+        int order = 0;
+        if (std::isfinite (r[0]) && r[0] > 1.0e-14)
+        {
+            r[0] *= 1.0 + 1.0e-5;   // 白色ノイズの足し（−50 dB）: 数値の安定
+            a[0] = 1.0;
+            double e = r[0];
+            for (int i = 1; i <= p; ++i)
+            {
+                double acc = r[i];
+                for (int k = 1; k < i; ++k) acc += a[k] * r[i - k];
+                const double kk = -acc / e;
+                if (! std::isfinite (kk) || std::abs (kk) >= 1.0) break;
+                for (int k = 0; k <= i; ++k) tmp[k] = a[k];
+                for (int k = 1; k < i; ++k) a[k] = tmp[k] + kk * tmp[i - k];
+                a[i] = kk;
+                e *= (1.0 - kk * kk);
+                order = i;
+                if (e <= r[0] * 1.0e-12) break;
+            }
+        }
+        // 帯域の広げ（極を内側へ: 20 ms で 1/e）。続きが鳴り続けて増えないように
+        const double g = std::exp (-1.0 / (0.02 * sr));
+        double gk = 1.0;
+        for (int k = 1; k <= order; ++k) { gk *= g; a[k] *= gk; }
+        // 続きを作る（直前の kOrderMax サンプル（窓をかけない値）の後ろに、予測した値を足していく。x[kOrderMax − 1] = reset 前の最後）
+        double* x = extBuf;
+        for (int k = 0; k < kOrderMax; ++k) x[k] = (double) hist[ch][(histPos - kOrderMax + k + kHist) & (kHist - 1)];
+        for (int t = 0; t < bridgeLen; ++t)
+        {
+            const int c = kOrderMax + t;
+            double y = x[c - 1];   // 予測できない（無音に近い・壊れた値）なら最後の値をそのまま
+            if (order > 0) { y = 0.0; for (int k = 1; k <= order; ++k) y -= a[k] * x[c - k]; }
+            if (! std::isfinite (y)) y = 0.0;
+            x[c] = std::clamp (y, -16.0, 16.0);   // 続きの計算は頭打ち前の値で
+        }
+        // 頭打ちは直前約 48 ms の実際の出口の山（10 ms の窓の山だと和音のうなり・トレモロ・低い音で本当の続きより低く、角ができた: DSP 検査 0.9.1）。
+        // 1 サンプルずつの硬い clamp ではなく、なめらかなゲインで: 必要な下げ r = min(1, lim/|u|) を後ろ向き・前向きに「1 サンプルで dG まで」しか
+        // 戻らないようにならす（どの t でも g ≤ r なので |pred| ≤ lim = 直前の出口を超えない。MAXIMIZER の天井も守れる）。O(n)
+        const double lim = std::min (longPeak (ch), 16.0f);
+        const double dG = 1.0 / std::max (2.0, 0.00025 * sr);
+        double* gg = gainBuf;
+        for (int t = 0; t < bridgeLen; ++t) { const double u = std::abs (x[kOrderMax + t]); gg[t] = u > lim ? (lim > 0.0 ? lim / u : 0.0) : 1.0; }
+        for (int t = bridgeLen - 2; t >= 0; --t) gg[t] = std::min (gg[t], gg[t + 1] + dG);
+        for (int t = 1; t < bridgeLen; ++t) gg[t] = std::min (gg[t], gg[t - 1] + dG);
+        for (int t = 0; t < bridgeLen; ++t) pred[ch][t] = (float) (x[kOrderMax + t] * gg[t]);
+    }
+    float longPeak (int ch) const
+    {
+        float m = pkCur[ch];
+        for (int i = 0; i < kPkSlots; ++i) m = std::max (m, pkRing[ch][i]);
+        return m;
+    }
+    void clearHistory()
+    {
+        for (int c = 0; c < 2; ++c) { std::fill (std::begin (hist[c]), std::end (hist[c]), 0.0f); std::fill (std::begin (pkRing[c]), std::end (pkRing[c]), 0.0f); }
+        histPos = 0; pkCur[0] = pkCur[1] = 0.0f; pkPos = 0; pkCount = 0; envPk[0] = envPk[1] = 0.0f;
+    }
     void updateLatency()
     {
         int t = 0;
@@ -343,9 +438,21 @@ private:
     bool songPlaying = false;
     int block = 512, ringLen = 4096;
     float fadeStep = 0.001f;
-    float rFade = 1.0f, rFadeStep = 0.01f, rTau = 8.0f, hold[2] {}, slope[2] {}, lastOut[2] {}, prevOut[2] {};   // reset の直後のつなぎ
+    float rFade = 1.0f, rFadeStep = 0.01f;   // reset の直後のつなぎ（2 ms）
     int rPos = 0, gateLen = 96;
-    float envPk[2] {}, envA = 0.998f, lastInPk = 0.0f;   // 出口の山の包絡（10 ms で減る。reset のつなぎの頭打ち）
+    static constexpr int kHist = 2048, kOrderMax = 64, kBridge = 1024;
+    float hist[2][kHist] {};      // 出口の最後の kHist サンプル（輪。つなぎの元）
+    int histPos = 0;
+    float pred[2][kBridge] {};    // reset 前の出口の続き（線形予測）
+    double lpcBuf[kHist] {};      // 予測の計算用（確保しないためにメンバー）
+    double extBuf[kOrderMax + kBridge] {};
+    double gainBuf[kBridge] {};   // 続きの頭打ちのゲイン
+    float lpcWinFn[kHist] {};     // ハン窓（prepare で作る）
+    static constexpr int kPkSlots = 48;
+    float pkRing[2][kPkSlots] {}, pkCur[2] {};   // 1 ms ごとの出口の山（約 48 ms 分。どのレートでも同じ長さ）
+    int pkPos = 0, pkCount = 0, pkLen = 48;
+    int bridgeLen = 98, lpcWin = 480, lpcOrder = 32;
+    float envPk[2] {}, envA = 0.998f, lastInPk = 0.0f;   // 出口の山の包絡（10 ms で減る。reset のときに出口が鳴っていたかの判断）
     std::atomic<int64_t> lastProcUs { 0 };   // 最後の process の終わり（壁の時計、マイクロ秒。0 = まだ）
     int64_t gapUs = 100000;                  // これより長く process が来なかったら「途切れた」（100 ms か 4 ブロックの長いほう）
     bool resetPending = false;               // reset でつなぎを用意した（次の process で、途切れていたらやめる）

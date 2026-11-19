@@ -16,8 +16,10 @@
 //     block / reset / rates / cpu / cpu2 / pedal
 //     engine / lookmix / esteps … エンジンを表を通さず直接（飽和の形・ランダム・先読み・段の切り替え）
 //     targets … 本人が名前を挙げた大きく上げる設定の音量
-//     rackreset … ホストの reset のあと遅れのある段のドライに前の音が残るか
+//     rackreset … ホストの reset のあと遅れのある段のドライに前の音が残るか（94 サンプル目までは reset のつなぎ = 前の音の続きを 2 ms で消す分。0.9.1 から波の形のまま続くので山は −10 / −6 dBFS）
 //     resetleak … 音が流れている最中の reset で、遅れのある部品やフィルターを通らない音（高い所）が漏れないか（DSP 検査 0.8.0）
+//     bridgefuzz … reset のつなぎ（線形予測、0.9.1）: レート 8k〜384k × ブロック 1〜2048 × 入力 9 種 × ラック 4 種で、いろいろな所で reset（2 回続けて・つなぎの途中も）。
+//                  NaN・±16 超え・つなぎの 2 ms の山（直前 10 ms の山に対して）・makeBridge の時間。ASan でも動かす
 //     maxlow  … 3 回目: MAXIMIZER の低音（34 Hz より下で窓の最大の列が溢れると歪みが段で増える。C1 と C#1 を比べる）
 //     swapin  … 3 回目: 再生中に部品を選び直して MAXIMIZER などが入る瞬間のプチッ
 //   表（DynTables.h）を作り直したら、ASan でも動かす（配列の外に書いていないか）:
@@ -1421,6 +1423,82 @@ static const char* kAll[] = { "gate", "nred", "tubecomp", "limit", "studiovb", "
 
 // ============================================================================
 // 全部の部品（0.1.0 の 7 個も）: つまみ 0 / 1 / 0.5 / 初期値 / ランダム、途中でつまみを動かす、いろいろなレート・ブロック
+static void modeBridgeFuzz()
+{
+    const double rates[] = { 8000, 22050, 44100, 48000, 96000, 192000, 384000 };
+    const int blocks[] = { 1, 7, 64, 256, 2048 };
+    static const char* inName[] = { "220 Hz -6", "15 kHz -6", "noise -12", "+24dBFS noise", "DC 0.5", "impulses", "tiny 1e-30", "square 110", "silence" };
+    struct RackSet { const char* what; std::vector<std::pair<const char*, std::vector<std::pair<int, float>>>> parts; };
+    const std::vector<RackSet> racks = {
+        { "空", {} },
+        { "MORPH HP 3k", { { "morphflt", { { 0, 0.74f }, { 1, 0.33f }, { 2, 1.0f }, { 3, 1.0f } } } } },
+        { "MAXIMIZER", { { "maximizer", { { 1, 1.0f }, { 2, 1.0f } } } } },
+        { "TAPE+PHASER+VERB", { { "tapewow", {} }, { "classicph", {} }, { "spacevb", {} } } } };
+    double worstRatio = 0.0, worstMs = 0.0; int bad = 0; long resets = 0;
+    for (auto& rk : racks)
+        for (double sr : rates)
+            for (int B : blocks)
+                for (int in = 0; in < 9; ++in)
+                {
+                    Want w {}; for (auto& sl : w) { sl.type = 0; sl.on = false; for (auto& k : sl.k) k = 0.5f; }
+                    for (size_t i = 0; i < rk.parts.size(); ++i)
+                    {
+                        w[i].type = typeForId (rk.parts[i].first); w[i].on = true; const auto& inf = *infoFor (w[i].type);
+                        for (int k = 0; k < kMaxKnobs; ++k) w[i].k[k] = k < (int) inf.knobs.size() ? inf.knobs[(size_t) k].def : 0.5f;
+                        for (auto& kv : rk.parts[i].second) w[i].k[kv.first] = kv.second;
+                    }
+                    Rack r; r.prepare (sr, B, w);
+                    const size_t N = (size_t) (0.35 * sr);
+                    std::vector<float> L (N), R (N);
+                    std::mt19937 g (11 + in); std::uniform_real_distribution<float> d (-1.0f, 1.0f);
+                    for (size_t i = 0; i < N; ++i)
+                    {
+                        const double t = (double) i / sr; float v = 0.0f;
+                        switch (in)
+                        {
+                            case 0: v = 0.5f * (float) std::sin (2 * M_PI * 220 * t); break;
+                            case 1: v = 0.5f * (float) std::sin (2 * M_PI * 15000 * t); break;
+                            case 2: v = 0.25f * d (g); break;
+                            case 3: v = 16.0f * d (g); break;
+                            case 4: v = 0.5f; break;
+                            case 5: v = (i % (size_t) (0.01 * sr + 1) == 0) ? 1.0f : 0.0f; break;
+                            case 6: v = 1.0e-30f * d (g); break;
+                            case 7: v = std::sin (2 * M_PI * 110 * t) >= 0 ? 0.5f : -0.5f; break;
+                            default: v = 0.0f; break;
+                        }
+                        L[i] = v; R[i] = in == 1 ? -v : v;
+                    }
+                    // reset の場所: 0.15 秒・0.15 秒 + 3 サンプル後にもう 1 回（つなぎの途中）・0.25 秒で 2 回続けて
+                    const size_t r1 = (size_t) (0.15 * sr), r2 = r1 + 3, r3 = (size_t) (0.25 * sr);
+                    std::vector<size_t> at = { r1, r2, r3, r3 };
+                    size_t ai = 0;
+                    for (size_t off = 0; off < N;)
+                    {
+                        size_t m = std::min<size_t> ((size_t) B, N - off);
+                        if (ai < at.size() && at[ai] > off) m = std::min (m, at[ai] - off);
+                        while (ai < at.size() && at[ai] == off)
+                        {
+                            const auto t0 = std::chrono::steady_clock::now();
+                            r.resetAll(); ++resets; ++ai;
+                            worstMs = std::max (worstMs, std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count());
+                        }
+                        if (m == 0) continue;
+                        r.process (L.data() + off, R.data() + off, (int) m, w, 120.0);   // テストは壁の時計より速く回るので、reset の前後は「途切れていない」扱い
+                        off += m;
+                    }
+                    double before = 0.0, after = 0.0;
+                    for (size_t i = 0; i < N; ++i)
+                    {
+                        if (! std::isfinite (L[i]) || ! std::isfinite (R[i]) || std::abs (L[i]) > 16.0f || std::abs (R[i]) > 16.0f) { ++bad; break; }
+                    }
+                    const size_t w10 = (size_t) (0.01 * sr), w2 = (size_t) (0.002 * sr) + 2;
+                    for (size_t i = r3 - w10; i < r3; ++i) before = std::max (before, (double) std::max (std::abs (L[i]), std::abs (R[i])));
+                    for (size_t i = r3; i < r3 + w2 && i < N; ++i) after = std::max (after, (double) std::max (std::abs (L[i]), std::abs (R[i])));
+                    if (rk.parts.empty() && before > 1.0e-3) worstRatio = std::max (worstRatio, after / before);
+                }
+    std::printf ("  reset %ld 回: NaN・±16 超え %d 回、空のラックでつなぎの 2 ms の山 / 直前 10 ms の山 最大 %.3f、reset 1 回の時間 最大 %.3f ms\n", resets, bad, worstRatio, worstMs);
+}
+
 static void modeFuzzAll (int nRandom)
 {
     static const char* inName[] = { "+12dBFS 100Hz", "pluck -6", "noise -12", "impulse", "0dBFS 7kHz", "silence", "+24dBFS noise", "tiny 1e-30", "DC 0.5" };
@@ -1936,6 +2014,7 @@ int main (int argc, char** argv)
     else if (m == "targets") modeTargets();
     else if (m == "rackreset") modeRackReset();
     else if (m == "resetleak") modeResetLeak();
+    else if (m == "bridgefuzz") modeBridgeFuzz();
     else if (m == "maxlow") modeMaxLow();
     else if (m == "swapin") modeSwapIn();
     else { std::printf ("知らないモード: %s（先頭のコメントを見てください）\n", m.c_str()); return 1; }

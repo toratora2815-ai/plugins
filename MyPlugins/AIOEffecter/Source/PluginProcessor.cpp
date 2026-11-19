@@ -173,6 +173,8 @@ void AIOEffecterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
 void AIOEffecterProcessor::reset()
 {
+    // processBlock と同じ鍵の中で（ホストが別のスレッドから reset を呼んでも、つなぎを作っている途中の値を音の処理が読まない: DSP 検査 0.9.1）
+    const juce::ScopedLock sl (getCallbackLock());
     rack.resetAll();
 }
 

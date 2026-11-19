@@ -174,7 +174,7 @@
   0.2.0 でマルチアウト（7 出口 1 Main / 2 Kick / 3 Snare / 4 Room / 5 Toms / 6 Hi-Hat / 7 Cymbals、並びは固定。部品の出口にはその部品の全マイク＋EDM の層、
   ROOM は全部の部品のルームをまとめて、スイッチは曲の配線なのでプリセットで変えない。本人「マルチアウト作って」）。Plugin Link は LINK 欄だけ（Kind 27 は未登録）。試作・テストは tools/render.cpp・tools/test_inspect.cpp（DSP 検査係）
 
-- AIO Effecter（AIOEffecter）0.9.0 … 部品を 8 段に並べるラック型エフェクト（aufx Aifx。2026-11-18 本人「Guitar Rig 7 Pro をいろいろ実験して、響きとか抑制とか、そのまんま同じものを。名前は aio effecter」）。
+- AIO Effecter（AIOEffecter）0.9.1 … 部品を 8 段に並べるラック型エフェクト（aufx Aifx。2026-11-18 本人「Guitar Rig 7 Pro をいろいろ実験して、響きとか抑制とか、そのまんま同じものを。名前は aio effecter」）。
   部品は Guitar Rig 7 Pro を測って合わせ込み（見た目・名前はオリジナル、つまみは同じ数・同じ 0..1 の尺度、最大 16 本）。0.1.0 は NOISE GATE（波形の差 −64 dB 以下）・NOISE REDUCTION・TUBE COMP・LIMITER・ROOM VERB・SPRING・DUAL DELAY。
   0.2.0 で抑える系の残り（TUBE PUSH / XL・FET / OPTO / VCA / BUS COMP・CHANNEL DYN・QUICK / PEDAL COMP・TRANSIENT・VOLUME PEDAL・MAXIMIZER（先読み 353 ＋ 4 倍 4 ＋ 天井を守る 72 = 429 サンプル（48 kHz で 8.9 ms）を申告））。コンプ類は共通エンジン（fx/DynEngine.h）＋自動生成の表（fx/DynTables.h、build/aiofx/fit）。
   0.3.0 で響き系 9 個（SPACE VERB = Raum・CLASSIC VERB = Vintage Verb・SHAPE ROOM = Reflektor（REVERSE あり）・PICK ROOM = Little Reflektor・CLUB VERB = Traktor Reverb・
