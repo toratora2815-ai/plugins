@@ -581,6 +581,24 @@ aufx Aifx Mypl。2026-11-18 本人「guitar rig 7 pro … いろいろ実験し�
   **DSP 検査 2 回目（0.14.0）「直してから」**: 最初は「動かなくなったら目標へ一気にそろえる」にしたが、サンプル数で持っている遅れは止まる所が遠く（DUAL DELAY の TIME 125 → 1000 ms で 48 kHz 7.5 サンプル・192 kHz 120 サンプル手前、
   BBD 8〜471 サンプル）、そろえた瞬間に読み出し位置が飛んでプチッ（10〜20 kHz で +22〜+46 dB、DUAL DELAY の TIME・PRE・SYNC、DIGI HALL XL の PREDELAY、TAPE HEADS の SPEED）
   → std::nextafter で 1 刻みずつ（65 部品 × 全部のつまみ × 上げ下げ × 48 / 192 kHz の 2080 通りで新しいプチッ 13 → 0。settled になるまで 0.19〜0.22 秒）
+## 0.15.0（2026-11-20）ペダル: STEEL DIST（fx/PedalParts.h）
+- 66 STEEL DIST = Distortion。記録 cap/amp/Distortion 30 通り。初期値は build/aiofx/grall/Distortion.xml（Tone .68199、Volume .83884、Distortion .49102、Bass .55742、Mid .70508、Treble .4918、Stereo 0）。道具は scratchpad/ds（ds1〜ds9、dscmp.py、dstest.cpp）
+- 歪む前か後か（−48 dBFS と 0 dBFS の利得の動き）: 前 = DISTORTION・BASS・MID・TREBLE、後 = TONE・VOLUME
+- 小さな音の形（ds4・ds5、30 通りで rms 0.52 dB）: 入口 HP 26.7 Hz × BASS の 1 次 HP（5.6 kHz / 1.76 kHz / 542 / 409（.557）/ 167 / 50 Hz）× MID の山（つまみごとに量・位置・幅。0 で 422 Hz −2.9 dB Q 0.2、1 で 4.7 kHz +2.2 dB Q 0.54）
+  × TREBLE の棚 (1 + s/z)/(1 + s/p)（つまみごとに極と零。0 は 990 Hz の LP 同然、1 は 2.98 → 3.6 kHz の持ち上げ）× DISTORTION（−6.4 / −4.8 / 0 / +8.4 / +19.8 dB）
+  × TONE = (1 − α) LP 348 Hz ＋ α HP 930 Hz（α = 0.008〜0.86）× VOLUME（v / 0.83884）。TREBLE 0 / 0.25 の 17 kHz だけ 4〜7 dB 合わない（棚の形では表せない。元から −20 dB の所）
+- 頭打ち（ds6）: D(u) = u / (1 + |u|^n)^(1/n)、n = 3.93、目盛り a = 4.288、非対称 δ = 0.0018。倍音を比べると、1 kHz の 3 次・5 次が 1 dB 少なく、DI の 3〜12 kHz が 0.7 dB 少なかった
+  → 小さな音では打ち消し合う高音の振り分け（歪む前に (1 + s/2244)/(1 + s/2000)、後に (1 + s/2000)/(1 + s/2244)）を足して DI に合わせた（ds9、DI の差 rms 0.5 → 0.23 dB）
+- 本物との差（C++ の下書き、dscmp.py）: ギターの DI の 1/3 オクターブ 帯域の差の最大 中央 0.26 dB（TREBLE 0 だけ 1.07、TONE 0 で 0.88）、正弦波の利得 rms 0.22〜0.55 dB（TREBLE 0 だけ 0.70）、
+  小さな音の形 最大 0.15〜0.7 dB（TREBLE 0 で 6.4、0.25 で 3.0、BASS 0 で 1.5）。本物の小さな音の 3 次（雑音の床）はこちらは出さない
+- 作り: 全部を 4 倍の中で（遅れ 4、ドライを漏らさない）。頭打ちは共通の PowClipTable（n = 3.93 の表を prepare で作る）＋ 1 次の ADAA。MID は Svf の山（16 サンプルごとに作り直し、4 倍の中で 64 回でつなぐ）、
+  TREBLE の棚は LP_p ＋ (p/z)(1 − LP_p) の形（零が 300 kHz でも 4 倍のナイキストに引っかからない）。STEREO は BRICK FUZZ と同じ（OFF のまま止まっている間は左だけ計算して右へ写す）
+- 自己検査（scratchpad/ds/dstest.cpp）: ブロック 1〜2048 の差 0、reset 後は新品と同じ、8 レート × 40 通りで NaN 0、プチッ 1.0 以下、CPU 0.49 %（STEREO OFF の初期値。ON で 0.90 %）
+
+- **DSP 検査 1 回目（0.15.0）「渡してよい」**: 高音の振り分けの前後の積は 1 から 0.0017 dB 以内、MID の Svf の係数は 16 サンプルの境目で跳ばない（つまみ 0.005 ごとの変化 0.056 dB 以下）、
+  TREBLE の棚はどの点も p < z（下げるだけ）、δ による直流は最大 −67.4 dBFS（波形の非対称による低い所は本物どおり: 初期値 本物 −32.3 / こちら −33.0 dBFS）→ 直流止めは足さない。
+  折り返し（2.5 kHz 0 dBFS）本物 −44.3 / こちら −54.8 dB。CPU（48 kHz）STEREO OFF 0.49 %・ON 0.92 %。直したのは README の MID 100 % の 4.6 → 4.7 kHz だけ。
+  test_inspect の click1 は強い歪みでは「ふだん」が大きくて見分けられない（小さな音の高い所か、動かさない 2 通りとの比べで見る）
 ## 次に
 - 部品を足す（全部の記録が cap/ にある）: アンプ（Fire Seeker・Jump・ICM の新しいアンプ）とキャビ、歪み、揺れもの、フィルター、ピッチ。足すたびに Registry の後ろへ
 - AIO Guitar のエフェクター欄へ移す（本人の将来の希望）

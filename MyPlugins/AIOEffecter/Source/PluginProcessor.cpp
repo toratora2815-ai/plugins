@@ -291,6 +291,8 @@ namespace
             { "Mid Lead",          { { "middrive", { 0.7f, 0.6f, 0.5f, 0.5f, 0.3f, 0.5f, 1.0f } } } },
             { "Brick Fuzz",        { { "brickfuzz", {} } } },
             { "Thin Fuzz",         { { "brickfuzz", { 0.5f, 0.25f, 0.75f, 0.68f, 0.0f } } } },
+            { "Steel Dist",        { { "steeldist", {} } } },
+            { "Steel Scoop",       { { "steeldist", { 0.75f, 0.6f, 0.8f, 0.75f, 0.0f, 0.75f, 0.0f } } } },
         };
         return r;
     }

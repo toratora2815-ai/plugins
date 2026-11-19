@@ -1,6 +1,7 @@
 #pragma once
 // 足元のペダル（0.12.0〜）。JUCE なし
 #include "ModParts2.h"
+#include "VerbEngine.h"   // Svf（STEEL DIST の MID）
 
 namespace aiofx
 {
@@ -527,6 +528,171 @@ private:
     Co cur, tgt, inc;
     int left = 0;
     St z[2];
+    Oversampler4 os[2];
+};
+
+// ---- STEEL DIST（Guitar Rig の Distortion を測って合わせ込み。3 バンドの EQ つきのディストーション）----
+// 測った結果（cap/amp/Distortion 30 通り）: −48 dBFS と 0 dBFS の利得の動きで、歪む前 = DISTORTION・BASS・MID・TREBLE、歪んだ後 = TONE・VOLUME と分かれた。
+//   形（中は全部 4 倍）: 入口 HP 26.7 Hz → BASS の HP（5.6 kHz〜50 Hz）→ MID の山（−2.9〜+2.2 dB、つまみごとに位置・幅も）→ TREBLE の棚（極と零）
+//     → 高音の振り分け (1 + s/2244)/(1 + s/2000) → × DISTORTION（−6.4〜+19.8 dB）→ 頭打ち → (1 + s/2000)/(1 + s/2244) → TONE（LP 348 Hz と HP 930 Hz を混ぜる）→ × VOLUME（v / 0.839）
+//   小さな音の形 30 通りで rms 0.52 dB（TREBLE 0 / 0.25 の 17 kHz だけ 4〜7 dB）。高音の振り分けは小さな音では打ち消し合い、強く歪ませたときの倍音で決めた（DI の差 0.5 → 0.23 dB）
+//   頭打ち D(u) = u / (1 + |u|^n)^(1/n)、n = 3.93、目盛り a = 4.288、非対称 δ = 0.0018。STEREO 0（初期値、本物も 0）= 左右を混ぜてから歪ませる
+class SteelDist final : public Module
+{
+public:
+    static float distDb (float d)
+    {
+        static const float x[5] { 0.0f, 0.25f, 0.49102f, 0.75f, 1.0f }, y[5] { -6.4106f, -4.7671f, 0.0f, 8.3904f, 19.845f };
+        return interpTable (x, y, std::clamp (d, 0.0f, 1.0f));
+    }
+    static float bassLog2 (float b)
+    {
+        static const float x[6] { 0.0f, 0.25f, 0.5f, 0.55742f, 0.75f, 1.0f }, y[6] { 12.458f, 10.7788f, 9.0817f, 8.6763f, 7.3825f, 5.6543f };
+        return interpTable (x, y, std::clamp (b, 0.0f, 1.0f));
+    }
+    // MID: 山の量 dB・位置 log2 Hz・幅 Q（初期値 0.705 は 0 dB なので、位置と幅は前後の間をとった）
+    static void midOf (float m, float& db, float& lf, float& q)
+    {
+        static const float x[6] { 0.0f, 0.25f, 0.5f, 0.70508f, 0.75f, 1.0f };
+        static const float g[6] { -2.9345f, -2.5184f, -1.5571f, 0.0f, 0.2715f, 2.1556f };
+        static const float f[6] { 8.7244f, 9.5857f, 10.3646f, 11.6625f, 11.9468f, 12.1993f };
+        static const float qq[6] { 0.2f, 0.3264f, 0.5041f, 0.566f, 0.58f, 0.5362f };
+        m = std::clamp (m, 0.0f, 1.0f);
+        db = interpTable (x, g, m); lf = interpTable (x, f, m); q = interpTable (x, qq, m);
+    }
+    // TREBLE: 棚 (1 + s/z)/(1 + s/p) の極 p と零 z（log2 Hz）
+    static void trebleOf (float t, float& lp, float& lz)
+    {
+        static const float x[6] { 0.0f, 0.25f, 0.4918f, 0.5f, 0.75f, 1.0f };
+        static const float p[6] { 9.9746f, 11.2069f, 12.4357f, 12.4659f, 11.7177f, 11.5411f };
+        static const float z[6] { 18.1946f, 18.1946f, 15.5912f, 15.5272f, 12.0257f, 11.8146f };
+        t = std::clamp (t, 0.0f, 1.0f);
+        lp = interpTable (x, p, t); lz = interpTable (x, z, t);
+    }
+    static float toneAlpha (float t)
+    {
+        static const float x[6] { 0.0f, 0.25f, 0.5f, 0.68199f, 0.75f, 1.0f }, y[6] { 0.0075f, 0.2069f, 0.4111f, 0.568f, 0.6283f, 0.8609f };
+        return interpTable (x, y, std::clamp (t, 0.0f, 1.0f));
+    }
+    static float volGain (float v) { return std::clamp (v, 0.0f, 1.0f) / 0.83884f; }
+    static const ModuleInfo& info()
+    {
+        static const ModuleInfo i { "steeldist", "STEEL DIST", "PEDAL",
+            "Distortion with a 3-band EQ before the clipping (BASS, MID, TREBLE) and a TONE control after it. STEREO OFF mixes left and right before the distortion.",
+            {
+                { "DISTORTION", 0.49102f, 0, [] (float v) { return fmtPct (v); } },
+                { "TONE",       0.68199f, 0, [] (float v) { return fmtPct (v); } },
+                { "VOLUME",     0.83884f, 0, [] (float v) { return v <= 0.0005f ? std::string ("OFF") : fmt (gainToDb (volGain (v)), 1, " dB"); } },
+                { "BASS",       0.55742f, 0, [] (float v) { return fmtPct (v); } },
+                { "MID",        0.70508f, 0, [] (float v) { float d, f, q; midOf (v, d, f, q); return fmt (d, 1, " dB"); } },
+                { "TREBLE",     0.4918f,  0, [] (float v) { return fmtPct (v); } },
+                { "STEREO",     0.0f,     2, [] (float v) { return std::string (v >= 0.5f ? "ON" : "OFF (mono)"); } },
+            } };
+        return i;
+    }
+    void prepare (double sampleRate, int) override
+    {
+        (void) clip();   // 表はここで作る（オーディオのスレッドで作らない）
+        sr = sampleRate; fs4 = 4.0 * sr;
+        for (auto* s : { &sB, &sMdb, &sMf, &sMq, &sTp, &sTz }) s->prepare (sr, 0.03);
+        for (auto* s : { &sG, &sV, &sMono, &sAl }) s->prepare (sr, 0.02);
+        gIn = tptG (kFin); gSp = tptG (2000.0); gSq = tptG (2244.0); gL = tptG (kFl); gH = tptG (kFh);
+        recalc (true);
+        design (cur, true); tgt = cur; left = 0;
+        reset();
+    }
+    void reset() override { for (auto& o : os) o.reset(); for (auto& st : z) { st = {}; } for (auto& m : mid) m.reset(); }
+    void setKnob (int i, float v) override { if (i < 0 || i >= 7 || same (k[i], v)) return; k[i] = v; recalc (false); }
+    int latency() const override { return 4; }   // 4 倍の上げ下げ
+    bool dryAfterReset() const override { return false; }
+    void process (float* L, float* R, int n) override
+    {
+        const auto& C = clip();
+        const float d0 = C.raw (kDelta);
+        const int nCh = (sMono.settled() && sMono.target >= 0.999f) ? 1 : 2;   // STEREO OFF のまま止まっている間は左だけ計算して右へ写す
+        for (int s = 0; s < n; ++s)
+        {
+            const float g = sG.next(), vol = sV.next(), mono = sMono.next(), al = sAl.next();
+            if (left == 0 && ! (sB.settled() && sMdb.settled() && sMf.settled() && sMq.settled() && sTp.settled() && sTz.settled()))
+            {
+                for (int i = 0; i < kStep; ++i)
+                    for (auto* sm : { &sB, &sMdb, &sMf, &sMq, &sTp, &sTz }) { const float b = sm->cur; sm->next(); if (same (b, sm->cur)) sm->cur = sm->target; }
+                design (tgt, false);
+                for (int q = 0; q < kCo; ++q) inc.v[q] = (tgt.v[q] - cur.v[q]) / (float) kStep;
+                left = kStep;
+            }
+            if (left > 0)
+            {
+                if (--left == 0) cur = tgt;
+                else for (int q = 0; q < kCo; ++q) cur.v[q] += inc.v[q];
+            }
+            const float gB = cur.v[0], gT = cur.v[1], rT = cur.v[2];
+            const float mid0 = 0.5f * (L[s] + R[s]);
+            const float in[2] { L[s] + mono * (mid0 - L[s]), R[s] + mono * (mid0 - R[s]) };
+            for (int ch = 0; ch < nCh; ++ch)
+            {
+                auto& st = z[ch];
+                float u4[4]; os[ch].up (in[ch], u4);
+                for (auto& x : u4)
+                {
+                    float u = x - lp (st.in, gIn, x);                          // 入口 26.7 Hz
+                    u -= lp (st.bass, gB, u);                                    // BASS の HP
+                    mid[ch].step(); u = mid[ch].process (u);                     // MID の山
+                    { const float l = lp (st.treb, gT, u); u = l + rT * (u - l); }   // TREBLE の棚 (1 + s/z)/(1 + s/p) = LP_p ＋ (p/z)(1 − LP_p)
+                    { const float l = lp (st.sp, gSp, u); u = l + kPre * (u - l); }  // 振り分け（前）: (1 + s/2244)/(1 + s/2000)
+                    float w = C.adaa (kA * g * u + kDelta, st.x1) - d0;          // 頭打ち（ADAA）
+                    w *= 1.0f / kA;
+                    { const float l = lp (st.sq, gSq, w); w = l + kPost * (w - l); } // 振り分け（後）: (1 + s/2000)/(1 + s/2244)
+                    const float wl = lp (st.tl, gL, w), wh = w - lp (st.th, gH, w);
+                    x = vol * ((1.0f - al) * wl + al * wh);                      // TONE と VOLUME
+                }
+                (ch == 0 ? L : R)[s] = os[ch].down (u4);
+            }
+            if (nCh == 1) R[s] = L[s];
+        }
+        if (nCh == 1) { z[1] = z[0]; os[1] = os[0]; mid[1] = mid[0]; }   // 右の中身を左にそろえておく（ON に戻したとき続きから）
+    }
+
+private:
+    static constexpr double kFin = 26.6593, kFl = 347.525, kFh = 929.633;
+    static constexpr float kK = 57.8978f, kA = 4.2878f, kDelta = 0.00184f;
+    static constexpr float kPre = (float) (2000.0 / 2244.0), kPost = (float) (2244.0 / 2000.0);
+    static constexpr double kN = 3.92761;
+    static constexpr int kStep = 16, kCo = 3;
+    struct Co { float v[kCo] { 0.0f, 0.0f, 1.0f }; };   // BASS の HP・TREBLE の LP（TPT の G）・p/z
+    struct OneSt { float s = 0.0f; };
+    struct St { OneSt in, bass, treb, sp, sq, tl, th; double x1 = (double) kDelta; };
+    static const PowClipTable& clip() { static const PowClipTable t (kN, 0.0); return t; }
+    static inline float lp (OneSt& o, float G, float x) { const float v = G * (x - o.s), y = v + o.s; o.s = flush (y + v); return y; }
+    float tptG (double f) const { const double gg = std::tan (kPiD * std::min (f, 0.45 * fs4) / fs4); return (float) (gg / (1.0 + gg)); }
+    void recalc (bool snap)
+    {
+        sG.set (kK * dbToGain (distDb (k[0])), snap);
+        sAl.set (toneAlpha (k[1]), snap);
+        sV.set (volGain (k[2]), snap);
+        sB.set (bassLog2 (k[3]), snap);
+        float d, f, q; midOf (k[4], d, f, q);
+        sMdb.set (d, snap); sMf.set (f, snap); sMq.set (q, snap);
+        float lp_, lz; trebleOf (k[5], lp_, lz);
+        sTp.set (lp_, snap); sTz.set (lz, snap);
+        sMono.set (k[6] >= 0.5f ? 0.0f : 1.0f, snap);
+    }
+    void design (Co& o, bool snap)
+    {
+        o.v[0] = tptG (std::exp2 ((double) sB.cur));
+        const double p = std::exp2 ((double) sTp.cur), zz = std::exp2 ((double) sTz.cur);
+        o.v[1] = tptG (p);
+        o.v[2] = (float) (p / zz);
+        for (auto& m : mid) { m.peak (fs4, std::exp2 ((double) sMf.cur), (double) sMq.cur, (double) sMdb.cur); m.ramp (snap, (float) (4 * kStep)); }   // step() は 4 倍の中で呼ぶので 4 × 16
+    }
+    double sr = 48000.0, fs4 = 192000.0;
+    float k[7] { 0.49102f, 0.68199f, 0.83884f, 0.55742f, 0.70508f, 0.4918f, 0.0f };
+    float gIn = 0.0f, gSp = 0.0f, gSq = 0.0f, gL = 0.0f, gH = 0.0f;
+    Smooth sG, sV, sMono, sAl, sB, sMdb, sMf, sMq, sTp, sTz;
+    Co cur, tgt, inc;
+    int left = 0;
+    St z[2];
+    Svf mid[2];
     Oversampler4 os[2];
 };
 } // namespace aiofx

@@ -113,6 +113,7 @@ inline const std::vector<Entry>& registry()
         { &TrebleLift::info,     &makeModule<TrebleLift> },       // 63
         { &MidDrive::info,       &makeModule<MidDrive> },         // 64（0.13.0）
         { &BrickFuzz::info,      &makeModule<BrickFuzz> },        // 65（0.14.0）
+        { &SteelDist::info,      &makeModule<SteelDist> },        // 66（0.15.0）
     };
     return r;
 }

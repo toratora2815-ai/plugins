@@ -174,7 +174,7 @@
   0.2.0 でマルチアウト（7 出口 1 Main / 2 Kick / 3 Snare / 4 Room / 5 Toms / 6 Hi-Hat / 7 Cymbals、並びは固定。部品の出口にはその部品の全マイク＋EDM の層、
   ROOM は全部の部品のルームをまとめて、スイッチは曲の配線なのでプリセットで変えない。本人「マルチアウト作って」）。Plugin Link は LINK 欄だけ（Kind 27 は未登録）。試作・テストは tools/render.cpp・tools/test_inspect.cpp（DSP 検査係）
 
-- AIO Effecter（AIOEffecter）0.14.0 … 部品を 8 段に並べるラック型エフェクト（aufx Aifx。2026-11-18 本人「Guitar Rig 7 Pro をいろいろ実験して、響きとか抑制とか、そのまんま同じものを。名前は aio effecter」）。
+- AIO Effecter（AIOEffecter）0.15.0 … 部品を 8 段に並べるラック型エフェクト（aufx Aifx。2026-11-18 本人「Guitar Rig 7 Pro をいろいろ実験して、響きとか抑制とか、そのまんま同じものを。名前は aio effecter」）。
   部品は Guitar Rig 7 Pro を測って合わせ込み（見た目・名前はオリジナル、つまみは同じ数・同じ 0..1 の尺度、最大 16 本）。0.1.0 は NOISE GATE（波形の差 −64 dB 以下）・NOISE REDUCTION・TUBE COMP・LIMITER・ROOM VERB・SPRING・DUAL DELAY。
   0.2.0 で抑える系の残り（TUBE PUSH / XL・FET / OPTO / VCA / BUS COMP・CHANNEL DYN・QUICK / PEDAL COMP・TRANSIENT・VOLUME PEDAL・MAXIMIZER（先読み 353 ＋ 4 倍 4 ＋ 天井を守る 72 = 429 サンプル（48 kHz で 8.9 ms）を申告））。コンプ類は共通エンジン（fx/DynEngine.h）＋自動生成の表（fx/DynTables.h、build/aiofx/fit）。
   0.3.0 で響き系 9 個（SPACE VERB = Raum・CLASSIC VERB = Vintage Verb・SHAPE ROOM = Reflektor（REVERSE あり）・PICK ROOM = Little Reflektor・CLUB VERB = Traktor Reverb・
@@ -191,7 +191,8 @@
   0.12.0 から足元のペダル（fx/PedalParts.h）: LEVEL BOOST = Gain Booster・TREBLE LIFT = Treble Booster（高音の LP は 3 点で大きさを合わせた 2 次の式）。
   0.13.0 で MID DRIVE = Skreamer（TS 系。小さな音の形と頭打ちを分けて当てはめ、ギターの DI で帯域の差 0.4 dB）。
   0.14.0 で BRICK FUZZ = Fuzz（矩形波まで潰れる。音色は歪む前の HP・LP だけ、後ろは 5.7 Hz の直流止め）。GR の部品の初期値は build/aiofx/grall/<名前>.xml。
-  次は歪みペダルの残り（Skreamer Deluxe・Big Fuzz・Red Fuzz・Seattle Fuzz・Distortion・Cat など）・アンプ・キャビ、Phasis・Flair、ピッチ・リズム・グレイン
+  0.15.0 で STEEL DIST = Distortion（歪む前に 3 バンドの EQ、後ろに TONE）。
+  次は歪みペダルの残り（Skreamer Deluxe・Big Fuzz・Red Fuzz・Seattle Fuzz・Cat など）・アンプ・キャビ、Phasis・Flair、ピッチ・リズム・グレイン
   2026-11-19 本人の方針: まず全部の部品を大まかに作る → 使い終わった測定結果を消す → 細かい測定で詰める。**Guitar Rig はでたらめに部品を間違った値で組み立てることがあるので、測るときは 2 回測って一致したものだけ使う**
   （build/aiofx/capone3.sh。毎回少し違う音を出す部品は 3 回測って帯域ごとの大きさが近いものを残す。初期値で効かない作りのつまみは cap/list6〜.tsv で追加で測る）
   音の処理は fx/ の JUCE なしの部品（Module.h・Registry.h・Rack.h）。**本人の希望で将来 AIO Guitar のエフェクター欄へ移す**ので、そのまま include できる形にしてある。
