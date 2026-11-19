@@ -21,3 +21,7 @@ Vintage リリースは 1000 ms から先を √ で伸ばす。Spectral.h の�
 - 1.3.0（2026-11-09）: GAIN MATCH を追加（Shared/GainMatch.h、ID gainMatch、既定 OFF、状態に gainMatchDb を保存）。ボタンはプリセット欄の左端（ストリップ全体用。モジュールごとの autogain とは別）。BYPASS の間は効かない
 - 1.3.1（2026-11-12）: オートメーションのジジッを直した（健康診断の click で 7 個、+52〜+77）。Strip.h: INPUT・OUTPUT・PAN・WIDTH（MONO も）・モジュールの MIX を 20 ms、DELAY L / R を 50 ms で 1 サンプルずつ（DELAY は小数の遅れ。目標は前と同じ四捨五入なので、止まっていれば前とビット単位で同じ）。Dynamics.h: COMP の帯域の GAIN・MIX と全体の GAIN を 20 ms
   DSP 検査係（1 回目「直してから」）: DELAY が float の丸めで目標の整数に着かず、直線補間で高域が落ちたままだった（48 kHz・99 ms で 15 kHz −4.8 dB）→ double で 25 ms × 2 段で追う。MIX 100% の間もドライの遅れ線にいつも入れる（前から: MIX を下げた瞬間に古い音・空の線が出た。DENSITY で +39 dB）
+- 1.3.2（2026-11-19）: NaN・無限大で止まらないように（Shared/GainMatch.h の直しと一緒）。前は入口に NaN が 1 サンプル来ると（GAIN MATCH OFF でも）出口がずっと NaN、
+  EXT（External Sidechain）ON ならサイドチェーンの NaN・+Inf でも同じだった（エンジンが M/S・max(|L|,|R|) で左右を混ぜるので、片方の NaN が全部に広がる）。
+  gainMatch.measureInput（入口の NaN・無限大・+120 dBFS 以上を 0 に直す）を processBlock の頭（モノのとき左を monoBuf へ写す前・入口メーター pin より前）へ移し、
+  scBuf へ写した直後も myp::GainMatch::usable で 0 に。普通の音は変わらない

@@ -18,12 +18,18 @@
 //     歪み系は入口の大きさで補正が変わるので、イントロから再生しただけでミックスが変わってしまうため）。
 //     トラック名が保存したものと違う（別のトラックへコピーした）ときだけ測り直す
 //   - プラグインの遅れ（レイテンシー）の分だけ、入口の測り値を遅らせて比べる
+//   - NaN・無限大に強く（2026-11-19。前は測っている途中に入口へ NaN が 1 サンプル来ると補正が NaN になり、出口がずっと NaN、
+//     Reset・OFF・開き直しでも戻らず、状態に "nan" が保存された。GAIN MATCH と関係なく、NaN 1 回で音の処理が止まったままになるプラグインも 9 個あった）:
+//     measureInput が入口の NaN・無限大・ありえない大きさ（+120 dBFS 以上）を 0 に直す（普通の音は 1 ビットも変えない。Twin Take が自分でしていたのと同じ線）。
+//     測る側はもっと手前の +40 dBFS で線を引き、入口・出口にそれ以上・NaN が混じった 100 ms の区切りは数えず、K 特性のフィルターには 0 を入れる
+//     （+40〜+119 dBFS の 1 サンプルで、頭打ちするプラグインの補正が最大 +18 dB 狂ったまま固定されていた。DSP 検査係）。
+//     補正・保存値はいつも有限。保存値が "nan" などの曲は 0 dB にして、ON なら測り直す
 //
 // 使い方（各プラグイン）:
 //   レイアウト:   params.push_back (myp::GainMatch::makeParameter());
 //   プロセッサー: myp::GainMatch gainMatch { *this, myPresets };   // apvts・myPresets より後に書く
 //   prepareToPlay: gainMatch.prepare (sampleRate, getTotalNumOutputChannels(), samplesPerBlock);
-//   processBlock の最初: gainMatch.measureInput (buffer, numCh);
+//   processBlock の最初: gainMatch.measureInput (buffer, numCh);   // 入口の NaN・無限大もここで 0 に直す（buffer を書き換える）
 //   processBlock の最後: gainMatch.process (buffer, numCh, getLatencySamples(), amount);   // amount = 1 で普通、0 で効かない
 //   getStateInformation:  auto st = apvts.copyState(); gainMatch.saveTo (st);
 //   setStateInformation:  apvts.replaceState (...); gainMatch.loadFrom (apvts.state);
@@ -42,6 +48,14 @@ namespace myp
         static constexpr float maxCutDb = 24.0f, maxBoostDb = 12.0f;
         static constexpr double lockSeconds = 10.0;     // 入口が鳴っている所がこれだけたまったら固定
         static constexpr double tailSeconds = 3.0;      // 入口が止まってから、これだけは残り（響き・エコー）も数える
+        static constexpr float maxSample = 1.0e6f;      // これ以上（+120 dBFS）・NaN・無限大は壊れた値として扱う（Twin Take と同じ線）
+
+        static constexpr float maxMeasure = 100.0f;     // 測るときだけの線: +40 dBFS 以上が混じった区切りは数えない（音は変えない）
+
+        // 使える値か（NaN はどの比べ方でも false になるので、NaN・±無限大・+120 dBFS 以上が false）
+        static bool usable (float x) noexcept { return std::abs (x) < maxSample; }
+        // 測りに数えてよい値か（+40 dBFS 以上は前のプラグインの不具合。1 サンプルでも、頭打ちするプラグインの補正が最大 +18 dB 狂って固定されるため）
+        static bool measurable (float x) noexcept { return std::abs (x) < maxMeasure; }
 
         // 版のヒントは 10（今ある全プラグインの最大 9 より大きく）。小さいと Logic のパラメーター番号がずれて、
         // 今ある曲のオートメーションが別のつまみを動かしてしまう
@@ -90,7 +104,7 @@ namespace myp
         }
 
         // 上げる補正の上限（毎ブロック。最後にリミッターがあるときは 0 にする）
-        void limitBoost (float maxUpDb) { boostLimitDb = maxUpDb; }
+        void limitBoost (float maxUpDb) { boostLimitDb = std::isfinite (maxUpDb) ? maxUpDb : 0.0f; }
 
         void prepare (double sampleRate, int numChannels, int samplesPerBlock = 0)
         {
@@ -103,29 +117,58 @@ namespace myp
             std::fill (ring.begin(), ring.end(), 0.0f);
             ringPos = 0;
             windowLen = juce::jmax (1, (int) std::round (sr * 0.1));
-            winIn = winOut = 0.0; winN = 0;
+            winIn = winOut = 0.0; winN = 0; winBad = false;
             glide = (float) (1.0 - std::exp (-1.0 / (0.4 * sr)));
             glideFast = (float) (1.0 - std::exp (-1.0 / (0.01 * sr)));
             fastLen = (int) (0.06 * sr);
             blocksSincePrepare = 0;
         }
 
-        // processBlock の最初（音をいじる前）に呼ぶ
-        void measureInput (const juce::AudioBuffer<float>& buf, int numCh)
+        // processBlock の最初（音をいじる前）に呼ぶ。
+        // 入口の NaN・無限大・ありえない大きさは、測ったあとでここで 0 に直す（前のプラグインの不具合 1 回で、
+        // このプラグインのフィルター・リバーブや GAIN MATCH の測り値が NaN のまま戻らなくならないように）
+        void measureInput (juce::AudioBuffer<float>& buf, int numCh)
         {
-            const int n = buf.getNumSamples();
-            const int ch = juce::jlimit (1, channels, juce::jmin (numCh, buf.getNumChannels()));
+            const int n = buf.getNumSamples(), nb = buf.getNumChannels();
+            const int ch = juce::jlimit (1, channels, juce::jmin (numCh, nb));
             inValid = 0;
-            if ((int) inPow.size() < n || buf.getNumChannels() == 0) return;   // 想定より大きいブロック: その分は測らない
-            std::fill (inPow.begin(), inPow.begin() + n, 0.0f);
-            for (int c = 0; c < ch; ++c)
+            // 先に全部のチャンネルをまとめて調べる（途中で抜けないのでベクトル化される）。普通の音ならどちらも true
+            bool allMeasurable = true, allUsable = true;
+            for (int c = 0; c < nb; ++c)
             {
                 const float* x = buf.getReadPointer (c);
-                for (int i = 0; i < n; ++i) { const float y = inF[(size_t) c].process (x[i]); inPow[(size_t) i] += y * y; }
+                bool m = true, u = true;
+                for (int i = 0; i < n; ++i) { const float a = std::abs (x[i]); m &= a < maxMeasure; u &= a < maxSample; }
+                allUsable = allUsable && u;
+                if (c < ch) allMeasurable = allMeasurable && m;
             }
-            const float k = 1.0f / (float) ch;
-            for (int i = 0; i < n; ++i) inPow[(size_t) i] *= k;
-            inValid = n;
+            if ((int) inPow.size() >= n && nb > 0)   // 想定より大きいブロック: その分は測らない
+            {
+                std::fill (inPow.begin(), inPow.begin() + n, 0.0f);
+                for (int c = 0; c < ch; ++c)
+                {
+                    const float* x = buf.getReadPointer (c);
+                    auto& f = inF[(size_t) c];
+                    if (allMeasurable)
+                        for (int i = 0; i < n; ++i) { const float y = f.process (x[i]); inPow[(size_t) i] += y * y; }   // 普通の音（直す前と同じ式）
+                    else
+                        for (int i = 0; i < n; ++i)
+                        {
+                            if (measurable (x[i])) { const float y = f.process (x[i]); inPow[(size_t) i] += y * y; }
+                            else { f.process (0.0f); inPow[(size_t) i] = badMark; }   // 負の印 = この瞬間は測れない（その区切りは数えない）
+                        }
+                }
+                const float k = 1.0f / (float) ch;
+                for (int i = 0; i < n; ++i) inPow[(size_t) i] *= k;
+                inValid = n;
+            }
+            // 入口を直す（測ったあとで）。全部のチャンネル（モノの入口を左右に写してから呼ぶプラグインもある）。普通の音なら書き込まない
+            if (! allUsable)
+                for (int c = 0; c < nb; ++c)
+                {
+                    float* w = buf.getWritePointer (c);
+                    for (int i = 0; i < n; ++i) if (! usable (w[i])) w[i] = 0.0f;
+                }
         }
 
         // processBlock の最後に呼ぶ。latency = プラグインの遅れ（サンプル）。amount = 効かせる割合（0〜1）
@@ -175,15 +218,25 @@ namespace myp
                 {
                     // 入口の測り値を遅れの分だけ遅らせる
                     ring[(size_t) ringPos] = inPow[(size_t) i];
-                    const float pin = ring[(size_t) ((ringPos - lat + ringSize) & (ringSize - 1))];
+                    float pin = ring[(size_t) ((ringPos - lat + ringSize) & (ringSize - 1))];
                     ringPos = (ringPos + 1) & (ringSize - 1);
+                    if (pin < 0.0f) { pin = 0.0f; winBad = true; }   // 入口に NaN・無限大が来た瞬間（measureInput の印）
                     float pout = 0.0f;
-                    for (int c = 0; c < chM; ++c) { const float y = outF[(size_t) c].process (buf.getSample (c, i)); pout += y * y; }
+                    for (int c = 0; c < chM; ++c)
+                    {
+                        const float v = buf.getSample (c, i);
+                        if (measurable (v)) { const float y = outF[(size_t) c].process (v); pout += y * y; }
+                        else { outF[(size_t) c].process (0.0f); winBad = true; }   // プラグイン自身が NaN・ありえない大きさを出した瞬間
+                    }
                     winIn += pin; winOut += pout * k; ++winN;
                     if (winN >= windowLen) endWindow();
                 }
             }
             inValid = 0;
+
+            // 念のため: 補正が有限でなくなっていたら 0 dB に戻す（上の測り方で NaN は入らないはず）
+            if (! std::isfinite (targetDb)) targetDb = 0.0f;
+            if (! std::isfinite (curDb)) curDb = 0.0f;
 
             // 補正をかける（L/R 同じ量）
             if (std::abs (amount - lastAmount) > 0.05f) fastLeft = fastLen;
@@ -214,15 +267,21 @@ namespace myp
         // ---- 状態の保存（補正量・固定したか・そのときの入口の音量） ----
         void saveTo (juce::ValueTree& st) const
         {
-            st.setProperty ("gainMatchDb", lockedDb.load(), nullptr);
-            st.setProperty ("gainMatchLocked", isLocked.load(), nullptr);
+            const float db = lockedDb.load();
+            const bool ok = std::isfinite (db);   // 念のため: NaN を "nan" で保存しない
+            st.setProperty ("gainMatchDb", ok ? db : 0.0f, nullptr);
+            st.setProperty ("gainMatchLocked", ok && isLocked.load(), nullptr);
             const juce::ScopedLock sl (nameLock);
             st.setProperty ("gainMatchTrack", currentTrack, nullptr);
         }
         void loadFrom (const juce::ValueTree& st)
         {
-            pendingDb.store (juce::jlimit (-maxCutDb, maxBoostDb, (float) (double) st.getProperty ("gainMatchDb", 0.0)));
-            pendingLocked.store ((bool) st.getProperty ("gainMatchLocked", false));
+            // 2026-11-19 より前の版は、壊れた補正を "nan" で保存していることがある（JUCE は "nan"・"inf" を NaN・無限大として読む）
+            // → 0 dB・固定していない扱いにする（ON なら次に鳴らした所から測り直す）
+            const double db = (double) st.getProperty ("gainMatchDb", 0.0);
+            const bool ok = std::isfinite (db);
+            pendingDb.store (ok ? juce::jlimit (-maxCutDb, maxBoostDb, (float) db) : 0.0f);
+            pendingLocked.store (ok && (bool) st.getProperty ("gainMatchLocked", false));
             pending.store (true);
             const juce::ScopedLock sl (nameLock);
             savedTrack = st.getProperty ("gainMatchTrack", "").toString();
@@ -304,7 +363,7 @@ namespace myp
         void resetAccumulators()
         {
             accIn = accOut = 0.0; accActive = 0.0;
-            winIn = winOut = 0.0; winN = 0;   // 区切りの途中から数え直す
+            winIn = winOut = 0.0; winN = 0; winBad = false;   // 区切りの途中から数え直す
         }
         void startLearning()
         {
@@ -327,7 +386,9 @@ namespace myp
         {
             const double inMs = winIn / winN, outMs = winOut / winN;
             const double dur = winN / sr;
-            winIn = winOut = 0.0; winN = 0;
+            const bool bad = winBad;
+            winIn = winOut = 0.0; winN = 0; winBad = false;
+            if (bad) { sinceActive += dur; return; }   // NaN・無限大が混じった区切りは数えない（時計だけ進める）
             const bool active = inMs >= 1.0e-6;   // 入口が −60 dB 以上
             sinceActive = active ? 0.0 : sinceActive + dur;
             if (mode != Mode::learning) return;
@@ -338,9 +399,13 @@ namespace myp
 
             if (accActive >= 0.3 && accOut > 1.0e-12)
             {
-                targetDb = juce::jlimit (-maxCutDb, maxBoostDb, (float) (10.0 * std::log10 (accIn / accOut)));
-                lockedDb.store (targetDb);
-                hasEstimate.store (true);
+                const double ratioDb = 10.0 * std::log10 (accIn / accOut);
+                if (! std::isnan (ratioDb))   // 念のため（±無限大は下の範囲で止まる）
+                {
+                    targetDb = juce::jlimit (-maxCutDb, maxBoostDb, (float) ratioDb);
+                    lockedDb.store (targetDb);
+                    hasEstimate.store (true);
+                }
             }
             if (accActive >= lockSeconds && hasEstimate.load())
                 lock();
@@ -361,6 +426,7 @@ namespace myp
         double sr = 48000.0;
         int channels = 2;
         std::array<KFilter, maxCh> inF, outF;
+        static constexpr float badMark = -1.0e30f;   // inPow・ring の「この瞬間は測れない」印（測り値は 0 以上なので負なら印）
         std::vector<float> inPow = std::vector<float> (maxBlock, 0.0f);
         int inValid = 0;
         std::vector<float> ring = std::vector<float> (ringSize, 0.0f);
@@ -368,6 +434,7 @@ namespace myp
 
         int windowLen = 4800, winN = 0;
         double winIn = 0.0, winOut = 0.0;
+        bool winBad = false;   // 今の 100 ms の区切りに NaN・無限大が混じった
         double accIn = 0.0, accOut = 0.0, accActive = 0.0, sinceActive = 1.0e9;
         Mode mode = Mode::idle;
         bool wasOn = false;

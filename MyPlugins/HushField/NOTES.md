@@ -13,3 +13,5 @@ v1.1.0: Plugin Link（Balance Scope の出すぎ帯域を linkBands で足す、
 - 1.2.1（2026-11-09）: 音のスレッドでメモリを確保しないように。readSettings / applyLink が毎ブロック ID の文字列を作っていた（512 サンプルで new 約 210 回）のを、コンストラクターで取った `std::atomic<float>*`（prm）を読むだけに。最初のブロックの FFT などの準備（configure）も prepareToPlay の preconfigure へ（prepareToPlay の時点とモードが同じときだけ効く）。音は前とビット単位で同じ（build/hfalloc で 20 場面を比べた）。quality / LINEAR PHASE / LOW LATENCY が prepareToPlay の後で変わったブロック（切り替えた瞬間、Initialize の後に状態を戻した曲の頭、プリセット・UNDO・A/B でモードが変わった直後）は、前と同じく作り直しで確保する（直すなら prepare で最大の大きさを確保しておく）
 - 1.2.2（2026-11-12）: MIX・WET TRIM・OUT TRIM を 20 ms でなめらかに（健康診断の click で Out Trim +55・Wet Trim +53・Mix +30）。LOW LATENCY のたたみこみ（directConv）を、2 倍の輪（convRing）＋前後を逆にしたフィルター（firRev）の vDSP_dotpr に（1 コアの 15% → 10%、出力の差 −117 dB）。初回の健康診断の「重い設定 44〜53%」は Mac が混んでいたため（空いている時は 15〜17%。LOW LATENCY ＋ QUALITY 高の組み合わせだけ重い）
   DSP 検査係: 追う式を「丸めでもう進まないなら目標ちょうど」に（192 kHz で目標の直前で止まり、係数を作り直し続ける所があった）
+- 1.2.3（2026-11-19）: サイドチェーンの NaN・無限大・+120 dBFS 以上を、HushEngine.h で読んだ直後に 0 に（前は std::min (60, NaN) の引数の順番のおかげで偶然戻っていただけで、主の音が一瞬 −10.8 dB 引っ込み、SC LISTEN では NaN が 2 サンプル出口へ出た。DSP 検査係）。
+  主の入口は Shared/GainMatch.h の measureInput が 0 に直す（2026-11-19、全プラグイン共通）

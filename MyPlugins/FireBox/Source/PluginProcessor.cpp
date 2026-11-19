@@ -161,6 +161,14 @@ void FireBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     const int numCh = juce::jmin (2, buffer.getNumChannels()), n = buffer.getNumSamples();
     if (n <= 0 || numCh <= 0) return;
 
+    // 前のプラグインから NaN・無限大・とんでもない値（+120 dBFS 以上）が来たら 0 に
+    // （1 サンプルで出口がずっと NaN のままになっていた。GAIN MATCH の measureInput・Twin Take と同じ線）
+    for (int c = 0; c < numCh; ++c)
+    {
+        auto* x = buffer.getWritePointer (c);
+        for (int i = 0; i < n; ++i) if (! (std::abs (x[i]) < 1.0e6f)) x[i] = 0.0f;
+    }
+
     if ((liveOn->load() > 0.5f) != builtLive || (osOn->load() > 0.5f) != builtOs || numCh != osChannels)
     {
         // 作り直しが済むまでは素通し（作り直しはメッセージスレッドで）

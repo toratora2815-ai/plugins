@@ -13,3 +13,4 @@ v1.3.0: Plugin Link で Fader Pilot がボーカルを上げている間 SPREAD 
 v1.3.1: FROM（相手選び）、Plugin Link v2
 - 1.4.0（2026-11-09）: AUTO GAIN の表示名を GAIN MATCH にして、ボタンをプリセット欄の左端に移した（ID autoGain と DSP はそのまま）
 - 1.4.1（2026-11-12）: GAIN MATCH（autoGain）が ON の間は OUTPUT で音量を変えない（ほかのプラグインの GAIN MATCH と同じ。健康診断の gainmatch で ON でも −1.8 dB 残っていた）。OFF の時の音は前と同じ
+- 1.4.2（2026-11-19）: processBlock の頭（モノの左を右へ写す前）で、入口の NaN・無限大・+120 dBFS 以上を 0 に（前は NaN 1 サンプルで、GAIN MATCH（autoGain）の ON・OFF に関係なく出口がずっと NaN だった。DSP 検査係が入っている AU で確認。Shared/GainMatch.h の直しと同じ線）

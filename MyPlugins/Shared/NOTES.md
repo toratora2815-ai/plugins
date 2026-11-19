@@ -43,3 +43,20 @@ Forge Strip / Forge Mixer は独自の種類 200 / 201（ForgeStrip/Source/Forge
 - 出口のつまみ（OUTPUT / VOLUME など）も打ち消す（本人の「音量に何の影響も与えない」のとおり。触った後に測り直して数秒で戻る）。2026-11-09 本人に確認して「今のままでいい」
 - 数値テスト: build/gmtest/main.cpp（コミットしない）。DSP 検査係の検査用ホストは scratchpad にあった（消える）
 - 分かっている限界: Elder Verb の 49 秒のような長い響きを MIX 0.95 で使うと、3 秒の残り窓に入らない尾の分だけ +3 dB ほど大きくなる（MIX 0.85 なら +0.24 dB）
+- 2026-11-19 NaN・無限大に強く（版は上げていない。Shared だけの直しなので）: 前は ON で測っている途中に入口へ NaN が 1 サンプル来ると K 特性のフィルターが NaN → curDb・targetDb が NaN → 出口がずっと NaN、
+  Reset・OFF・prepareToPlay でも戻らず gainMatchDb="nan" が保存された（JUCE は "nan"・"inf"・"1e400" を NaN・無限大として読み戻す）。直す前の AU で測ると、GAIN MATCH と関係なく
+  Elder Verb・Forge Strip・Lumen Rooms・Meld Verb・Porch Drive・Retro Retro・Wool Fuzz は NaN 1 回で出口がずっと NaN、My Filter・My Tremolo は +9 dB の大きな音のままだった。
+  直し方: `usable(x) = |x| < 1e6`（NaN・±Inf・+120 dBFS 以上が false。Twin Take の入口と同じ線）。measureInput は非 const 参照になり、測ったあとで buf の全チャンネルの使えない値を 0 に書き換える
+  （AIO Effecter のようにモノを左右に写してから measureInput (buf, 1) を呼ぶものもあるので全部。**入口を別のバッファへ写す・入口メーターを測るのは measureInput の後**）。
+  測る側は手前の線 `measurable(x) = |x| < 100`（+40 dBFS。音は変えない）: それ以上・NaN は K 特性フィルターに 0、inPow・リングに負の印（badMark −1e30）→ その 100 ms の区切りは数えない（sinceActive だけ進める）。
+  出口側も同じ（プラグイン自身の NaN は出口では直さない＝健康診断で見える）。+40 dBFS の線は DSP 検査係の指摘: +40〜+119 dBFS の有限の値 1 サンプルで、頭打ちするプラグイン（ファズ）の補正が最大 +17.8 dB 狂ったまま固定・保存されていた（前からの穴）。
+  measureInput は先に全チャンネルを途中で抜けずに調べ（ベクトル化される）、普通の音なら直す前と同じ分岐なしの式で測る（CPU は直す前とほぼ同じ。分岐をループに入れた最初の案は +45〜85 %）。
+  前のプラグインが 100 ms に 1 回以上 NaN を出し続けると、区切りが全部飛ぶので測れないまま（補正 0 dB・表示「GAIN MATCH ...」のまま。安全側なので仕様）。
+  targetDb・curDb は有限でなければ 0、limitBoost (NaN) は 0、saveTo は有限でなければ 0・固定なし、loadFrom は非有限なら 0 dB・固定なし（ON なら次に鳴らした所から測り直す）。
+  普通の音は 1 ビットも変わらない（今までの gmtest 全部の出口のハッシュが新旧で同じ）。テスト: build/gmtest/nan_tests.inc（gm_select.h で old/GainMatch.h と切り替え）、AU は build/gmnan/aunan.cpp（コミットしない）。
+  Forge Strip は measureInput を processBlock の頭へ移し、サイドチェーンも同じ線で直した（1.3.2）。GainMatch.h を使わない Horizon Spread（1.4.2）・Fire Box（1.2.2）も NaN 1 回で出口がずっと NaN だったので、
+  processBlock の頭で同じ線の 0 直し。Hush Field のサイドチェーンは偶然戻っていただけ（SC LISTEN では NaN が出た）なので HushEngine.h で 0 に（1.2.3）。
+  PluginLinkJuce.h の LevelMatch: Gain Stage から届く targetDb が NaN だと jlimit を素通りして gainDb が NaN のまま戻らない → std::isfinite で弾く。
+  Mod Host・Gain Stage・Fader Pilot は NaN が来ても戻る（DSP 検査係が入っている AU で確認）
+  残した軽いもの（前から・急ぎではない）: Horizon Spread の autoGain は +40 dBFS 以上の 1 サンプルで最大 −2.9 dB が数秒（±6 dB で止まる。直すなら SpreadEngine.h:410 の eIn・eOut に同じ線）。
+  Plugin Link の受け取り側（HorizonSpread/Source/PluginProcessor.cpp:269 の rideDb、ModHost/Source/PluginProcessor.cpp:301・303）も NaN なら jlimit を素通りする形だが、送る側（Fader Pilot・Balance Scope）が NaN を出さない作りなので今は起きない

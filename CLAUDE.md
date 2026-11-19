@@ -51,7 +51,7 @@
   - GAIN MATCH（2026-11-09 本人の指示「ゲインマッチがないのはゴミ」）… `MyPlugins/Shared/GainMatch.h`。ON なら入れても・つまみをいじっても音量が変わらない、OFF なら自由。既定 OFF。
     レイアウトに `myp::GainMatch::makeParameter()`（ID `gainMatch`、版のヒント 10＝Logic のパラメーター番号をずらさないため）、
     プロセッサーに `myp::GainMatch gainMatch { *this, myPresets };`（apvts・myPresets より後）、
-    prepareToPlay で `prepare`、processBlock の最初に `measureInput`・最後に `process (buffer, ch, 遅れ, amount)`、状態の保存・読み込みで `saveTo` / `loadFrom`、
+    prepareToPlay で `prepare`、processBlock の最初に `measureInput`（入口の NaN・無限大もここで 0 に直すので、入口を別のバッファへ写す・入口メーターを測るのはこの後。2026-11-19）・最後に `process (buffer, ch, 遅れ, amount)`、状態の保存・読み込みで `saveTo` / `loadFrom`、
     内蔵プリセットを読む関数の最後で `gainMatch.requestRelearn()`、updateTrackProperties で `gainMatch.setTrackName`、エディターで `presetBar.showGainMatch (myp::GainMatch::paramId, …)`（ボタンはプリセット欄の左端）。
     測り方は「ON にした時・プラグインの画面でつまみを触った時・プリセットや UNDO を使った時・別のトラックへコピーした時（トラック名で判断）だけ、入口が鳴っている所（と止まってから 3 秒の残り）を K 特性で測る。
     3 秒でほぼ決まり、10 秒たまったら固定」（追いかけ続けない＝コンプにならない。オートメーションの再生・Logic 側の操作では測り直さない。開き直しても固定した値のまま）。上げるのは +12 dB まで。
@@ -110,13 +110,13 @@
 - Elder Verb（ElderVerb）1.1.1 … 70〜80 年代のデジタルリバーブ機材ふう。22 モード、COLOR 70s/80s/NOW、本物の .vpreset を読める。Fader Pilot から VOCAL DUCK
 - Meld Verb（MeldVerb）1.2.1 … EARLY / PLATE / HALL を三角形の BLEND パッドで混ぜる。SMOOTHING・LEARN・UNMASK、SHAPE タブ。Fader Pilot から VOCAL DUCK
 - Balance Scope（BalanceScope）1.3.1 … 帯域バランス解析。ジャンル別目標カーブ、REF A/B/C、ラウドネス。出すぎの帯域とオケの音量を送り、Hush Field の削り量・Gain Stage の GAIN を表示
-- Horizon Spread（HorizonSpread）1.4.1 … ステレオ感の全部入り（Side だけ加工）。SHAPE / CREATE ページ、GAIN MATCH（ID autoGain）、内蔵プリセット。Fader Pilot が歌っている間 SPREAD を下げる
-- Hush Field（HushField）1.2.2 … 動的レゾナンス抑制。帯域カーブ 8 本、STEREO L/R・M/S、SC、LINEAR PHASE / LOW LATENCY。Balance Scope の出すぎ帯域を受け、削り量を送る
+- Horizon Spread（HorizonSpread）1.4.2 … ステレオ感の全部入り（Side だけ加工）。SHAPE / CREATE ページ、GAIN MATCH（ID autoGain）、内蔵プリセット。Fader Pilot が歌っている間 SPREAD を下げる
+- Hush Field（HushField）1.2.3 … 動的レゾナンス抑制。帯域カーブ 8 本、STEREO L/R・M/S、SC、LINEAR PHASE / LOW LATENCY。Balance Scope の出すぎ帯域を受け、削り量を送る
 - Fader Pilot（FaderPilot）1.2.0 … ボーカルのフェーダーを自動で上げ下げ（遅延ゼロ）。AUTO RIDE / WRITE / FOLLOW MUSIC。フェーダー位置と「歌っているか」を送る
 - Gain Stage（GainStage）1.1.0 … トラックの入口の音量をワンクリックでそろえる（遅延ゼロ）。LEARN（鳴っている所だけ 5 秒測り GAIN を 1 回入れる）、TARGET / RMS・PEAK / Ø / MONO / SWAP、IN/OUT メーター。結果は apvts.state の "learnInfo"。GAIN / TARGET などを送る
 - Sample Sculptor（SampleSculptor）1.2.0 … サンプル編集（AU 音源 aumu Smsc）。切り取り→PITCH→STRETCH→形→REVERSE→ROOM→DRIVE→TONE→FADE→NORMALIZE、A/B、ドラッグで Logic へ。LINK 欄だけ
 - Echo Drift（EchoDrift）1.3.3 … テープ・BBD・ラジオ・コーラス系 31 スタイルのディレイ（市販の定番ディレイを測って合わせ込み）。SINGLE / DUAL / PING-PONG / RHYTHM。Fader Pilot から VOCAL DUCK
-- Fire Box（FireBox）1.2.1 … 太く・大きくする全部入り（本人の持っている市販プラグインを測って、音の処理を同じ動きに合わせ込み）。IN / BASS / THICK / BODY / COMP⇄OTT / SOFT CLIP / CRUNCH / MIX / LOUD / OUT、GAIN MATCH（ID unity、4 秒平均で追う。1.2.1 から IN・OUT の分も戻す）・LIVE・192k・BYPASS。測定の道具は build/fuellab（コミットしない）。Plugin Link は Gain Stage で MATCH
+- Fire Box（FireBox）1.2.2 … 太く・大きくする全部入り（本人の持っている市販プラグインを測って、音の処理を同じ動きに合わせ込み）。IN / BASS / THICK / BODY / COMP⇄OTT / SOFT CLIP / CRUNCH / MIX / LOUD / OUT、GAIN MATCH（ID unity、4 秒平均で追う。1.2.1 から IN・OUT の分も戻す）・LIVE・192k・BYPASS。測定の道具は build/fuellab（コミットしない）。Plugin Link は Gain Stage で MATCH
   v1.1.0: OTT 作り直し（88 Hz の分割は Q の違う 2 段ずつ、dB 型検出器を持ち上げ用・下げ用に、OTT 時の MIX のドライも帯域分けを通す、量の表 29 段階）。FUEL との差 量24 dB で −33 dB
 - Mod Host（ModHost）1.2.0 … 好きな AU を中に読み込み、MOD 1〜4（LFO / ENV / SIDECHAIN / RANDOM / STEPS / LINK）でつまみを動かす。3 帯域・DRIVE・MORPH・前後の解析
 - AIO Guitar（AIOGuitar）0.8.0 … 本人のエレキをライン録りした音で鳴らす全部入りギター音源（AU 音源 aumu Aiog ＋単体アプリ、CMakeLists の ALSO_APP で AIOGuitar-App.zip も）。
@@ -126,7 +126,7 @@
   AMP は 5 種類＋キャビ 5 種類（か IR）＋マイク 3 種類・位置・距離。Logic の Amp Designer を 57 通りバウンスして合わせ込み（build/AmpLab、AmpTables.h は自動生成）。Plugin Link は LINK 欄だけ（Kind 17 は未登録）
   2026-11-11 本人: AIO に入れるのは AMP の前の足元のペダルだけ（2 回目ワウ、3 回目フェイザー／ヴァイブ、箱は 7 個・歪みは 6〜7 機種まで）、アンプは今の 5 種類を残して足す（Guitar Rig は無料版だけなので見送り）。DOUBLE は AIO に作らず、AIO の後ろに Twin Take（2026-11-12 本人）。
   この Mac の Guitar Rig 7 は無料版（Player）で、Pro の部品は測れない（NOTES.md の DRIVE A / B）
-- Forge Strip（ForgeStrip）1.3.1 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Plugin Link の相手だった Forge Mixer は削除（受け取る処理と独自の種類 200 / 201 はソースに残っている）
+- Forge Strip（ForgeStrip）1.3.2 … 11 モジュールのチャンネルストリップ（並び替え可、最後にリミッター）。Plugin Link の相手だった Forge Mixer は削除（受け取る処理と独自の種類 200 / 201 はソースに残っている）
 - Vox Chop（VoxChop）1.0.0 … 自分の声を別の声に変えて、切って鍵盤で弾く AU 音源（aumu Vxch）。CAPTURE（サイドチェーン）かファイル → 後から丸ごと計算（TD-PSOLA、VoxEngine.h）。
   VOICE MAP（高さ × 体の大きさ）・BREATH・GRIT・ROBOT・ALIEN・声のプリセット 23 個 / AUTO（言葉の切れ目）・GRID で最大 64 片を C1 から / 片ごとの設定・MELODIC・WHOLE / 片・全部・MIDI・全体をドラッグで Logic へ。
   空間系・歪み・ボコーダー・ケロケロは入れない（自作と Logic 標準を後ろに）。Plugin Link は LINK 欄だけ（Kind 18 は未登録）

@@ -420,6 +420,8 @@ void ForgeStripProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     auto mainIn = getBusBuffer (buffer, true, 0);
     const int nch = mainIn.getNumChannels();
     if (nch == 0 || n == 0) return;
+    // GAIN MATCH の測定。入口の NaN・無限大もここで 0 に直すので、モノの右（monoBuf）へ写す前・入口メーターより前に呼ぶ
+    gainMatch.measureInput (mainIn, nch);
     float* L = mainIn.getWritePointer (0);
     float* R = nch > 1 ? mainIn.getWritePointer (1) : nullptr;
     if (R == nullptr)
@@ -442,6 +444,10 @@ void ForgeStripProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
                 if (scBuf.getNumSamples() < n) scBuf.setSize (2, n, false, false, true);
                 scBuf.copyFrom (0, 0, scIn, 0, 0, n);
                 scBuf.copyFrom (1, 0, scIn, juce::jmin (1, scIn.getNumChannels() - 1), 0, n);
+                // 別のトラックから NaN・無限大が来ても検出器が止まったままにならないように 0 に（入口と同じ線）
+                for (int c = 0; c < 2; ++c)
+                    for (auto* d = scBuf.getWritePointer (c), * e = d + n; d != e; ++d)
+                        if (! myp::GainMatch::usable (*d)) *d = 0.0f;
                 scL = scBuf.getReadPointer (0); scR = scBuf.getReadPointer (1); sc = true;
             }
         }
@@ -454,7 +460,6 @@ void ForgeStripProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     if (lat != wantLatency.load()) { wantLatency = lat; triggerAsyncUpdate(); }
 
     float pin = 0; for (int i = 0; i < n; ++i) pin = juce::jmax (pin, std::abs (L[i]), std::abs (R[i]));
-    gainMatch.measureInput (mainIn, nch);
     eng.process (L, R, n, scL, scR);
     // GAIN MATCH（BYPASS の間は効かない）。最後のリミッターが ON のときは、天井を超えないよう上げる補正はしない
     gainMatch.limitBoost (p ("lim_on") > 0.5f ? 0.0f : myp::GainMatch::maxBoostDb);

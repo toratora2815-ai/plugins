@@ -215,6 +215,14 @@ void HorizonSpreadProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
 {
     juce::ScopedNoDenormals noDenormals;
 
+    // 前のプラグインから NaN・無限大・とんでもない値（+120 dBFS 以上）が来たら 0 に
+    // （1 サンプルで出口がずっと NaN のままになっていた。GAIN MATCH の measureInput・Twin Take と同じ線）
+    for (int c = 0; c < juce::jmin (getTotalNumInputChannels(), buffer.getNumChannels()); ++c)
+    {
+        auto* x = buffer.getWritePointer (c);
+        for (int i = 0; i < buffer.getNumSamples(); ++i) if (! (std::abs (x[i]) < 1.0e6f)) x[i] = 0.0f;
+    }
+
     // モノラル入力のときは右にも同じ音を入れる
     if (getTotalNumInputChannels() == 1 && buffer.getNumChannels() >= 2)
         buffer.copyFrom (1, 0, buffer, 0, 0, buffer.getNumSamples());

@@ -280,8 +280,8 @@ namespace plink
                 if (link.ep().find (kindGainStage, p) && p.valuesAgeMs < 3000 && p.v[gs::peakMode] < 0.5f)
                 {
                     found = true;
-                    if (outDb > -60.0f) want = juce::jlimit (-18.0f, 18.0f, p.v[gs::targetDb] - outDb);
-                    else want = gainDb;   // 無音の間は今のまま
+                    if (outDb > -60.0f && std::isfinite (p.v[gs::targetDb])) want = juce::jlimit (-18.0f, 18.0f, p.v[gs::targetDb] - outDb);
+                    else want = gainDb;   // 無音の間・相手の値が壊れているとき（NaN は jlimit を素通りして戻らなくなる）は今のまま
                 }
             }
             const float b = 1.0f - std::exp (-(float) n / (float) (1.5 * sampleRate));

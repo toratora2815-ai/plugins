@@ -484,6 +484,7 @@ namespace firebox
         void reset() { std::fill (rin.begin(), rin.end(), 0.0f); std::fill (rout.begin(), rout.end(), 0.0f); pos = 0; sIn = sOut = 0; g = 1; }
         inline double gain (double dry, double wet)
         {
+            if (! (std::abs (dry) < 100.0 && std::abs (wet) < 100.0)) dry = wet = 0.0;   // +40 dBFS 以上（前のプラグインの不具合）は 4 秒平均に入れない（1 サンプルで約 4 秒 +23 dB 持ち上がっていた）
             const float a = (float) (dry * dry), b = (float) (wet * wet);
             sIn += a - rin[(size_t) pos]; sOut += b - rout[(size_t) pos];
             rin[(size_t) pos] = a; rout[(size_t) pos] = b;

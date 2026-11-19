@@ -255,6 +255,9 @@ namespace hf
                 if (sc != nullptr && numScCh > 0)
                 {
                     float sa = sc[0][i], sb = numScCh > 1 ? sc[1][i] : sa;
+                    // 別のトラックから NaN・無限大・とんでもない値が来たら 0 に（入口と同じ線。前は偶然戻っていただけで、SC LISTEN では NaN が出口へ出た）
+                    if (! (std::abs (sa) < 1.0e6f)) sa = 0.0f;
+                    if (! (std::abs (sb) < 1.0e6f)) sb = 0.0f;
                     if (s.midSide) { const float m = 0.5f * (sa + sb), d = 0.5f * (sa - sb); sa = m; sb = d; }
                     scRing[0][(size_t) writePos] = sa; scRing[1][(size_t) writePos] = sb;
                 }
