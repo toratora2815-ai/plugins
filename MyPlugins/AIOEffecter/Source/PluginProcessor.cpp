@@ -276,6 +276,12 @@ namespace
             { "Band Pass",         { { "morphflt", { 0.55f, 0.55f, 0.66f, 0.5f } } } },
             { "Funk Envelope",     { { "touchflt", {} } } },
             { "Peak Push",         { { "peakflt", { 0.35f, 0.73138f, 0.61968f, 0.75f, 0.0f } } } },
+            { "Reso Bank",         { { "resobank", {} } } },
+            { "Wide Bank",         { { "resobank", { 0.45f, 0.555f, 0.40803f, 0.3f, 1.0f, 0.6f, 1.0f / 3.0f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f } } } },
+            { "Dual Filter",       { { "dualflt", {} } } },
+            { "Stereo Peaks",      { { "dualflt", { 0.6f, 0.45f, 0.0f, 0.2f, 0.5f, 0.5f, 0.4f, 0.0f, 0.8f, 0.5f, 0.5f, 1.0f / 3.0f, 0.0f, 0.0f, 0.0f } } } },
+            { "Speak Filter",      { { "speakflt", {} } } },
+            { "Big Mouth",         { { "speakflt", { 0.5f, 0.2f, 0.5f, 0.8f, 1.0f / 12.0f } } } },
         };
         return r;
     }

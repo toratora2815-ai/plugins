@@ -137,7 +137,7 @@ inline double nowSec()
     return std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-static const char* kNew[] = { "touchflt", "peakflt" };   // 0.9.0 の音量で動くフィルター（前の版の部品は kAll に）
+static const char* kNew[] = { "resobank", "dualflt", "speakflt" };   // 0.10.0 のフィルター 3 つ（前の版の部品は kAll に）
 
 #include <cstring>
 #include <complex>
@@ -1374,7 +1374,8 @@ static void modeResetLeak()
     const std::vector<Case> cases = {
         { "morphflt", "LP 194 Hz 24 dB", { { 0, 0.25f }, { 2, 1.0f } } }, { "morphflt", "LP 52 Hz 24 dB", { { 0, 0.0f }, { 2, 1.0f } } },
         { "howlwah", "WAH 0", { { 1, 0.0f } } }, { "vintwah", "WAH 0", { { 1, 0.0f } } }, { "customwah", "初期値", {} }, { "vowelwah", "初期値", {} },
-        { "tapewow", "初期値", {} }, { "transient", "初期値", {} }, { "fetcomp", "初期値", {} }, { "maximizer", "初期値", {} } };
+        { "tapewow", "初期値", {} }, { "transient", "初期値", {} }, { "fetcomp", "初期値", {} }, { "maximizer", "初期値", {} },
+        { "dualflt", "LP 200 Hz", { { 0, 0.35f }, { 4, 0.0f }, { 10, 0.0f } } }, { "dualflt", "初期値", {} } };   // DUAL FILTER は 4 倍で遅れ 4（DSP 検査 0.10.0 の 2 回目）
     // 2 kHz の 2 次の HP（RBJ）を 2 段
     auto hp = [&] (const std::vector<float>& x) {
         const double w0 = 2.0 * M_PI * 2000.0 / sr, al = std::sin (w0) / (2.0 * 0.7071), cs = std::cos (w0);
@@ -1418,7 +1419,7 @@ static const char* kAll[] = { "gate", "nred", "tubecomp", "limit", "studiovb", "
                               "electricfl", "multichorus", "vibeensemble", "scannervibe",
                               "classicph", "sweepph", "tapewow", "rotary",
                               "morphflt", "howlwah", "vintwah", "customwah", "vowelwah",
-                              "touchflt", "peakflt" };
+                              "touchflt", "peakflt", "resobank", "dualflt", "speakflt" };
 
 
 // ============================================================================
@@ -1963,7 +1964,8 @@ static void modeSwapIn()
     struct Case { const char* from; const char* to; const char* name; };
     for (Case c : { Case { nullptr, "maximizer", "空き → MAXIMIZER" }, Case { "tubepushxl", "maximizer", "TUBE PUSH XL → MAXIMIZER" },
                     Case { "maximizer", "fetcomp", "MAXIMIZER → FET COMP" }, Case { nullptr, "tubepushxl", "空き → TUBE PUSH XL" },
-                    Case { nullptr, "limit", "空き → LIMITER" }, Case { nullptr, "studiovb", "空き → ROOM VERB" } })
+                    Case { nullptr, "limit", "空き → LIMITER" }, Case { nullptr, "studiovb", "空き → ROOM VERB" },
+                    Case { nullptr, "dualflt", "空き → DUAL FILTER" }, Case { "maximizer", "dualflt", "MAXIMIZER → DUAL FILTER" } })
     {
         Want w = emptyWant(); setSlot (w, 0, c.from);
         Rack r; r.prepare (sr, B, w);

@@ -22,6 +22,7 @@
 #include "RotaryParts.h"
 #include "FilterParts.h"
 #include "FilterParts2.h"
+#include "FilterParts3.h"
 
 namespace aiofx
 {
@@ -101,6 +102,9 @@ inline const std::vector<Entry>& registry()
         { &VowelWah::info,       &makeModule<VowelWah> },         // 55
         { &TouchFilter::info,    &makeModule<TouchFilter> },      // 56
         { &PeakFilter::info,     &makeModule<PeakFilter> },       // 57
+        { &ResoBank::info,       &makeModule<ResoBank> },         // 58
+        { &DualFilter::info,     &makeModule<DualFilter> },       // 59
+        { &SpeakFilter::info,    &makeModule<SpeakFilter> },      // 60
     };
     return r;
 }
